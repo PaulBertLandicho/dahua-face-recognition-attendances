@@ -38,6 +38,7 @@ function getErrorMessage(error, fallback = "The backend request failed.") {
     return error.error;
   }
   if (error && typeof error === "object") {
+    if (Object.keys(error).length === 0) return fallback;
     try {
       return JSON.stringify(error);
     } catch (serializationError) {
@@ -83,8 +84,8 @@ export async function fetchDahuaApi(endpoint, options = {}) {
           res.status === 431
             ? "Request was rejected (HTTP 431: Request Header Fields Too Large). Please clear site cookies for this app or open it in an incognito window, then retry."
             :
-          getErrorMessage(data, "The backend request failed.") ||
-          `Request failed with status ${res.status}`
+          getErrorMessage(data, `Request failed with status ${res.status}.`) ||
+          `Request failed with status ${res.status}.`
         );
         httpError.isHttpError = true;
         httpError.status = res.status;
