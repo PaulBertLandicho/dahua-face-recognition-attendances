@@ -56,7 +56,10 @@ export async function fetchDahuaApi(endpoint, options = {}) {
       ? String(process.env.REACT_APP_BACKEND_URL).trim()
       : "";
 
-  const baseUrls = [configuredBase.replace(/\/$/, "")];
+  const backendBaseUrl =
+    configuredBase.replace(/\/$/, "") ||
+    "https://dahua-face-recognition-attendances.onrender.com";
+  const baseUrls = [backendBaseUrl];
 
   let lastError = null;
 
