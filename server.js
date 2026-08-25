@@ -13,7 +13,7 @@ const { createClient } = require("@supabase/supabase-js");
 const app = express();
 app.use(cors());
 app.use(express.json());
-const PORT = 4000;
+const PORT = Number(process.env.PORT || 4000);
 const STREAM_STALE_MS = 5000;
 const MAX_RESTART_DELAY_MS = 10000;
 
@@ -851,6 +851,14 @@ app.post("/api/attendance", async (req, res) => {
 
 app.get("/health", (req, res) => {
   res.json({ status: "ok" });
+});
+
+app.get("/", (req, res) => {
+  res.json({
+    service: "Multifactors Attendance Backend",
+    status: "ok",
+    health: "/health",
+  });
 });
 
 app.listen(PORT, () => {
