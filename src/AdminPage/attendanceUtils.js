@@ -107,46 +107,50 @@ export function determineAttendanceStatus(
   const nowMinutes = toMinutes(currentTime);
   const morningStart = toMinutes(settings.morning_start);
   const morningEnd = toMinutes(settings.morning_end);
-  const afternoonStart = toMinutes(settings.afternoon_start);
   const afternoonEnd = toMinutes(settings.afternoon_end);
   const morningGrace = Number(settings.morning_grace_minutes) || 15;
-  const afternoonGrace = Number(settings.afternoon_grace_minutes) || 15;
 
-  if (eventToRecord === "time-in") {
-    // Determine if it's morning or afternoon time-in based on current time
-    if (nowMinutes >= morningStart && nowMinutes <= morningEnd) {
-      // Morning time-in
-      if (nowMinutes <= morningStart + morningGrace) {
-        return "on-time";
-      } else {
-        return "late";
-      }
-    } else if (nowMinutes >= afternoonStart && nowMinutes <= afternoonEnd) {
-      // Afternoon time-in
-      if (nowMinutes <= afternoonStart + afternoonGrace) {
-        return "on-time";
-      } else {
-        return "late";
-      }
-    } else {
-      // Outside both windows? Should not happen if eventToRecord is 'time-in'
-      // But fallback: treat as on-time
-      return "on-time";
-    }
-  }
-
-  if (eventToRecord === "time-out") {
-    // Mark overtime when time-out is after afternoon_end.
-    // Do not require a prior morning time-in so edited/late time-outs reflect overtime.
-    if (nowMinutes > afternoonEnd) {
+  if (nowMinutes > morningEnd) {
+    // System is morning-in / afternoon-out based. Any punch in the afternoon is considered the afternoon out.
+    if (nowMinutes < afternoonEnd) {
+      return "early-out";
+    } else if (nowMinutes >= afternoonEnd + 60) {
       return "overtime";
     }
-    // Otherwise, on-time
     return "on-time";
+  } else {
+    // Morning punch (time-in)
+    if (nowMinutes <= morningStart + morningGrace) {
+      return "on-time";
+    } else {
+      return "late";
+    }
   }
 
-  // For any other event (like break-in, time-in-afternoon) - we might not need
-  return "on-time";
+}
+
+export function getAttendanceStatus(record, settings = {}) {
+  if (record?.status) return record.status;
+
+  const deviceDate = new Date(record?.device_time);
+  if (Number.isNaN(deviceDate.getTime())) return "present";
+
+  try {
+    return determineAttendanceStatus(
+      deviceDate.toTimeString().slice(0, 5),
+      record?.event || "time-in",
+      {
+        morning_start: settings.morning_start || "08:00",
+        morning_end: settings.morning_end || "12:00",
+        afternoon_start: settings.afternoon_start || "13:00",
+        afternoon_end: settings.afternoon_end || "17:00",
+        morning_grace_minutes: settings.morning_grace_minutes,
+        afternoon_grace_minutes: settings.afternoon_grace_minutes,
+      },
+    );
+  } catch (error) {
+    return "present";
+  }
 }
 
 function buildBlockedMessage(eventToRecord, settings) {

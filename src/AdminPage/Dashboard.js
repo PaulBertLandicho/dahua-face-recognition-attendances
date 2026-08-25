@@ -1,8 +1,8 @@
 import React, { useEffect, useState, useRef, useMemo } from "react";
 import { supabase } from "../supabaseClient";
 import Swal from "sweetalert2";
-import { FiTrendingUp, FiUsers, FiClock, FiDownload } from "react-icons/fi";
-import { determineAttendanceStatus } from "./attendanceUtils";
+import { FiTrendingUp, FiUsers, FiClock, FiDownload, FiChevronLeft, FiChevronRight } from "react-icons/fi";
+import { getAttendanceStatus } from "./attendanceUtils";
 
 function compactNumber(n) {
   if (n >= 1e9) return (n / 1e9).toFixed(1) + "B";
@@ -173,7 +173,164 @@ function formatPeriod(period) {
   return String(period);
 }
 
+// Dashboard presentation styles (module-level so LineChart can access them)
+const styles = {
+  container: { padding: "32px 24px", maxWidth: 1600, margin: "0 auto", fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif', background: "#ffffff", color: "#1f2937" },
+  grid: { display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(220px,1fr))", gap: 16, marginBottom: 24 },
+  card: { background: "#ffffff", borderRadius: 12, padding: 18, boxShadow: "0 8px 20px rgba(16,185,129,0.05)", border: "1px solid #e5e7eb", display: "flex", alignItems: "center", gap: 12, minWidth: 0 },
+  iconWrap: { width: 48, height: 48, borderRadius: "50%", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, background: "#237227", color: "#ffffff" },
+  title: { fontSize: 14, color: "#6b7280" },
+  value: { fontSize: 16, fontWeight: 700, color: "#1f2937", overflowWrap: "anywhere" },
+  values: { fontSize: 13, fontWeight: 700, color: "#6d6d6d" },
+
+  chartGrid: { display: "grid", gridTemplateColumns: "minmax(0,2fr) minmax(320px,1fr)", gap: 20, alignItems: "start" },
+  chartCard: { background: "#ffffff", borderRadius: 12, padding: 24, boxShadow: "0 8px 20px rgba(16,185,129,0.05)", border: "1px solid #e5e7eb", minWidth: 0 },
+  payrollCard: { background: "#ffffff", borderRadius: 12, padding: 20, boxShadow: "0 8px 20px rgba(16,185,129,0.05)", border: "1px solid #e5e7eb", minWidth: 0 },
+  chartSvg: { width: "100%", height: 280 },
+  payrollList: { marginTop: 12, display: "grid", gap: 12, maxHeight: 300, overflowY: 'auto', paddingRight: 8 },
+  attendanceCard: { marginTop: 16, background: "#ffffff", borderRadius: 14, padding: 12, border: "1px solid #e5e7eb", boxShadow: "0 8px 20px rgba(16,185,129,0.05)", minWidth: 0 },
+  attendanceHeader: { display: "flex", justifyContent: "space-between", alignItems: "center", padding: "18px 14px", borderBottom: "1px solid #f1f5f9" },
+  attendanceToolbar: { marginTop: 12, marginBottom: 12, display: "flex", flexWrap: "wrap", gap: 12, alignItems: "center", padding: "12px 14px", border: "1px solid #e5e7eb", borderRadius: 14, background: "#ffffff" },
+  attendanceInput: { flex: "1 1 220px", minWidth: 180, padding: "10px 14px", borderRadius: 40, border: "1px solid #d1d5db", outline: "none", background: "#ffffff", color: "#1f2937" },
+  attendanceSelect: { padding: "10px 14px", borderRadius: 40, border: "1px solid #d1d5db", background: "#ffffff", color: "#1f2937", outline: "none", cursor: "pointer" },
+  attendanceExport: { display: "inline-flex", alignItems: "center", gap: 8, padding: "10px 16px", borderRadius: 40, border: "none", background: "#237227", color: "#ffffff", cursor: "pointer", fontWeight: 600, boxShadow: "0 2px 8px rgba(0,0,0,0.05)" },
+  attendanceTable: { width: "100%", minWidth: 1120, borderCollapse: "collapse", fontSize: 13, textAlign: "left" },
+  attendanceHeading: { padding: "14px 12px", background: "#ffffff", color: "#64748b", borderBottom: "1px solid #dbe3ea", fontWeight: 700, letterSpacing: "0.03em", textTransform: "uppercase", fontSize: 12 },
+  attendanceRow: { borderBottom: "1px solid #e5e7eb", minWidth: 1120 },
+  attendanceCell: { padding: "14px 12px", color: "#1f2937", verticalAlign: "middle" },
+  attendanceStatus: { display: "inline-flex", alignItems: "center", justifyContent: "center", padding: "4px 12px", borderRadius: 999, background: "#fff1f2", border: "1px solid #fecdd3", color: "#ef4444", fontWeight: 500, fontSize: 12 },
+  attendancePhoto: { width: 48, height: 48, borderRadius: 12, overflow: "hidden", background: "#237227", display: "flex", alignItems: "center", justifyContent: "center", color: "#ffffff", fontWeight: 700, flexShrink: 0, border: "2px solid #e5e7eb" },
+  sortToggle: {
+    padding: "8px 16px",
+    borderRadius: 22,
+    background: "#f3f4f6",
+    border: "1px solid #e6eef6",
+    color: "#374151",
+    fontSize: "0.95rem",
+    cursor: "pointer",
+    boxShadow: "0 2px 6px rgba(16,24,40,0.06)",
+    minWidth: "72px",
+    textAlign: "center",
+    fontWeight: 600,
+  },
+};
+
+// SVG line chart component — defined at module level so React keeps a stable
+// component reference across Dashboard renders and can access module-level styles.
+function LineChart({ data = [] }) {
+  const svgRef = React.useRef(null);
+  const [chartTooltip, setChartTooltip] = React.useState({ visible: false, x: 0, y: 0, label: "", value: 0 });
+
+  const w = 900;
+  const h = 280;
+  const padding = { l: 48, r: 18, t: 16, b: 56 };
+  const innerW = w - padding.l - padding.r;
+  const innerH = h - padding.t - padding.b;
+  const values = data.map((d) => d.value);
+  const max = Math.max(...values, 1);
+  const xStep = innerW / Math.max(1, data.length - 1);
+  const points = data.map((d, i) => {
+    const x = padding.l + i * xStep;
+    const y = padding.t + innerH - (d.value / max) * innerH;
+    return { x, y, label: d.label, value: d.value };
+  });
+
+  function catmullRom2bezier(pts) {
+    if (!pts || pts.length === 0) return "";
+    if (pts.length === 1) return `M ${pts[0].x},${pts[0].y}`;
+    let d = "M " + pts[0].x + "," + pts[0].y + " ";
+    for (let i = 0; i < pts.length - 1; i++) {
+      const p0 = i === 0 ? pts[0] : pts[i - 1];
+      const p1 = pts[i];
+      const p2 = pts[i + 1];
+      const p3 = i + 2 < pts.length ? pts[i + 2] : p2;
+      const cp1x = p1.x + (p2.x - p0.x) / 6;
+      const cp1y = p1.y + (p2.y - p0.y) / 6;
+      const cp2x = p2.x - (p3.x - p1.x) / 6;
+      const cp2y = p2.y - (p3.y - p1.y) / 6;
+      d += `C ${cp1x},${cp1y} ${cp2x},${cp2y} ${p2.x},${p2.y} `;
+    }
+    return d;
+  }
+
+  const path = catmullRom2bezier(points);
+  const areaPath = `${path} L ${padding.l + innerW},${padding.t + innerH} L ${padding.l},${padding.t + innerH} Z`;
+  const altPoints = points.map((p) => ({ x: p.x, y: Math.min(p.y + 12, padding.t + innerH) }));
+  const altPath = catmullRom2bezier(altPoints);
+
+  const handleMove = (e) => {
+    if (!svgRef.current) return;
+    const rect = svgRef.current.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    let idx = 0;
+    let minD = Infinity;
+    points.forEach((p, i) => {
+      const d = Math.abs(p.x - x);
+      if (d < minD) { minD = d; idx = i; }
+    });
+    const p = points[idx];
+    setChartTooltip({ visible: true, x: rect.left + p.x, y: rect.top + p.y - 10, label: p.label, value: p.value });
+  };
+  const handleLeave = () => setChartTooltip((t) => ({ ...t, visible: false }));
+
+  const gridLines = [0, 1, 2, 3, 4].map((i) => {
+    const y = padding.t + (innerH * i) / 4;
+    const val = Math.round(max * (1 - i / 4));
+    return { y, val };
+  });
+
+  return (
+    <div style={{ position: "relative" }}>
+      <svg
+        ref={svgRef}
+        viewBox={`0 0 ${w} ${h}`}
+        style={styles.chartSvg}
+        preserveAspectRatio="xMidYMid meet"
+        onMouseMove={handleMove}
+        onMouseLeave={handleLeave}
+      >
+        <defs>
+          <linearGradient id="g1" x1="0" x2="0" y1="0" y2="1">
+            <stop offset="0%" stopColor="#237227" stopOpacity="0.18" />
+            <stop offset="100%" stopColor="#237227" stopOpacity="0.02" />
+          </linearGradient>
+          <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+            <feDropShadow dx="0" dy="6" stdDeviation="8" floodColor="#237227" floodOpacity="0.08" />
+          </filter>
+        </defs>
+        {gridLines.map((g, i) => (
+          <g key={i}>
+            <line x1={padding.l} x2={padding.l + innerW} y1={g.y} y2={g.y} stroke="#eef2f6" strokeWidth={1} />
+            <text x={8} y={g.y + 5} fontSize={11} fill="#9ca3af">{g.val}</text>
+          </g>
+        ))}
+        <path d={areaPath} fill="url(#g1)" stroke="none" />
+        <path d={altPath} fill="none" stroke="#86a987" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" opacity={0.35} />
+        <path d={path} fill="none" stroke="#237227" strokeWidth={3} strokeLinecap="round" strokeLinejoin="round" style={{ filter: `url(#shadow)` }} />
+        {points.map((p, i) => (
+          <g key={i}>
+            <circle cx={p.x} cy={p.y} r={6} fill="#237227" stroke="#ffffff" strokeWidth={1.2} />
+            <text x={p.x} y={p.y - 10} textAnchor="middle" fontSize={12} fill="#0f172a">{p.value}</text>
+          </g>
+        ))}
+        {points.map((p, i) => (
+          <text key={i} x={p.x} y={padding.t + innerH + 26} textAnchor="middle" fontSize={11} fill="#6b7280">
+            {p.label.split(" ")[0]}
+          </text>
+        ))}
+      </svg>
+      {chartTooltip.visible && (
+        <div style={{ position: "fixed", left: chartTooltip.x + 8, top: chartTooltip.y - 28, background: "rgba(2,6,23,0.9)", color: "#fff", padding: "6px 8px", borderRadius: 6, fontSize: 12, pointerEvents: "none", zIndex: 9999 }}>
+          <div style={{ fontWeight: 700 }}>{chartTooltip.value}</div>
+          <div style={{ fontSize: 11 }}>{chartTooltip.label}</div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function Dashboard() {
+
   const [attendance, setAttendance] = useState([]);
   const [persons, setPersons] = useState([]);
   const [totalEmployees, setTotalEmployees] = useState(0);
@@ -195,7 +352,7 @@ export default function Dashboard() {
       setLoading(true);
       try {
         const [attRes, personsRes, payrollRes, settingsRes] = await Promise.all([
-          supabase.from("attendance").select("device_time,person_id,photo,name,department,event,status,method,point"),
+          supabase.from("attendance").select("device_time,person_id,photo,name,department,event,status,method,point,archived"),
           // persons table has `name` (single column) rather than first_name/last_name
           supabase.from("persons").select("id,name,department,registration_photo", { count: 'exact' }),
           supabase.from("payroll_periods").select("id,person_id,period,released"),
@@ -203,7 +360,22 @@ export default function Dashboard() {
         ]);
 
         if (!mounted) return;
-        setAttendance(attRes.data || []);
+        const dedupedAttendance = Array.from(
+          new Map(
+            (attRes.data || [])
+              .filter((record) => record.person_id && !record.archived)
+              .map((record) => {
+                const normalizedTime = record.device_time
+                  ? new Date(record.device_time).toISOString()
+                  : "";
+                return [`${record.person_id}|${record.event || ""}|${normalizedTime}`, record];
+              })
+          ).values()
+        ).map((record) => ({
+          ...record,
+          status: getAttendanceStatus(record, settingsRes.data || {}),
+        }));
+        setAttendance(dedupedAttendance);
         setPersons(personsRes.data || []);
         // debug: log persons response when running locally
         try { console.debug && console.debug("personsRes", personsRes); } catch (e) {}
@@ -253,7 +425,9 @@ export default function Dashboard() {
 
     const counts = Object.fromEntries(buckets.map((b) => [b.key, 0]));
 
-    attendance.forEach((a) => {
+    const visibleAttendance = attendance.filter((record) => !record.archived);
+
+    visibleAttendance.forEach((a) => {
       try {
         const d = new Date(a.device_time);
         if (Number.isNaN(d.getTime())) return;
@@ -494,6 +668,12 @@ export default function Dashboard() {
   const [statusFilter, setStatusFilter] = useState("all");
   const [deptFilter, setDeptFilter] = useState("all");
   const [sortOrder, setSortOrder] = useState("descending");
+  const [todayPage, setTodayPage] = useState(1);
+  const todayItemsPerPage = 6;
+
+  useEffect(() => {
+    setTodayPage(1);
+  }, [searchText, statusFilter, deptFilter, sortOrder]);
 
   const departments = useMemo(() => {
     const s = new Set();
@@ -530,6 +710,14 @@ export default function Dashboard() {
     });
     return rows;
   }, [todayEntries, searchText, statusFilter, deptFilter, sortOrder, personMap]);
+
+  useEffect(() => {
+    setTodayPage((page) => Math.min(page, Math.max(1, Math.ceil(filteredTodayEntries.length / todayItemsPerPage))));
+  }, [filteredTodayEntries.length]);
+
+  const todayTotalPages = Math.max(1, Math.ceil(filteredTodayEntries.length / todayItemsPerPage));
+  const todayStartIndex = (todayPage - 1) * todayItemsPerPage;
+  const paginatedTodayEntries = filteredTodayEntries.slice(todayStartIndex, todayStartIndex + todayItemsPerPage);
 
   function showTooltip(ref, title, items) {
     // cancel any pending hide
@@ -580,23 +768,9 @@ export default function Dashboard() {
     try {
       let label = "";
       let configTime = "";
-      if (row.event === "time-in") {
+      if (row.event === "time-in" || row.event === "time-out") {
         label = "Morning In";
         configTime = settings.morning_start;
-        if (settings.morning_end && settings.afternoon_start) {
-          const d = new Date(row.device_time);
-          const minutes = d.getHours() * 60 + d.getMinutes();
-          const morningEnd = settings.morning_end.split(":").map(Number);
-          const morningEndMin = morningEnd[0] * 60 + morningEnd[1];
-          const morningGrace = Number(settings.morning_grace_minutes) || 0;
-          if (minutes > morningEndMin + morningGrace) {
-            label = "Afternoon In";
-            configTime = settings.afternoon_start;
-          }
-        }
-      } else if (row.event === "time-out") {
-        label = "Morning Out";
-        configTime = settings.morning_end;
         if (settings.morning_end && settings.afternoon_end) {
           const d = new Date(row.device_time);
           const minutes = d.getHours() * 60 + d.getMinutes();
@@ -617,191 +791,9 @@ export default function Dashboard() {
     }
   }
 
-  // Simple responsive styles
-  const styles = {
-    container: { padding: 24, fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif' },
-    grid: { display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(220px,1fr))", gap: 16, marginBottom: 20 },
-    card: { background: "#fff", borderRadius: 12, padding: 18, boxShadow: "0 8px 24px rgba(16,185,129,0.06)", border: "1px solid #e6f4ef", display: "flex", alignItems: "center", gap: 12 },
-    iconWrap: { width: 48, height: 48, borderRadius: 10, display: "flex", alignItems: "center", justifyContent: "center", background: "linear-gradient(135deg,#ecfdf5,#d1fae5)", color: "#059669" },
-    title: { fontSize: 14, color: "#237227" },
-    value: { fontSize: 16, fontWeight: 700, color: "#237227" },
-    values: { fontSize: 13, fontWeight: 700, color: "#6d6d6d" },
-
-    chartGrid: { display: "grid", gridTemplateColumns: "2fr 1fr", gap: 16, alignItems: "start" },
-    chartCard: { background: "#fff", borderRadius: 12, padding: 24, boxShadow: "0 8px 24px rgba(2,132,199,0.04)", border: "1px solid #e6f0f7" },
-    payrollCard: { background: "#fff", borderRadius: 12, padding: 18, boxShadow: "0 8px 24px rgba(2,132,199,0.02)", border: "1px solid #eef2f6" },
-    chartSvg: { width: "100%", height: 280 },
-    payrollList: { marginTop: 8, display: "grid", gap: 8, maxHeight: 300, overflowY: 'auto', paddingRight: 8 }
-  };
-
-  // Add pill-style sort toggle style
-  styles.sortToggle = {
-    padding: "8px 16px",
-    borderRadius: 22,
-    background: "#f3f4f6",
-    border: "1px solid #e6eef6",
-    color: "#374151",
-    fontSize: "0.95rem",
-    cursor: "pointer",
-    boxShadow: "0 2px 6px rgba(16,24,40,0.06)",
-    minWidth: "72px",
-    textAlign: "center",
-    fontWeight: 600,
-  };
-
-  // SVG line chart generator with axes, grid, labels and tooltip
-  const LineChart = ({ data = [] }) => {
-    const svgRef = useRef(null);
-    const [tooltip, setTooltip] = useState({ visible: false, x: 0, y: 0, label: "", value: 0 });
-
-    const w = 900;
-    const h = 280;
-    const padding = { l: 48, r: 18, t: 16, b: 56 };
-    const innerW = w - padding.l - padding.r;
-    const innerH = h - padding.t - padding.b;
-    const values = data.map((d) => d.value);
-    const max = Math.max(...values, 1);
-    const xStep = innerW / Math.max(1, data.length - 1);
-    const points = data.map((d, i) => {
-      const x = padding.l + i * xStep;
-      const y = padding.t + innerH - (d.value / max) * innerH;
-      return { x, y, label: d.label, value: d.value };
-    });
-
-    // smoothing via Catmull-Rom to Bezier conversion
-    function catmullRom2bezier(pts) {
-      if (!pts || pts.length === 0) return "";
-      if (pts.length === 1) return `M ${pts[0].x},${pts[0].y}`;
-      let d = "M " + pts[0].x + "," + pts[0].y + " ";
-      for (let i = 0; i < pts.length - 1; i++) {
-        const p0 = i === 0 ? pts[0] : pts[i - 1];
-        const p1 = pts[i];
-        const p2 = pts[i + 1];
-        const p3 = i + 2 < pts.length ? pts[i + 2] : p2;
-
-        const cp1x = p1.x + (p2.x - p0.x) / 6;
-        const cp1y = p1.y + (p2.y - p0.y) / 6;
-        const cp2x = p2.x - (p3.x - p1.x) / 6;
-        const cp2y = p2.y - (p3.y - p1.y) / 6;
-
-        d += `C ${cp1x},${cp1y} ${cp2x},${cp2y} ${p2.x},${p2.y} `;
-      }
-      return d;
-    }
-
-    const path = catmullRom2bezier(points);
-    const areaPath = `${path} L ${padding.l + innerW},${padding.t + innerH} L ${padding.l},${padding.t + innerH} Z`;
-
-    // secondary subtle line (offset for visual effect)
-    const altPoints = points.map((p) => ({ x: p.x, y: Math.min(p.y + 12, padding.t + innerH) }));
-    const altPath = catmullRom2bezier(altPoints);
-
-    const handleMove = (e) => {
-      if (!svgRef.current) return;
-      const rect = svgRef.current.getBoundingClientRect();
-      const x = e.clientX - rect.left;
-      // find nearest point by x
-      let idx = 0;
-      let minD = Infinity;
-      points.forEach((p, i) => {
-        const d = Math.abs(p.x - x);
-        if (d < minD) {
-          minD = d;
-          idx = i;
-        }
-      });
-      const p = points[idx];
-      setTooltip({ visible: true, x: rect.left + p.x, y: rect.top + p.y - 10, label: p.label, value: p.value });
-    };
-    const handleLeave = () => setTooltip((t) => ({ ...t, visible: false }));
-
-    // Y axis ticks (5 lines)
-    const gridLines = [0, 1, 2, 3, 4].map((i) => {
-      const y = padding.t + (innerH * i) / 4;
-      const val = Math.round(max * (1 - i / 4));
-      return { y, val };
-    });
-
-    return (
-      <div style={{ position: "relative" }}>
-        <svg
-          ref={svgRef}
-          viewBox={`0 0 ${w} ${h}`}
-          style={styles.chartSvg}
-          preserveAspectRatio="xMidYMid meet"
-          onMouseMove={handleMove}
-          onMouseLeave={handleLeave}
-        >
-            <defs>
-              <linearGradient id="g1" x1="0" x2="0" y1="0" y2="1">
-                <stop offset="0%" stopColor="#06b6d4" stopOpacity="0.18" />
-                <stop offset="100%" stopColor="#06b6d4" stopOpacity="0.02" />
-              </linearGradient>
-              <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
-                <feDropShadow dx="0" dy="6" stdDeviation="8" floodColor="#06b6d4" floodOpacity="0.08" />
-              </filter>
-            </defs>
-
-          {/* grid lines and y labels */}
-          {gridLines.map((g, i) => (
-            <g key={i}>
-              <line x1={padding.l} x2={padding.l + innerW} y1={g.y} y2={g.y} stroke="#eef2f6" strokeWidth={1} />
-              <text x={8} y={g.y + 5} fontSize={11} fill="#9ca3af">{g.val}</text>
-            </g>
-          ))}
-
-          <path d={areaPath} fill="url(#g1)" stroke="none" />
-          {/* secondary soft line */}
-          <path d={altPath} fill="none" stroke="#f59e0b" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" opacity={0.22} />
-          <path d={path} fill="none" stroke="#06b6d4" strokeWidth={3} strokeLinecap="round" strokeLinejoin="round" style={{ filter: `url(#shadow)` }} />
-
-          {/* points and value labels */}
-          {points.map((p, i) => (
-            <g key={i}>
-              <circle cx={p.x} cy={p.y} r={6} fill="#06b6d4" stroke="#ffffff" strokeWidth={1.2} />
-              <text x={p.x} y={p.y - 10} textAnchor="middle" fontSize={12} fill="#0f172a">{p.value}</text>
-            </g>
-          ))}
-
-          {/* x labels */}
-          {points.map((p, i) => (
-            <text key={i} x={p.x} y={padding.t + innerH + 26} textAnchor="middle" fontSize={11} fill="#6b7280">
-              {p.label.split(" ")[0]}
-            </text>
-          ))}
-        </svg>
-
-        {/* (selector moved to parent for interactivity) */}
-
-        {/* Tooltip element positioned using page coordinates */}
-        {tooltip.visible && (
-          <div
-            style={{
-              position: "fixed",
-              left: tooltip.x + 8,
-              top: tooltip.y - 28,
-              background: "rgba(2,6,23,0.9)",
-              color: "#fff",
-              padding: "6px 8px",
-              borderRadius: 6,
-              fontSize: 12,
-              pointerEvents: "none",
-              zIndex: 9999,
-            }}
-          >
-            <div style={{ fontWeight: 700 }}>{tooltip.value}</div>
-            <div style={{ fontSize: 11 }}>{tooltip.label}</div>
-          </div>
-        )}
-      </div>
-    );
-  };
-
-        
-
   return (
     <div style={styles.container}>
-      <h2 style={{ margin: 0, color: "#237227" }}>Dashboard</h2>
+      <h2 style={{ margin: 0, color: "#1f2937" }}>Dashboard</h2>
       <p style={{ color: "#6b7280", marginTop: 6 }}>Overview of attendance and payroll</p>
 
       <div style={styles.grid}>
@@ -886,9 +878,9 @@ export default function Dashboard() {
               <div style={{ fontSize: 12, color: "#6b7280" }}>{viewMode === "day" ? "Daily total of attendance scans" : viewMode === "week" ? "Weekly total of attendance scans" : "Monthly total of attendance scans"}</div>
             </div>
             <div style={{ display: "flex", gap: 8 }}>
-              <button onClick={() => setViewMode("day")} style={{ padding: "6px 10px", borderRadius: 999, border: viewMode === "day" ? "1px solid #0ea5a0" : "1px solid #e6eef6", background: viewMode === "day" ? "#0ea5a0" : "#fff", color: viewMode === "day" ? "#fff" : "#6b7280", cursor: "pointer", fontSize: 12 }}>Day</button>
-              <button onClick={() => setViewMode("week")} style={{ padding: "6px 10px", borderRadius: 999, border: viewMode === "week" ? "1px solid #0ea5a0" : "1px solid #e6eef6", background: viewMode === "week" ? "#0ea5a0" : "#fff", color: viewMode === "week" ? "#fff" : "#6b7280", cursor: "pointer", fontSize: 12 }}>Week</button>
-              <button onClick={() => setViewMode("month")} style={{ padding: "6px 10px", borderRadius: 999, border: viewMode === "month" ? "1px solid #0ea5a0" : "1px solid #e6eef6", background: viewMode === "month" ? "#0ea5a0" : "#fff", color: viewMode === "month" ? "#fff" : "#6b7280", cursor: "pointer", fontSize: 12 }}>Month</button>
+              <button onClick={() => setViewMode("day")} style={{ padding: "6px 10px", borderRadius: 999, border: viewMode === "day" ? "1px solid #237227" : "1px solid #e6eef6", background: viewMode === "day" ? "#237227" : "#fff", color: viewMode === "day" ? "#fff" : "#6b7280", cursor: "pointer", fontSize: 12 }}>Day</button>
+              <button onClick={() => setViewMode("week")} style={{ padding: "6px 10px", borderRadius: 999, border: viewMode === "week" ? "1px solid #237227" : "1px solid #e6eef6", background: viewMode === "week" ? "#237227" : "#fff", color: viewMode === "week" ? "#fff" : "#6b7280", cursor: "pointer", fontSize: 12 }}>Week</button>
+              <button onClick={() => setViewMode("month")} style={{ padding: "6px 10px", borderRadius: 999, border: viewMode === "month" ? "1px solid #237227" : "1px solid #e6eef6", background: viewMode === "month" ? "#237227" : "#fff", color: viewMode === "month" ? "#fff" : "#6b7280", cursor: "pointer", fontSize: 12 }}>Month</button>
             </div>
           </div>
           <LineChart data={chartData} />
@@ -898,7 +890,7 @@ export default function Dashboard() {
 
         <div style={styles.payrollCard}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
-            <h4 style={{ margin: 0, color: "#237227" }}>Payrolls Pending Release</h4>
+            <h4 style={{ margin: 0, color: "#1f2937" }}>Payrolls Pending Release</h4>
             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
               <input
                 placeholder="Search name.."
@@ -955,9 +947,9 @@ export default function Dashboard() {
       </div>
 
     {/* Full width Today's Attendance card (table-like) */}
-    <div style={{ marginTop: 16, background: "#fff", borderRadius: 12, padding: 12, border: "1px solid #eef2f6" }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 12px", borderBottom: "1px solid #f1f5f9" }}>
-        <div style={{ fontSize: 14, fontWeight: 700, color: "#237227" }}>Today's Attendance</div>
+    <div style={styles.attendanceCard}>
+      <div style={styles.attendanceHeader}>
+      <div style={{ fontSize: 14, fontWeight: 700, color: "#1f2937" }}>Today's Attendance</div>
         <div style={{ textAlign: 'right' }}>
           <div style={{ fontSize: 13, color: "#6b7280" }}>{filteredTodayEntries.length} records</div>
           <div style={{ fontSize: 12, color: "#9ca3af" }}>{todayLabel}</div>
@@ -965,22 +957,22 @@ export default function Dashboard() {
       </div>
 
       {/* Toolbar: search, status, department, sort, export */}
-      <div style={{ marginTop: 12, marginBottom: 12, display: 'flex', gap: 12, alignItems: 'center', padding: '10px 12px', border: '1px solid #eef2f6', borderRadius: 12, background: '#fff' }}>
+      <div style={styles.attendanceToolbar}>
         <input
           placeholder="Search name or ID"
           value={searchText}
           onChange={(e) => setSearchText(e.target.value)}
-          style={{ flex: 1, padding: '10px 12px', borderRadius: 999, border: '1px solid #e6eef6', outline: 'none' }}
+          style={styles.attendanceInput}
         />
 
-        <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} style={{ padding: '8px 10px', borderRadius: 999, border: '1px solid #e6eef6', background: '#fff' }}>
+        <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} style={styles.attendanceSelect}>
           <option value="all">All Status</option>
           <option value="on-time">On-time</option>
           <option value="late">Late</option>
           <option value="present">Present</option>
         </select>
 
-        <select value={deptFilter} onChange={(e) => setDeptFilter(e.target.value)} style={{ padding: '8px 10px', borderRadius: 999, border: '1px solid #e6eef6', background: '#fff' }}>
+        <select value={deptFilter} onChange={(e) => setDeptFilter(e.target.value)} style={styles.attendanceSelect}>
           <option value="all">All Departments</option>
           {departments.map((d) => <option key={d} value={d}>{d}</option>)}
         </select>
@@ -1015,51 +1007,32 @@ export default function Dashboard() {
             a.remove();
             URL.revokeObjectURL(url);
           } catch (e) { console.error(e); }
-        }} style={{ padding: '8px 12px', borderRadius: 999, border: 'none', background: '#237227', color: '#fff' }}><FiDownload color="#ffffff" style={{ marginRight: 8 }} />Export Excel</button>
+        }} style={styles.attendanceExport}><FiDownload color="#ffffff" />Export Excel</button>
       </div>
 
-      <div style={{ display: "grid", gridTemplateColumns: "2fr 2fr 2fr 1fr 1.2fr 1fr 1fr", gap: 8, alignItems: "center", padding: "10px 12px", fontSize: 13, color: "#6b7280", borderBottom: "1px solid #f8fafc" }}>
+      <div style={{ ...styles.attendanceTable, display: "grid", gridTemplateColumns: "2.3fr 1fr 1.1fr 1.7fr 1.2fr 1.2fr", gap: 8, alignItems: "center", ...styles.attendanceHeading }}>
         <div>PHOTO / ATTENDANCE TIME</div>
         <div>EMPLOYEE ID</div>
         <div>EMPLOYEE NAME</div>
         <div>DEPARTMENT / WORK HOURS</div>
-        <div>LOCATION</div>
         <div>ATTENDANCE STATUS</div>
         <div>ATTENDANCE METHOD</div>
       </div>
 
-      <div style={{ maxHeight: 360, overflow: "auto" }}>
+      <div style={{ maxHeight: 360, overflow: "auto", border: "1px solid #e5e7eb", borderTop: "none", borderRadius: "0 0 10px 10px" }}>
         {(filteredTodayEntries.length === 0) && (
           <div style={{ padding: 16, color: "#6b7280" }}>No attendance recorded today</div>
         )}
-        {filteredTodayEntries.map((r, i) => {
+        {paginatedTodayEntries.map((r, i) => {
           const person = r.person || personMap[r.person_id] || (persons || []).find((p) => String(p.name) === String(r.person_id)) || null;
           const name = (person && person.name) || r.name || `Person #${r.person_id}`;
           let timeLabel = "";
           try { timeLabel = new Date(r.device_time).toLocaleString("en-US", { month: "long", day: "numeric", year: "numeric" }) + " - " + new Date(r.device_time).toLocaleTimeString("en-US"); } catch (e) {}
-          // Attendance status: prefer server-provided `r.status` (Attendance Records page uses DB status).
-          // Fallback: compute accurate on-time/late/overtime using `determineAttendanceStatus`.
-          let status = (r && r.status) || "";
-          if (!status) {
-            try {
-              const d = new Date(r.device_time);
-              if (!Number.isNaN(d.getTime())) {
-                const hhmm = d.toTimeString().slice(0, 5);
-                const event = (r && r.event) || "time-in";
-                status = determineAttendanceStatus(hhmm, event, settings || {}, false);
-              } else {
-                status = "present";
-              }
-            } catch (e) {
-              status = "present";
-            }
-          }
-          const statusColor = status === "late" ? "#ef4444" : status === "on-time" ? "#059669" : status === "overtime" ? "#6b7280" : "#6b7280";
-
+          const status = getAttendanceStatus(r, settings || {});
           return (
-            <div key={i} style={{ display: "grid", gridTemplateColumns: "2fr 2fr 2fr 1fr 1.2fr 1fr 1fr", gap: 8, alignItems: "center", padding: "12px", borderBottom: "1px solid #f1f5f9" }}>
+            <div key={i} style={{ ...styles.attendanceRow, display: "grid", gridTemplateColumns: "2.3fr 1fr 1.1fr 1.7fr 1.2fr 1.2fr", gap: 8, alignItems: "center", padding: "13px 12px", minHeight: 80 }}>
               <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
-                <div style={{ width: 48, height: 48, borderRadius: 8, overflow: 'hidden', background: "#eef2f6", display: "flex", alignItems: "center", justifyContent: "center", color: "#0f172a", fontWeight: 700 }}>
+                <div style={styles.attendancePhoto}>
                   {r.photo ? (
                     <img src={r.photo} alt={name || ''} style={{ width: '100%', height: '100%', objectFit: 'cover', cursor: 'pointer' }} onClick={() => openPhotoModal(r.photo, name)} />
                   ) : person && person.registration_photo ? (
@@ -1087,11 +1060,9 @@ export default function Dashboard() {
                 <div style={{ fontSize: 12, color: "#9ca3af", marginTop: 6 }}>{getWorkHoursLabel(r)}</div>
               </div>
 
-              <div style={{ fontSize: 12, color: "#0f172a", wordBreak: "break-word", maxWidth: "200px" }}>
-                {r.point ? r.point : <span style={{ color: "#9ca3af" }}>—</span>}
+              <div>
+                <span style={{ ...styles.attendanceStatus, ...(status === "on-time" ? { background: "#ecfdf5", borderColor: "#bbf7d0", color: "#059669" } : status === "overtime" ? { background: "#eff6ff", borderColor: "#bfdbfe", color: "#2563eb" } : {}) }}>{status}</span>
               </div>
-
-              <div style={{ color: statusColor, fontWeight: 700, textTransform: "lowercase" }}>{status}</div>
 
               <div style={{ color: "#6b7280" }}>{r.method || 'face-scan'}</div>
 
@@ -1099,6 +1070,43 @@ export default function Dashboard() {
           );
         })}
       </div>
+
+      {filteredTodayEntries.length > 0 && (
+        <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", justifyContent: "space-between", gap: 16, padding: "14px 16px", background: "#f9fafb", borderTop: "1px solid #e5e7eb", color: "#475569", fontSize: 13 }}>
+          <div>
+            Showing <strong style={{ color: "#1f2937" }}>{todayStartIndex + 1}</strong> to{" "}
+            <strong style={{ color: "#1f2937" }}>{Math.min(todayStartIndex + todayItemsPerPage, filteredTodayEntries.length)}</strong> of{" "}
+            <strong style={{ color: "#1f2937" }}>{filteredTodayEntries.length}</strong> records
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <button
+              type="button"
+              onClick={() => setTodayPage((page) => Math.max(page - 1, 1))}
+              disabled={todayPage === 1}
+              aria-label="Previous page"
+              style={{ width: 36, height: 36, display: "inline-flex", alignItems: "center", justifyContent: "center", borderRadius: 10, border: "1px solid #e5e7eb", background: "#ffffff", color: "#64748b", cursor: todayPage === 1 ? "not-allowed" : "pointer", opacity: todayPage === 1 ? 0.45 : 1 }}
+            >
+              <FiChevronLeft size={16} />
+            </button>
+            <button
+              type="button"
+              aria-current="page"
+              style={{ width: 36, height: 36, border: "1px solid #237227", borderRadius: 10, background: "#237227", color: "#ffffff", fontWeight: 700 }}
+            >
+              {todayPage}
+            </button>
+            <button
+              type="button"
+              onClick={() => setTodayPage((page) => Math.min(page + 1, todayTotalPages))}
+              disabled={todayPage === todayTotalPages}
+              aria-label="Next page"
+              style={{ width: 36, height: 36, display: "inline-flex", alignItems: "center", justifyContent: "center", borderRadius: 10, border: "1px solid #e5e7eb", background: "#ffffff", color: "#64748b", cursor: todayPage === todayTotalPages ? "not-allowed" : "pointer", opacity: todayPage === todayTotalPages ? 0.45 : 1 }}
+            >
+              <FiChevronRight size={16} />
+            </button>
+          </div>
+        </div>
+      )}
     </div>
 
       {/* Tooltip for present/absent */}

@@ -72,251 +72,90 @@ export default function AdminSidebar({ onLogout }) {
 
   return (
     <>
+      {/* Mobile Top Bar */}
       {isMobile && (
-        <div style={styles.mobileTopBar}>
+        <div className="fixed top-3 left-3 right-3 h-14 flex items-center gap-3 z-[120]">
           <button
             aria-label="Open menu"
             onClick={() => setIsMobileOpen(true)}
-            style={styles.mobileMenuButton}
+            className="w-11 h-11 rounded-[10px] bg-[#237227] text-white flex items-center justify-center cursor-pointer text-xl border-none"
           >
             <FiMenu />
           </button>
-          <div style={styles.mobileTopTitle}>Multifactors Sales</div>
+          <div className="text-base font-bold text-gray-800">Multifactors Sales</div>
         </div>
       )}
 
-      <div style={isMobile ? (isMobileOpen ? styles.sidebarMobileOpen : { display: "none" }) : styles.sidebar}>
-      {/* Logo */}
-      <div style={styles.logo}>
-        <img
-          src={
-            process.env.PUBLIC_URL + "/image/logo/multifactors-sales_logo.png"
-          }
-          alt="Multifactors Sales Logo"
-          style={{
-            ...styles.logoIcon,
-            objectFit: "cover",
-            padding: 5,
-          }}
-        />
-<h1 style={{ marginLeft: -5, color: "#237227", fontSize: "1.2rem", width: "100%", fontWeight: 700, }}>Multifactors Sales</h1>
-      <span style={{ color: "#6b7280", marginTop: 50, width: "100%", marginLeft: -180, fontSize: "0.7rem", }}>Facial Recognition for Attendances </span>      </div>
-
-      {/* Navigation */}
-      <nav style={styles.nav}>
-        {navItems.map((item) => {
-          // Mark active when current path starts with the item's path
-          // This allows child routes (e.g. /admin/dashboard/stats) to keep the parent highlighted
-          const isActive = location.pathname.startsWith(item.path);
-
-          return (
-            <button
-              key={item.path}
-              onClick={() => navigate(item.path)}
-              style={{
-                ...styles.navItem,
-                ...(isActive ? styles.navItemActive : {}),
-              }}
-              onMouseEnter={(e) => {
-                if (!isActive) {
-                  e.currentTarget.style.backgroundColor = "#e6f7f0";
-                  e.currentTarget.style.color = "#237227";
-                }
-              }}
-              onMouseLeave={(e) => {
-                if (!isActive) {
-                  e.currentTarget.style.backgroundColor = "transparent";
-                  e.currentTarget.style.color = "#4b5563";
-                }
-              }}
-            >
-              {/* ✅ ICON */}
-              <span style={styles.navIcon}>{item.icon}</span>
-
-              {/* TEXT */}
-              <span>{item.label}</span>
-            </button>
-          );
-        })}
-      </nav>
-
-      {/* Spacer */}
-      <div style={styles.spacer} />
-
-      {/* Logout */}
-      <button
-        onClick={onLogout}
-        style={styles.logoutButton}
-        onMouseEnter={(e) => {
-          e.currentTarget.style.backgroundColor = "#df4343";
-          e.currentTarget.style.transform = "translateY(-2px)";
-          e.currentTarget.style.boxShadow = "0 8px 20px rgba(220, 38, 38, 0.3)";
-        }}
-        onMouseLeave={(e) => {
-          e.currentTarget.style.backgroundColor = "#666666";
-          e.currentTarget.style.transform = "translateY(0)";
-          e.currentTarget.style.boxShadow = "none";
-        }}
+      {/* Sidebar */}
+      <div
+        className={[
+          "flex flex-col fixed left-0 top-0 min-h-screen bg-white border-r border-gray-200 pt-5 font-sans",
+          isMobile
+            ? isMobileOpen
+              ? "w-[260px] z-[120] shadow-[0_6px_40px_rgba(0,0,0,0.4)]"
+              : "hidden"
+            : "w-[295px] z-[100] shadow-[10px_0_50px_rgba(0,0,0,0.07)]",
+        ].join(" ")}
       >
-        <FiLogOut style={styles.logoutIcon} />
-        <span>Logout</span>
-      </button>
-      {isMobile && isMobileOpen && (
-        <div role="button" aria-label="Close menu" onClick={() => setIsMobileOpen(false)} style={styles.mobileBackdrop} />
-      )}
+        {/* Logo */}
+        <div className="flex items-center gap-3 px-6 pb-5 mb-6 border-b border-[#9E9E9E]">
+          <img
+            src={process.env.PUBLIC_URL + "/image/logosidebar.jpg"}
+            alt="Multifactors Sales Logo"
+            className="w-42 h-auto"
+          />
+        </div>
+
+        {/* Navigation */}
+        <nav className="flex flex-col gap-2 px-4">
+          {navItems.map((item) => {
+            const isActive = location.pathname.startsWith(item.path);
+
+            return (
+              <button
+                key={item.path}
+                onClick={() => navigate(item.path)}
+                className={[
+                  "flex items-center gap-3.5 rounded-lg px-5 py-3.5 text-base font-medium cursor-pointer transition-all duration-200 text-left w-full border-none",
+                  isActive
+                    ? "bg-[#237227] text-white shadow-[0_4px_14px_rgba(40,56,51,0.4)]"
+                    : "bg-transparent text-gray-600 hover:bg-[#e6f7f0] hover:text-[#237227]",
+                ].join(" ")}
+              >
+                {/* ✅ ICON */}
+                <span className="text-[1.4rem] min-w-6 flex items-center">
+                  {item.icon}
+                </span>
+
+                {/* TEXT */}
+                <span>{item.label}</span>
+              </button>
+            );
+          })}
+        </nav>
+
+        {/* Spacer */}
+        <div className="flex-1" />
+
+        {/* Logout */}
+        <button
+          onClick={onLogout}
+          className="flex items-center justify-center gap-3 bg-[#666666] text-white border-none rounded-[14px] mx-4 mb-16 py-4 text-[1.1rem] font-semibold cursor-pointer transition-all duration-200 hover:bg-[#df4343] hover:shadow-lg"
+        >
+          <FiLogOut className="text-[1.4rem]" />
+          <span>Logout</span>
+        </button>
+
+        {/* Mobile Backdrop */}
+        {isMobile && isMobileOpen && (
+          <div
+            role="button"
+            aria-label="Close menu"
+            onClick={() => setIsMobileOpen(false)}
+            className="fixed inset-0 bg-black/[0.36] z-[119]"
+          />
+        )}
       </div>
     </>
   );
 }
-
-// ✅ Styles
-const styles = {
-  sidebar: {
-    width: 295,
-    minHeight: "100vh",
-    background: "#ffffff",
-    borderRight: "1px solid #e5e7eb",
-    display: "flex",
-    flexDirection: "column",
-    paddingTop: 20,
-    position: "fixed",
-    left: 0,
-    top: 0,
-    zIndex: 100,
-    boxShadow: "10px 0 50px rgba(0, 0, 0, 0.07)",
-    fontFamily:
-      '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif',
-  },
-
-  logo: {
-    display: "flex",
-    alignItems: "center",
-    gap: "12px",
-    padding: "0 24px",
-    marginBottom: 40,
-  },
-
-  logoIcon: {
-    width: 48,
-    height: 48,
-    borderRadius: 16,
-    background: "#237227",
-  },
-
-  logoText: {
-    fontSize: "1.2rem",
-    fontWeight: 700,
-    color: "#1f2937",
-  },
-
-  nav: {
-    display: "flex",
-    flexDirection: "column",
-    gap: "8px",
-    padding: "0 16px",
-  },
-
-  navItem: {
-    display: "flex",
-    alignItems: "center",
-    gap: "14px",
-    background: "transparent",
-    color: "#4b5563",
-    border: "none",
-    borderRadius: 8,
-    padding: "14px 20px",
-    fontSize: "1rem",
-    fontWeight: 500,
-    cursor: "pointer",
-    transition: "all 0.2s",
-    textAlign: "left",
-    width: "100%",
-  },
-
-  navItemActive: {
-    background: "#237227",
-    color: "#ffffff",
-    boxShadow: "0 4px 14px rgba(40, 56, 51, 0.4)",
-  },
-
-  navIcon: {
-    fontSize: "1.4rem",
-    minWidth: 24,
-    display: "flex",
-    alignItems: "center",
-  },
-
-  spacer: {
-    flex: 1,
-  },
-
-  logoutButton: {
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: "12px",
-    background: "#666666",
-    color: "#fff",
-    border: "none",
-    borderRadius: 14,
-    margin: "24px 16px 65px",
-    padding: "16px 0",
-    fontSize: "1.1rem",
-    fontWeight: 600,
-    cursor: "pointer",
-    transition: "all 0.2s",
-  },
-
-  logoutIcon: {
-    fontSize: "1.4rem",
-  },
-  mobileTopBar: {
-    position: "fixed",
-    top: 12,
-    left: 12,
-    right: 12,
-    height: 56,
-    display: "flex",
-    alignItems: "center",
-    gap: 12,
-    zIndex: 120,
-  },
-  mobileMenuButton: {
-    width: 44,
-    height: 44,
-    borderRadius: 10,
-    border: "none",
-    background: "#237227",
-    color: "#fff",
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    cursor: "pointer",
-    fontSize: 20,
-  },
-  mobileTopTitle: {
-    fontSize: "1rem",
-    fontWeight: 700,
-    color: "#1f2937",
-  },
-  mobileBackdrop: {
-    position: "fixed",
-    inset: 0,
-    background: "rgba(0,0,0,0.36)",
-    zIndex: 119,
-  },
-  sidebarMobileOpen: {
-    width: 260,
-    minHeight: "100vh",
-    background: "#ffffff",
-    borderRight: "1px solid #e5e7eb",
-    display: "flex",
-    flexDirection: "column",
-    paddingTop: 20,
-    position: "fixed",
-    left: 0,
-    top: 0,
-    zIndex: 120,
-    boxShadow: "0 6px 40px rgba(0,0,0,0.4)",
-  },
-};

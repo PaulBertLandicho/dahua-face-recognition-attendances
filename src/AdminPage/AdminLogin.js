@@ -35,8 +35,19 @@ export default function AdminLogin() {
         return;
       }
 
-      // After successful admin login, navigate to dashboard
-      navigate("/admin/dashboard");
+      // We need to fetch the session to determine the user's role
+      const { data: { session } } = await supabase.auth.getSession();
+      if (session) {
+        const user = session.user;
+        const role = user?.user_metadata?.role || user?.app_metadata?.role || user?.role;
+        if (role === "secretary") {
+          navigate("/");
+        } else {
+          navigate("/admin/dashboard");
+        }
+      } else {
+        navigate("/admin/dashboard");
+      }
     } catch (err) {
       setError(err.message || "Login failed");
       setLoading(false);
@@ -49,7 +60,7 @@ export default function AdminLogin() {
         <div style={styles.headerCentered}>
           <div style={styles.icon} aria-hidden>
             <img
-              src="/image/logo512.png"
+              src="/image/login-logo.png"
               alt="Multifactors Sales Logo"
               style={styles.logoImage}
             />
@@ -147,6 +158,11 @@ export default function AdminLogin() {
           </button>
         </form>
       </div>
+
+      {/* Footer */}
+      <div style={styles.footer}>
+        © 2026 Multifactors Sales Corporation. All rights reserved.
+      </div>
     </div>
   );
 }
@@ -154,45 +170,50 @@ export default function AdminLogin() {
 /* STYLES MUST BE OUTSIDE THE COMPONENT */
 const styles = {
   container: {
-    minHeight: "auto",
+    minHeight: "100vh",
     display: "flex",
-    alignItems: "flex-start",
-    justifyContent: "center",
-    padding: "48px 16px",
+    flexDirection: "column",
+    alignItems: "center",
+    justifyContent: "flex-start",
+    padding: 0,
+    background: "#f9fafb",
   },
   card: {
     maxWidth: "420px",
-    width: "100%",
-    background: "#fff",
+    width: "90%",
+    background: "#ffffff",
     borderRadius: "16px",
-    padding: "32px",
-    boxShadow: "0 12px 30px rgba(16,24,40,0.08)",
+    padding: "40px 32px",
+    boxShadow: "0 10px 25px rgba(0, 0, 0, 0.05)",
+    border: "1px solid #f3f4f6",
+    marginTop: "10vh",
+    marginBottom: "100px",
   },
   headerCentered: {
     textAlign: "center",
-    marginBottom: "18px",
+    marginBottom: "24px",
     display: "flex",
     alignItems: "center",
     justifyContent: "center",
     flexDirection: "column",
-    gap: 8,
-    paddingTop: 4,
+    gap: 12,
   },
   icon: {
-    fontSize: "40px",
+    display: "flex",
+    justifyContent: "center",
+    marginBottom: "4px",
   },
   logoImage: {
-    width: 250,
-    height: 150,
+    width: 140,
+    height: 140,
     objectFit: "contain",
   },
   welcomeTitle: {
     margin: 0,
-    fontSize: "20px",
+    fontSize: "1.45rem",
     fontWeight: 700,
     color: "#111827",
   },
-  /* duplicate icon removed */
   headerSub: {
     color: "#6b7280",
     fontSize: "13px",
@@ -247,8 +268,11 @@ const styles = {
     color: "#111827",
   },
   button: {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
     padding: "12px",
-    borderRadius: "12px",
+    borderRadius: "8px",
     border: "none",
     background: "#237227",
     color: "#fff",
@@ -256,6 +280,8 @@ const styles = {
     fontWeight: 700,
     fontSize: "16px",
     width: "100%",
+    boxShadow: "0 4px 12px rgba(35, 114, 39, 0.2)",
+    transition: "background 0.2s",
   },
   buttonDisabled: {
     opacity: 0.6,
@@ -311,5 +337,20 @@ const styles = {
   signInIcon: {
     marginRight: 8,
     verticalAlign: "middle",
+  },
+  footer: {
+    position: "sticky",
+    bottom: 0,
+    left: 0,
+    marginTop: "auto",
+    padding: "24px 32px",
+    textAlign: "left",
+    color: "#6b7280",
+    fontSize: "13px",
+    background: "#f9fafb",
+    width: "100%",
+    borderTop: "1px solid #e5e7eb",
+    boxSizing: "border-box",
+    zIndex: 10,
   },
 };

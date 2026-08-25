@@ -250,23 +250,33 @@ export default function ReleasedHistoryPayroll() {
     return 0;
   });
 
+  // Pagination logic
+  const [currentPage, setCurrentPage] = useState(1);
+  const itemsPerPage = 10;
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [search, departmentFilter]);
+
+  const activeRecords = sortedPayrollsFinal;
+  const totalRecords = activeRecords.length;
+  const totalPages = Math.ceil(totalRecords / itemsPerPage) || 1;
+  const startIndex = (currentPage - 1) * itemsPerPage;
+  const currentRecords = activeRecords.slice(startIndex, startIndex + itemsPerPage);
+
   return (
     <div style={styles.container}>
       <div style={styles.header}>
-        <h1 style={styles.title}>Released Payroll History</h1>
-        <div style={styles.titleUnderline} />
+        <h1 style={styles.title}>
+          <span style={styles.titleBlack}>Released Payroll </span>
+          <span style={styles.titlePrimary}>History</span>
+        </h1>
       </div>
       {/* Filter Bar - match PersonsTable */}
       <div style={styles.filterBar}>
-        <div
-          style={{
-            display: "flex",
-            gap: "12px",
-            alignItems: "center",
-            flexWrap: "wrap",
-          }}
-        >
+        <div style={styles.filterGroup}>
           <div style={styles.searchWrapper}>
+            <label style={{ display: "block", marginBottom: 4, fontSize: 12, color: "#4b5563", fontWeight: 600 }}>Search</label>
             <input
               type="text"
               placeholder="Search name or ID"
@@ -275,41 +285,30 @@ export default function ReleasedHistoryPayroll() {
               style={styles.searchInput}
             />
           </div>
-          <select
-            value={departmentFilter}
-            onChange={(e) => setDepartmentFilter(e.target.value)}
-            style={{
-              padding: "12px 20px",
-              fontSize: "0.95rem",
-              borderRadius: "40px",
-              border: "1px solid #d1d5db",
-              backgroundColor: "#ffffff",
-              color: "#1f2937",
-              outline: "none",
-              cursor: "pointer",
-              minWidth: "160px",
-            }}
-          >
-            <option value="">All Departments</option>
-            {departmentOptions.map((dept) => (
-              <option key={dept} value={dept}>
-                {dept}
-              </option>
-            ))}
-          </select>
-          {/* <button
-            style={{ ...styles.button, background: '#e5e7eb', color: '#1f2937', border: '1px solid #d1d5db' }}
-            onClick={() => window.location.href = '/admin/ReleasedPayrollLogs'}
-          >
-            View Released Payroll Logs
-          </button> */}
+          <div>
+            <label style={{ display: "block", marginBottom: 4, fontSize: 12, color: "#4b5563", fontWeight: 600 }}>Department</label>
+            <select
+              value={departmentFilter}
+              onChange={(e) => setDepartmentFilter(e.target.value)}
+              style={styles.select}
+            >
+              <option value="">All Departments</option>
+              {departmentOptions.map((dept) => (
+                <option key={dept} value={dept}>
+                  {dept}
+                </option>
+              ))}
+            </select>
+          </div>
         </div>
-        <button
-          onClick={handleExportExcel}
-          style={{ ...styles.button, ...styles.buttonPrimary }}
-        >
-          <FiDownload color="#ffffff" style={{ marginRight: 8 }} /> Export Excel
-        </button>
+        <div style={styles.actionButtons}>
+          <button
+            onClick={handleExportExcel}
+            style={{ ...styles.button, ...styles.buttonPrimary }}
+          >
+            <FiDownload color="#ffffff" style={{ marginRight: 8 }} /> Export Excel
+          </button>
+        </div>
       </div>
       <div style={styles.tableContainer}>
         <div style={styles.tableWrapper}>
@@ -339,14 +338,14 @@ export default function ReleasedHistoryPayroll() {
               </tr>
             </thead>
             <tbody>
-              {sortedPayrollsFinal.length === 0 ? (
+              {currentRecords.length === 0 ? (
                 <tr>
                   <td colSpan={8} style={styles.emptyState}>
                     No released payrolls found.
                   </td>
                 </tr>
               ) : (
-                sortedPayrollsFinal.map((p, idx) => (
+                currentRecords.map((p, idx) => (
                   <tr
                     key={p.id}
                     style={{
@@ -416,6 +415,54 @@ export default function ReleasedHistoryPayroll() {
             </tbody>
           </table>
         </div>
+        
+        {/* Pagination Footer */}
+        <div style={styles.paginationContainer}>
+          <div style={styles.paginationText}>
+            Showing <strong>{totalRecords === 0 ? 0 : startIndex + 1}</strong> to <strong>{Math.min(startIndex + itemsPerPage, totalRecords)}</strong> of <strong>{totalRecords}</strong> records
+          </div>
+          <div style={styles.paginationControls}>
+            <button 
+              style={{ ...styles.pageButton, ...(currentPage === 1 ? styles.pageButtonDisabled : {}) }}
+              onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+              disabled={currentPage === 1}
+            >
+              &lt;
+            </button>
+            
+            {Array.from({ length: totalPages }, (_, i) => i + 1)
+              .filter(p => p === 1 || p === totalPages || Math.abs(currentPage - p) <= 1)
+              .map((p, idx, arr) => {
+                const renderButton = (
+                  <button
+                    key={p}
+                    style={p === currentPage ? { ...styles.pageButton, ...styles.pageButtonActive } : styles.pageButton}
+                    onClick={() => setCurrentPage(p)}
+                  >
+                    {p}
+                  </button>
+                );
+
+                if (idx > 0 && arr[idx] - arr[idx - 1] > 1) {
+                  return (
+                    <div key={`group-${p}`} style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                      <span style={{ color: "#677368", padding: "0 2px" }}>...</span>
+                      {renderButton}
+                    </div>
+                  );
+                }
+                return renderButton;
+              })}
+            
+            <button 
+              style={{ ...styles.pageButton, ...(currentPage === totalPages ? styles.pageButtonDisabled : {}) }}
+              onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
+              disabled={currentPage === totalPages}
+            >
+              &gt;
+            </button>
+          </div>
+        </div>
       </div>
       {showPayslip &&
         selected &&
@@ -451,100 +498,110 @@ export default function ReleasedHistoryPayroll() {
 // Light theme styles with green accent
 const styles = {
   container: {
-    maxWidth: "1600px",
-    margin: "40px auto",
-    padding: "40px 32px",
+    margin: "0 auto",
+    padding: "36px 28px",
+    maxWidth: "100%",
     background: "#ffffff",
-    borderRadius: "32px",
-    boxShadow: "0 10px 30px rgba(0, 0, 0, 0.1)",
+    minHeight: "100vh",
     color: "#1f2937",
     fontFamily:
       '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif',
   },
   header: {
-    textAlign: "center",
-    marginBottom: "40px",
+    marginBottom: "24px",
+    display: "flex",
+    flexDirection: "column",
+    alignItems: "flex-start",
+    gap: "6px",
   },
   title: {
-    fontSize: "2.8rem",
-    fontWeight: 700,
-    color: "#1f2937",
+    fontSize: "2.5rem",
+    fontWeight: 800,
     margin: 0,
+    letterSpacing: "-0.02em",
     display: "inline-block",
   },
-  titleUnderline: {
-    height: "4px",
-    width: "100px",
-    background: "#237227",
-    margin: "8px auto 0",
-    borderRadius: "2px",
+  titleBlack: {
+    color: "#2c382d",
+  },
+  titlePrimary: {
+    color: "#237227",
   },
   filterBar: {
     display: "flex",
-    flexWrap: "wrap",
+    flexWrap: "nowrap",
     justifyContent: "space-between",
-    alignItems: "center",
-    gap: "16px",
-    marginBottom: "24px",
-    padding: "20px 24px",
-    backgroundColor: "#f9fafb",
-    borderRadius: "20px",
-    border: "1px solid #e5e7eb",
-    boxShadow: "0 4px 12px rgba(0, 0, 0, 0.05)",
+    alignItems: "flex-end",
+    gap: "14px",
+    marginBottom: "20px",
+    padding: "12px 16px",
+    backgroundColor: "#ffffff",
+    borderRadius: "12px",
+    border: "1px solid #edf2ee",
+    boxShadow: "0 1px 4px rgba(0, 0, 0, 0.04)",
+    overflowX: "auto",
   },
   filterGroup: {
     display: "flex",
-    flexWrap: "wrap",
-    gap: "12px",
-    alignItems: "center",
+    flexWrap: "nowrap",
+    gap: "10px",
+    alignItems: "flex-end",
   },
   searchWrapper: {
     position: "relative",
   },
   searchInput: {
-    padding: "12px 16px 12px 40px",
-    fontSize: "0.95rem",
-    borderRadius: "40px",
+    padding: "8px 14px 8px 34px",
+    fontSize: "0.85rem",
+    borderRadius: "6px",
     border: "1px solid #d1d5db",
     backgroundColor: "#ffffff",
     color: "#1f2937",
     outline: "none",
-    transition: "all 0.2s",
-    backgroundImage: `url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="%236b7280" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>')`,
+    transition: "border-color 0.2s, box-shadow 0.2s",
+    backgroundImage: `url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="%236b7280" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>')`,
     backgroundRepeat: "no-repeat",
-    backgroundPosition: "16px center",
-    backgroundSize: "16px",
-    minWidth: "250px",
+    backgroundPosition: "10px center",
+    backgroundSize: "14px",
+    minWidth: "180px",
   },
   select: {
-    padding: "12px 20px",
-    fontSize: "0.95rem",
-    borderRadius: "40px",
+    padding: "8px 12px",
+    fontSize: "0.85rem",
+    borderRadius: "6px",
     border: "1px solid #d1d5db",
     backgroundColor: "#ffffff",
     color: "#1f2937",
     outline: "none",
     cursor: "pointer",
-    minWidth: "160px",
+    minWidth: "130px",
   },
   button: {
     display: "inline-flex",
     alignItems: "center",
-    gap: "8px",
-    padding: "12px 28px",
-    borderRadius: "40px",
-    fontSize: "1rem",
-    fontWeight: 500,
+    justifyContent: "center",
+    gap: "6px",
+    padding: "8px 16px",
+    borderRadius: "6px",
+    fontSize: "0.85rem",
+    fontWeight: 600,
     border: "none",
     cursor: "pointer",
-    transition: "all 0.2s",
-    boxShadow: "0 4px 10px rgba(0, 0, 0, 0.1)",
+    transition: "opacity 0.18s, transform 0.12s",
+    letterSpacing: "0.01em",
+    whiteSpace: "nowrap",
   },
   buttonPrimary: {
     background: "#237227",
     color: "#ffffff",
+    boxShadow: "0 1px 4px rgba(35, 114, 39, 0.2)",
   },
-
+  buttonSecondary: {
+    background: "#ffffff",
+    color: "#237227",
+    border: "1px solid #237227",
+    boxShadow: "0 1px 2px rgba(0,0,0,0.03)",
+  },
   searchIcon: {
     position: "absolute",
     left: "12px",
@@ -553,27 +610,26 @@ const styles = {
     fontSize: "1rem",
     color: "#6b7280",
   },
-
   viewButton: {
-    padding: "6px 12px",
-    borderRadius: "30px",
+    padding: "6px 14px",
+    borderRadius: "6px",
     border: "none",
     fontSize: "0.85rem",
-    fontWeight: 500,
+    fontWeight: 600,
     cursor: "pointer",
     transition: "all 0.2s",
     display: "inline-flex",
     alignItems: "center",
-    gap: "4px",
+    gap: "6px",
     backgroundColor: "#e5e7eb",
     color: "#1f2937",
   },
   tableContainer: {
-    borderRadius: "20px",
+    borderRadius: "16px",
     overflow: "hidden",
-    border: "1px solid #e5e7eb",
     backgroundColor: "#ffffff",
-    boxShadow: "0 4px 12px rgba(0, 0, 0, 0.05)",
+    boxShadow: "0 2px 14px rgba(44, 56, 45, 0.06)",
+    border: "none",
   },
   tableWrapper: {
     overflowX: "auto",
@@ -589,15 +645,17 @@ const styles = {
     position: "sticky",
     top: 0,
     zIndex: 10,
-    backgroundColor: "#f9fafb",
-    color: "#4b5563",
-    fontWeight: 600,
-    padding: "16px 12px",
+    backgroundColor: "#ffffff",
+    color: "#000000",
+    fontWeight: 700,
+    padding: "14px 14px",
     textAlign: "left",
     borderBottom: "2px solid #e5e7eb",
-    letterSpacing: "0.03em",
+    letterSpacing: "0.05em",
     textTransform: "uppercase",
-    fontSize: "0.8rem",
+    fontSize: "0.75rem",
+    whiteSpace: "nowrap",
+    cursor: "pointer",
   },
   td: {
     padding: "14px 12px",
@@ -606,6 +664,50 @@ const styles = {
   },
   tr: {
     transition: "background 0.2s",
+  },
+  paginationContainer: {
+    display: "flex",
+    justifyContent: "space-between",
+    alignItems: "center",
+    padding: "16px 20px",
+    backgroundColor: "#ffffff",
+    borderTop: "1px solid #edf2ee",
+    borderBottomLeftRadius: "12px",
+    borderBottomRightRadius: "12px",
+  },
+  paginationText: {
+    color: "#6b7280",
+    fontSize: "0.875rem",
+  },
+  paginationControls: {
+    display: "flex",
+    gap: "6px",
+    alignItems: "center",
+  },
+  pageButton: {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    minWidth: "32px",
+    height: "32px",
+    padding: "0 6px",
+    borderRadius: "8px",
+    border: "1px solid #d1d5db",
+    backgroundColor: "#ffffff",
+    color: "#6b7280",
+    fontSize: "0.85rem",
+    fontWeight: 600,
+    cursor: "pointer",
+    transition: "all 0.2s",
+  },
+  pageButtonActive: {
+    backgroundColor: "#237227",
+    color: "#ffffff",
+    border: "1px solid #237227",
+  },
+  pageButtonDisabled: {
+    opacity: 0.4,
+    cursor: "not-allowed",
   },
   emptyState: {
     textAlign: "center",

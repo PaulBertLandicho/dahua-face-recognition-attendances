@@ -20,9 +20,15 @@ export default function PayrollPage() {
   const [selected, setSelected] = useState(null);
   const [showPayslip, setShowPayslip] = useState(false);
 
-  // Add filter, sort, and export state
+  // Add filter, sort, export, and pagination state
   const [departmentFilter, setDepartmentFilter] = useState("");
   const [sortOrder, setSortOrder] = useState("asc");
+  const [currentPage, setCurrentPage] = useState(1);
+  const itemsPerPage = 10;
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [search, departmentFilter, sortOrder]);
 
   const Icons = {
     search: <FiSearch />,
@@ -138,8 +144,83 @@ export default function PayrollPage() {
             const detailed = getDetailedAttendance(
               attendance,
               person.id,
-              settingsData,
+              settingsData
             );
+
+            // Re-calculate daysPresent to enforce exact hours worked
+            let totalHoursWorked = 0;
+            let totalOtHours = 0;
+            const parseTime = (timeStr) => {
+              if (!timeStr) return null;
+              let match = String(timeStr).match(/(\d{1,2}):(\d{2})(?:\s*([APap][Mm]))?/);
+              if (match) {
+                let hour = parseInt(match[1], 10);
+                let minute = parseInt(match[2], 10);
+                const ampm = match[3];
+                if (ampm) {
+                  if (/pm/i.test(ampm) && hour < 12) hour += 12;
+                  if (/am/i.test(ampm) && hour === 12) hour = 0;
+                }
+                return hour * 60 + minute;
+              }
+              return null;
+            };
+
+            const lunchStart = parseTime(settingsData.morning_end || "12:00") || 720;
+            const lunchEnd = parseTime(settingsData.afternoon_start || "13:00") || 780;
+            const lunchDuration = Math.max(0, lunchEnd - lunchStart);
+            const schedAfternoonEnd = parseTime(settingsData.afternoon_end || "17:00") || 1020;
+            const schedMorningEnd = lunchStart;
+
+            detailed.forEach((rec) => {
+              if (!rec.morningIn || !rec.afternoonOut) return;
+              const scheduledStart = parseTime(settingsData.morning_start || "08:00") || 480;
+              const aOut = parseTime(rec.afternoonOut);
+              const mOut = parseTime(rec.morningOut);
+              
+              // Calculate OT (must be at least 1 hour to trigger)
+              if (aOut !== null && aOut > schedAfternoonEnd) {
+                const otMins = aOut - schedAfternoonEnd;
+                if (otMins >= 60) {
+                  totalOtHours += otMins / 60;
+                }
+              }
+              if (mOut !== null && mOut > schedMorningEnd) {
+                const otMins = mOut - schedMorningEnd;
+                if (otMins >= 60) {
+                  totalOtHours += otMins / 60;
+                }
+              }
+
+              if (aOut !== null) {
+                const mIn = scheduledStart; // Use scheduled start to avoid double deduction with Late Penalty
+                let workedMinutes = aOut - mIn;
+                if (mIn <= lunchStart && aOut >= lunchEnd) {
+                  workedMinutes -= lunchDuration;
+                } else if (mIn <= lunchStart && aOut > lunchStart && aOut < lunchEnd) {
+                  workedMinutes -= (aOut - lunchStart);
+                } else if (mIn > lunchStart && mIn < lunchEnd && aOut >= lunchEnd) {
+                  workedMinutes -= (lunchEnd - mIn);
+                }
+                
+                // Round to the nearest 15 minutes to handle tiny variations (e.g. clocking out at 4:59 PM)
+                workedMinutes = Math.round(workedMinutes / 15) * 15;
+
+                let standardWorkedMinutes = Math.min(workedMinutes, 480);
+                if (standardWorkedMinutes > 0) {
+                  totalHoursWorked += standardWorkedMinutes / 60;
+                }
+              }
+            });
+            basePayroll.daysPresent = Number(Math.round((totalHoursWorked / 8) * 1000) / 1000) || 0;
+            basePayroll.otHours = Number(Math.round(totalOtHours * 100) / 100) || 0;
+            
+            // Recalculate otPay based on correct exact hours
+            const otHourlyRate = Number(basePayroll.otHourlyRate || (Number(basePayroll.dailyRate || 0) / 8));
+            basePayroll.otPay = Number(Math.round(otHourlyRate * basePayroll.otHours * 100) / 100) || 0;
+            
+            basePayroll.gross = Number((Number(basePayroll.dailyRate || 0) * basePayroll.daysPresent) + basePayroll.otPay) || 0;
+
             const lateCount = detailed
               .map((rec) => rec.lateDetails || [])
               .flat().length;
@@ -148,10 +229,10 @@ export default function PayrollPage() {
             const totalLateDeduction =
               lateCount >= lateCountLimit ? lateCount * latePenalty : 0;
             const totalDeductions =
-              basePayroll.sss +
-              basePayroll.pag_ibig +
-              basePayroll.philhealth +
-              basePayroll.cashAdvance +
+              Number(basePayroll.sss || 0) +
+              Number(basePayroll.pag_ibig || 0) +
+              Number(basePayroll.philhealth || 0) +
+              Number(basePayroll.cashAdvance || 0) +
               totalLateDeduction;
             const net = basePayroll.gross - totalDeductions;
             // Find if this period exists in DB (defensive & avoid duplicates)
@@ -171,7 +252,31 @@ export default function PayrollPage() {
               console.error("Error querying payroll_periods", e);
             }
 
-            if (!dbRow) {
+            if (dbRow && !dbRow.released) {
+              const payload = {
+                days_present: basePayroll.daysPresent,
+                daily_rate: Number(basePayroll.dailyRate ?? 0),
+                late_penalty: Number(person.late_penalty || 0),
+                late_count: lateCount,
+                gross: basePayroll.gross,
+                total_late_deduction: totalLateDeduction,
+                total_deductions: totalDeductions,
+                net,
+              };
+              try {
+                const { data: updated, error: updErr } = await supabase
+                  .from("payroll_periods")
+                  .update(payload)
+                  .eq("id", dbRow.id)
+                  .select()
+                  .single();
+                if (!updErr && updated) {
+                  dbRow = updated;
+                }
+              } catch (e) {
+                console.error("Error updating payroll_periods", e);
+              }
+            } else if (!dbRow) {
               const payload = {
                 person_id: person.id,
                 period,
@@ -855,11 +960,20 @@ export default function PayrollPage() {
         : idB.localeCompare(idA);
     });
 
+  // Pagination logic
+  const activeRecords = filteredPayrollPeriods;
+  const totalRecords = activeRecords.length;
+  const totalPages = Math.ceil(totalRecords / itemsPerPage) || 1;
+  const startIndex = (currentPage - 1) * itemsPerPage;
+  const currentRecords = activeRecords.slice(startIndex, startIndex + itemsPerPage);
+
   return (
     <div style={styles.container}>
       <div style={styles.header}>
-        <h1 style={styles.title}>Payroll Summary</h1>
-        <div style={styles.titleUnderline} />
+        <h1 style={styles.title}>
+          <span style={styles.titleBlack}>Payroll </span>
+          <span style={styles.titlePrimary}>Summary</span>
+        </h1>
         {/* <button
           style={{ ...styles.button, ...styles.buttonPrimary, marginTop: 16, float: 'right' }}
           onClick={() => window.location.href = '/admin/released-history'}
@@ -902,22 +1016,24 @@ export default function PayrollPage() {
             {sortOrder === "asc" ? "Asc" : "Desc"}
           </button>
         </div>
-        <button
-          onClick={handleExportPayslipExcel}
-          style={{
-            ...styles.button,
-            ...styles.buttonPrimary,
-          }}
-        >
-          {Icons.download} Export Excel
-        </button>
-        <button
-          onClick={handleGenerateAllPayslipPdf}
-          style={{ ...styles.button, ...styles.buttonPrimary }}
-        >
-          <FiPrinter style={{ marginRight: 8 }} />
-          Generate All Payslips PDF
-        </button>
+        <div style={styles.actionButtons}>
+          <button
+            onClick={handleExportPayslipExcel}
+            style={{
+              ...styles.button,
+              ...styles.buttonPrimary,
+            }}
+          >
+            {Icons.download} Export Excel
+          </button>
+          <button
+            onClick={handleGenerateAllPayslipPdf}
+            style={{ ...styles.button, ...styles.buttonPrimary }}
+          >
+            <FiPrinter style={{ marginRight: 8 }} />
+            Generate All Payslips PDF
+          </button>
+        </div>
         {/* <button
           style={{ ...styles.button, ...styles.buttonSecondary, marginLeft: 12 }}
           onClick={() => window.location.href = '/admin/ReleasedPayrollLogs'}
@@ -953,14 +1069,14 @@ export default function PayrollPage() {
               </tr>
             </thead>
             <tbody>
-              {filteredPayrollPeriods.length === 0 ? (
+              {currentRecords.length === 0 ? (
                 <tr>
                   <td colSpan={11} style={styles.emptyState}>
                     No payroll records found.
                   </td>
                 </tr>
               ) : (
-                filteredPayrollPeriods.map((p, idx) => {
+                currentRecords.map((p, idx) => {
                   const { person, period, payroll, released } = p;
                   const rowStyle = {
                     ...styles.tr,
@@ -992,11 +1108,7 @@ export default function PayrollPage() {
                       <td style={styles.td}>
                         <button
                           onClick={() => handleShowPayslip(p)}
-                          style={{ ...styles.td, ...styles.button,
-                          ...styles.buttonPrimary,
-                          padding: "6px 18px",
-                          fontSize: "0.95rem",
-                          borderRadius: "30px",}}
+                          style={styles.viewButton}
                         >
                           {Icons.eye} View
                         </button>
@@ -1012,8 +1124,8 @@ export default function PayrollPage() {
                             style={{
                               ...styles.button,
                               ...styles.buttonSecondary,
-                              padding: "4px 12px",
-                              fontSize: "0.9em",
+                              padding: "6px 12px",
+                              fontSize: "0.85rem",
                             }}
                           >
                             Advance Release Payroll
@@ -1026,6 +1138,54 @@ export default function PayrollPage() {
               )}
             </tbody>
           </table>
+        </div>
+
+        {/* Pagination Footer */}
+        <div style={styles.paginationContainer}>
+          <div style={styles.paginationText}>
+            Showing <strong>{totalRecords === 0 ? 0 : startIndex + 1}</strong> to <strong>{Math.min(startIndex + itemsPerPage, totalRecords)}</strong> of <strong>{totalRecords}</strong> records
+          </div>
+          <div style={styles.paginationControls}>
+            <button 
+              style={{ ...styles.pageButton, ...(currentPage === 1 ? styles.pageButtonDisabled : {}) }}
+              onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+              disabled={currentPage === 1}
+            >
+              &lt;
+            </button>
+            
+            {Array.from({ length: totalPages }, (_, i) => i + 1)
+              .filter(p => p === 1 || p === totalPages || Math.abs(currentPage - p) <= 1)
+              .map((p, idx, arr) => {
+                const renderButton = (
+                  <button
+                    key={p}
+                    style={p === currentPage ? { ...styles.pageButton, ...styles.pageButtonActive } : styles.pageButton}
+                    onClick={() => setCurrentPage(p)}
+                  >
+                    {p}
+                  </button>
+                );
+
+                if (idx > 0 && arr[idx] - arr[idx - 1] > 1) {
+                  return (
+                    <div key={`group-${p}`} style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                      <span style={{ color: "#677368", padding: "0 2px" }}>...</span>
+                      {renderButton}
+                    </div>
+                  );
+                }
+                return renderButton;
+              })}
+            
+            <button 
+              style={{ ...styles.pageButton, ...(currentPage === totalPages ? styles.pageButtonDisabled : {}) }}
+              onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
+              disabled={currentPage === totalPages}
+            >
+              &gt;
+            </button>
+          </div>
         </div>
       </div>
 
@@ -1057,115 +1217,128 @@ export default function PayrollPage() {
 // Light theme styles with green accent
 const styles = {
   container: {
-    maxWidth: "1600px",
-    margin: "40px auto",
-    padding: "40px 32px",
+    margin: "0 auto",
+    padding: "36px 28px",
+    maxWidth: "100%",
     background: "#ffffff",
-    borderRadius: "32px",
-    boxShadow: "0 10px 30px rgba(0, 0, 0, 0.1)",
+    minHeight: "100vh",
     color: "#1f2937",
     fontFamily:
       '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif',
   },
   header: {
-    textAlign: "center",
-    marginBottom: "40px",
+    marginBottom: "24px",
+    display: "flex",
+    flexDirection: "column",
+    alignItems: "flex-start",
+    gap: "6px",
   },
   title: {
-    fontSize: "2.8rem",
-    fontWeight: 700,
-    color: "#1f2937",
+    fontSize: "2.5rem",
+    fontWeight: 800,
     margin: 0,
+    letterSpacing: "-0.02em",
     display: "inline-block",
   },
-  titleUnderline: {
-    height: "4px",
-    width: "100px",
-    background: "#237227", // solid green
-    margin: "8px auto 0",
-    borderRadius: "2px",
+  titleBlack: {
+    color: "#2c382d",
+  },
+  titlePrimary: {
+    color: "#237227",
   },
   filterBar: {
     display: "flex",
-    flexWrap: "wrap",
+    flexWrap: "nowrap",
     justifyContent: "space-between",
     alignItems: "center",
-    gap: "16px",
-    marginBottom: "24px",
-    padding: "20px 24px",
-    backgroundColor: "#f9fafb",
-    borderRadius: "20px",
-    border: "1px solid #e5e7eb",
-    boxShadow: "0 4px 12px rgba(0, 0, 0, 0.05)",
+    gap: "14px",
+    marginBottom: "20px",
+    padding: "12px 16px",
+    backgroundColor: "#ffffff",
+    borderRadius: "12px",
+    border: "1px solid #edf2ee",
+    boxShadow: "0 1px 4px rgba(0, 0, 0, 0.04)",
+    overflowX: "auto",
   },
   filterGroup: {
     display: "flex",
-    flexWrap: "wrap",
-    gap: "12px",
+    flexWrap: "nowrap",
+    gap: "10px",
     alignItems: "center",
   },
   searchWrapper: {
     position: "relative",
   },
   searchInput: {
-    padding: "12px 16px 12px 40px",
-    fontSize: "0.95rem",
-    borderRadius: "40px",
+    padding: "8px 14px 8px 34px",
+    fontSize: "0.85rem",
+    borderRadius: "6px",
     border: "1px solid #d1d5db",
     backgroundColor: "#ffffff",
     color: "#1f2937",
     outline: "none",
-    transition: "all 0.2s",
-    backgroundImage: `url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="%236b7280" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>')`,
+    transition: "border-color 0.2s, box-shadow 0.2s",
+    backgroundImage: `url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="%236b7280" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>')`,
     backgroundRepeat: "no-repeat",
-    backgroundPosition: "16px center",
-    backgroundSize: "16px",
-    minWidth: "250px",
+    backgroundPosition: "10px center",
+    backgroundSize: "14px",
+    minWidth: "180px",
   },
   select: {
-    padding: "12px 20px",
-    fontSize: "0.95rem",
-    borderRadius: "40px",
+    padding: "8px 12px",
+    fontSize: "0.85rem",
+    borderRadius: "6px",
     border: "1px solid #d1d5db",
     backgroundColor: "#ffffff",
     color: "#1f2937",
     outline: "none",
     cursor: "pointer",
-    minWidth: "160px",
+    minWidth: "130px",
   },
   sortToggle: {
     padding: "8px 16px",
-    borderRadius: 22,
-    background: "#f3f4f6",
-    border: "1px solid #e6eef6",
-    color: "#374151",
-    fontSize: "0.95rem",
+    borderRadius: "6px",
+    background: "#237227",
+    border: "none",
+    color: "#ffffff",
+    fontSize: "0.85rem",
     cursor: "pointer",
-    boxShadow: "0 2px 6px rgba(16,24,40,0.06)",
-    minWidth: "72px",
+    minWidth: "60px",
     textAlign: "center",
     fontWeight: 600,
+    transition: "all 0.2s",
+  },
+  actionButtons: {
+    display: "flex",
+    gap: "10px",
+    flexWrap: "nowrap",
+    alignItems: "center",
   },
   button: {
     display: "inline-flex",
     alignItems: "center",
-    gap: "8px",
-    padding: "12px 28px",
-    borderRadius: "40px",
-    fontSize: "1rem",
-    fontWeight: 500,
+    justifyContent: "center",
+    gap: "6px",
+    padding: "8px 16px",
+    borderRadius: "6px",
+    fontSize: "0.85rem",
+    fontWeight: 600,
     border: "none",
     cursor: "pointer",
-    transition: "all 0.2s",
-    boxShadow: "0 4px 10px rgba(0, 0, 0, 0.1)",
+    transition: "opacity 0.18s, transform 0.12s",
+    letterSpacing: "0.01em",
+    whiteSpace: "nowrap",
   },
   buttonPrimary: {
     background: "#237227",
     color: "#ffffff",
+    boxShadow: "0 1px 4px rgba(35, 114, 39, 0.2)",
   },
   buttonSecondary: {
-    background: "#666666",
-    color: "#ffffff",
+    background: "#ffffff",
+    color: "#237227",
+    border: "1px solid #237227",
+    boxShadow: "0 1px 2px rgba(0,0,0,0.03)",
   },
   searchIcon: {
     position: "absolute",
@@ -1177,25 +1350,25 @@ const styles = {
   },
 
   viewButton: {
-    padding: "6px 12px",
-    borderRadius: "30px",
+    padding: "6px 14px",
+    borderRadius: "6px",
     border: "none",
     fontSize: "0.85rem",
-    fontWeight: 500,
+    fontWeight: 600,
     cursor: "pointer",
     transition: "all 0.2s",
     display: "inline-flex",
     alignItems: "center",
-    gap: "4px",
-    backgroundColor: "#e5e7eb",
-    color: "#1f2937",
+    gap: "6px",
+    backgroundColor: "#237227",
+    color: "#ffffff",
   },
   tableContainer: {
-    borderRadius: "20px",
+    borderRadius: "16px",
     overflow: "hidden",
-    border: "1px solid #e5e7eb",
     backgroundColor: "#ffffff",
-    boxShadow: "0 4px 12px rgba(0, 0, 0, 0.05)",
+    boxShadow: "0 2px 14px rgba(44, 56, 45, 0.06)",
+    border: "none",
   },
   tableWrapper: {
     overflowX: "auto",
@@ -1211,15 +1384,16 @@ const styles = {
     position: "sticky",
     top: 0,
     zIndex: 10,
-    backgroundColor: "#f9fafb",
-    color: "#4b5563",
-    fontWeight: 600,
-    padding: "16px 12px",
+    backgroundColor: "#ffffff",
+    color: "#000000",
+    fontWeight: 700,
+    padding: "14px 14px",
     textAlign: "left",
     borderBottom: "2px solid #e5e7eb",
-    letterSpacing: "0.03em",
+    letterSpacing: "0.05em",
     textTransform: "uppercase",
-    fontSize: "0.8rem",
+    fontSize: "0.75rem",
+    whiteSpace: "nowrap",
   },
   td: {
     padding: "14px 12px",
@@ -1234,6 +1408,50 @@ const styles = {
     padding: "60px 20px",
     color: "#6b7280",
     fontSize: "1.1rem",
+  },
+  paginationContainer: {
+    display: "flex",
+    justifyContent: "space-between",
+    alignItems: "center",
+    padding: "16px 20px",
+    backgroundColor: "#ffffff",
+    borderTop: "1px solid #edf2ee",
+    borderBottomLeftRadius: "12px",
+    borderBottomRightRadius: "12px",
+  },
+  paginationText: {
+    color: "#6b7280",
+    fontSize: "0.875rem",
+  },
+  paginationControls: {
+    display: "flex",
+    gap: "6px",
+    alignItems: "center",
+  },
+  pageButton: {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    minWidth: "32px",
+    height: "32px",
+    padding: "0 6px",
+    borderRadius: "8px",
+    border: "1px solid #d1d5db",
+    backgroundColor: "#ffffff",
+    color: "#6b7280",
+    fontSize: "0.85rem",
+    fontWeight: 600,
+    cursor: "pointer",
+    transition: "all 0.2s",
+  },
+  pageButtonActive: {
+    backgroundColor: "#237227",
+    color: "#ffffff",
+    border: "1px solid #237227",
+  },
+  pageButtonDisabled: {
+    opacity: 0.4,
+    cursor: "not-allowed",
   },
   spinnerContainer: {
     display: "flex",
