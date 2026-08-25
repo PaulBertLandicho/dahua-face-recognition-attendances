@@ -1,5 +1,37 @@
 # Getting Started with Create React App
 
+## Local development
+
+Run the React app and the Dahua backend in separate terminals:
+
+```text
+npm start
+node server.js
+```
+
+The React development proxy sends `/api/*` requests to `http://localhost:4000`.
+The camera WebSocket is optional; set `REACT_APP_WS_URL` when a WebSocket camera
+server is available. Without it, the app uses the browser's local camera.
+
+## Vercel deployment
+
+Deploy the React frontend to Vercel with:
+
+```text
+npm run build
+```
+
+Set `REACT_APP_BACKEND_URL` in Vercel to the public HTTPS URL of a separately
+hosted instance of `server.js`, for example `https://attendance-api.example.com`.
+Set `REACT_APP_WS_URL` to the public `wss://` URL of a separately hosted
+WebSocket camera service if Dahua streaming is required.
+
+Do not deploy `server.js` as a Vercel function: it starts a persistent FFmpeg
+process, writes HLS files to disk, and connects to the private Dahua IP address.
+Those requirements need a persistent host on the same network or a secure VPN.
+Keep `SUPABASE_SERVICE_KEY`, Dahua credentials, and other backend secrets only
+on that backend host, never in Vercel `REACT_APP_*` variables.
+
 This project was bootstrapped with [Create React App](https://github.com/facebook/create-react-app).
 
 ## Available Scripts
