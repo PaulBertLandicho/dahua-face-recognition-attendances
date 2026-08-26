@@ -328,9 +328,22 @@ app.post("/api/dahua/sync-users", async (req, res) => {
 
     if (!payload.length) return res.json({ count: 0, message: "No users were returned by the Dahua device." });
 
-    const { error } = await supabase.from("persons").upsert(payload, { onConflict: "id" });
+    const userIds = payload.map((user) => String(user.id));
+    const { data: existingUsers, error: existingError } = await supabase
+      .from("persons")
+      .select("id")
+      .in("id", userIds);
+    if (existingError) throw existingError;
+
+    const existingIds = new Set((existingUsers || []).map((user) => String(user.id)));
+    const newUsers = payload.filter((user) => !existingIds.has(String(user.id)));
+    if (!newUsers.length) {
+      return res.json({ count: 0, message: "No new Dahua users were found. Existing person records were preserved." });
+    }
+
+    const { error } = await supabase.from("persons").insert(newUsers);
     if (error) throw error;
-    res.json({ count: payload.length });
+    res.json({ count: newUsers.length, message: "Only new Dahua users were added. Existing person records were preserved." });
   } catch (err) {
     console.error("Dahua user sync error:", err.message);
     res.status(502).json({ error: `Dahua user sync failed: ${err.message}` });
