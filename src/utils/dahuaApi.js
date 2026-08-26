@@ -29,25 +29,6 @@ export async function readJsonResponse(res) {
   return parseResponseJson(text, String(res.status));
 }
 
-function getErrorMessage(error, fallback = "The backend request failed.") {
-  if (typeof error === "string" && error.trim()) return error;
-  if (error && typeof error.message === "string" && error.message.trim()) {
-    return error.message;
-  }
-  if (error && typeof error.error === "string" && error.error.trim()) {
-    return error.error;
-  }
-  if (error && typeof error === "object") {
-    if (Object.keys(error).length === 0) return fallback;
-    try {
-      return JSON.stringify(error);
-    } catch (serializationError) {
-      return fallback;
-    }
-  }
-  return fallback;
-}
-
 export async function fetchDahuaApi(endpoint, options = {}) {
   const configuredBase =
     typeof process !== "undefined" &&
@@ -56,10 +37,9 @@ export async function fetchDahuaApi(endpoint, options = {}) {
       ? String(process.env.REACT_APP_BACKEND_URL).trim()
       : "";
 
-  const backendBaseUrl =
-    configuredBase.replace(/\/$/, "") ||
-    "https://dahua-face-recognition-attendances.onrender.com";
-  const baseUrls = [backendBaseUrl];
+  const localConnectorUrls = ["http://localhost:4000", "http://127.0.0.1:4000"];
+  const configuredUrl = configuredBase.replace(/\/$/, "");
+  const baseUrls = [...new Set([...localConnectorUrls, configuredUrl].filter(Boolean))];
 
   let lastError = null;
 
@@ -87,8 +67,9 @@ export async function fetchDahuaApi(endpoint, options = {}) {
           res.status === 431
             ? "Request was rejected (HTTP 431: Request Header Fields Too Large). Please clear site cookies for this app or open it in an incognito window, then retry."
             :
-          getErrorMessage(data, `Request failed with status ${res.status}.`) ||
-          `Request failed with status ${res.status}.`
+          data.error ||
+          data.message ||
+          `Request failed with status ${res.status}`
         );
         httpError.isHttpError = true;
         httpError.status = res.status;
@@ -106,7 +87,7 @@ export async function fetchDahuaApi(endpoint, options = {}) {
     }
   }
 
-  const errMsg = getErrorMessage(lastError, "");
+  const errMsg = lastError?.message || "";
   if (
     errMsg.includes("Failed to fetch") ||
     errMsg.includes("NetworkError") ||
@@ -114,11 +95,11 @@ export async function fetchDahuaApi(endpoint, options = {}) {
     errMsg.includes("Load failed")
   ) {
     throw new Error(
-      "The backend server could not be reached. Start 'node server.js' locally, or configure REACT_APP_BACKEND_URL for the deployed app."
+      "The local Dahua connector could not be reached. Start the automatic Dahua connector on the computer connected to the device, or configure a reachable backend URL."
     );
   }
 
-  throw new Error(getErrorMessage(lastError, "Could not connect to backend server."));
+  throw lastError || new Error("Could not connect to backend server.");
 }
 
 export async function syncDahuaUsers() {
