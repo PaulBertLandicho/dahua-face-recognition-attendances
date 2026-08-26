@@ -283,105 +283,145 @@ export default function PayslipModal({
 
   if (!payroll || !person) return null;
 
+  // Safe date formatter to YYYY-MM-DD that never throws RangeError
+  function safeFormatYMD(val) {
+    if (!val) return "";
+    if (typeof val === "string") {
+      const trimmed = val.trim();
+      const m = trimmed.match(/^(\d{4})-(\d{2})-(\d{2})/);
+      if (m) return `${m[1]}-${m[2]}-${m[3]}`;
+      const slash = trimmed.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+      if (slash) {
+        const mm = slash[1].padStart(2, "0");
+        const dd = slash[2].padStart(2, "0");
+        return `${slash[3]}-${mm}-${dd}`;
+      }
+    }
+    try {
+      const d = val instanceof Date ? val : new Date(val);
+      if (!isNaN(d.getTime())) {
+        const year = d.getFullYear();
+        const month = String(d.getMonth() + 1).padStart(2, "0");
+        const day = String(d.getDate()).padStart(2, "0");
+        return `${year}-${month}-${day}`;
+      }
+    } catch (e) {}
+    return "";
+  }
+
   // Calculate absent days in the 15-day period
   // Get the period start and end from the period string (e.g. 2024-03-01_to_2024-03-15)
   let absentDates = [];
   if (period) {
-    const [start, end] = period.split("_to_");
-    const startDate = new Date(start);
-    const endDate = new Date(end);
-    const todayStr = new Date().toISOString().slice(0, 10);
-    // Build a set of holiday ISO dates for this period (if any)
-    const holidaySet = new Set(
-      (holidayDetails || [])
-        .map((h) => {
-          const raw = h && (h.date || h.holiday_date || h.holiday);
-          if (!raw) return null;
-          try {
-            return new Date(raw).toISOString().slice(0, 10);
-          } catch (e) {
+    const todayStr = safeFormatYMD(new Date());
+    let startDate = null;
+    let endDate = null;
+
+    if (typeof period === "string" && period.includes("_to_")) {
+      const [start, end] = period.split("_to_");
+      startDate = new Date(start);
+      endDate = new Date(end);
+    } else if (typeof period === "string") {
+      const matches = Array.from(period.matchAll(/(\d{4}[-/]\d{2}[-/]\d{2})/g)).map((m) => m[1]);
+      if (matches.length >= 2) {
+        startDate = new Date(matches[0]);
+        endDate = new Date(matches[1]);
+      } else if (matches.length === 1) {
+        startDate = new Date(matches[0]);
+        endDate = new Date(matches[0]);
+      }
+    }
+
+    if (startDate && endDate && !isNaN(startDate.getTime()) && !isNaN(endDate.getTime())) {
+      // Build a set of holiday ISO dates for this period (if any)
+      const holidaySet = new Set(
+        (holidayDetails || [])
+          .map((h) => {
+            const raw = h && (h.date || h.holiday_date || h.holiday);
+            return safeFormatYMD(raw);
+          })
+          .filter(Boolean),
+      );
+
+      // Build all non-weekend, non-holiday dates in the period
+      let allDates = [];
+      for (
+        let d = new Date(startDate);
+        d <= endDate;
+        d.setDate(d.getDate() + 1)
+      ) {
+        // Exclude Saturday (6) and Sunday (0)
+        if (d.getDay() === 0 || d.getDay() === 6) continue;
+        const dateStr = safeFormatYMD(d);
+        if (!dateStr) continue;
+        // Skip if this date is a holiday in the fetched holidayDetails
+        if (holidaySet.has(dateStr)) continue;
+        allDates.push(dateStr);
+      }
+
+      // Build a lookup by date for detailed attendance
+      const attendanceByDate = {};
+      (detailedAttendance || []).forEach((a) => {
+        const dt = safeFormatYMD(a?.date || a?.device_time);
+        if (dt) {
+          attendanceByDate[dt] = a;
+        }
+      });
+
+      // Determine expected sessions if person has shift/work_hours metadata
+      const ps = String(
+        person && (person.shift || person.work_hours || ""),
+      ).toLowerCase();
+      const expectsMorningOnly =
+        (ps.includes("morning") && ps.includes("half")) ||
+        ps === "morning" ||
+        ps === "morning-half";
+      const expectsAfternoonOnly =
+        (ps.includes("afternoon") && ps.includes("half")) ||
+        ps === "afternoon" ||
+        ps === "afternoon-half";
+      const expectsSingleSession =
+        ps === "half" ||
+        ps === "half-day" ||
+        ps === "4" ||
+        ps === "4h" ||
+        ps.includes("half");
+
+      // For each date in the period (weekdays only) that is before today, determine missing sessions
+      absentDates = allDates
+        .filter((dateStr) => dateStr < todayStr)
+        .map((dateStr) => {
+          const rec = attendanceByDate[dateStr] || null;
+          if (!rec) {
+            // no attendance record at all -> full day absent
+            return { date: dateStr, missing: "Full Day" };
+          }
+          const hasMorning = !!rec.morningIn;
+          const hasAfternoon = !!rec.afternoonIn;
+
+          if (expectsMorningOnly) {
+            if (!hasMorning) return { date: dateStr, missing: "Morning" };
             return null;
           }
-        })
-        .filter(Boolean),
-    );
-
-    // Build all non-weekend, non-holiday dates in the period
-    let allDates = [];
-    for (
-      let d = new Date(startDate);
-      d <= endDate;
-      d.setDate(d.getDate() + 1)
-    ) {
-      // Exclude Saturday (6) and Sunday (0)
-      if (d.getDay() === 0 || d.getDay() === 6) continue;
-      const dateStr = new Date(d).toISOString().slice(0, 10);
-      // Skip if this date is a holiday in the fetched holidayDetails
-      if (holidaySet.has(dateStr)) continue;
-      allDates.push(new Date(d));
-    }
-    // Build a lookup by date for detailed attendance
-    const attendanceByDate = Object.fromEntries(
-      (detailedAttendance || []).map((a) => {
-        const dt = new Date(a.date).toISOString().slice(0, 10);
-        return [dt, a];
-      }),
-    );
-
-    // Determine expected sessions if person has shift/work_hours metadata
-    const ps = String(
-      person && (person.shift || person.work_hours || ""),
-    ).toLowerCase();
-    const expectsMorningOnly =
-      (ps.includes("morning") && ps.includes("half")) ||
-      ps === "morning" ||
-      ps === "morning-half";
-    const expectsAfternoonOnly =
-      (ps.includes("afternoon") && ps.includes("half")) ||
-      ps === "afternoon" ||
-      ps === "afternoon-half";
-    const expectsSingleSession =
-      ps === "half" ||
-      ps === "half-day" ||
-      ps === "4" ||
-      ps === "4h" ||
-      ps.includes("half");
-
-    // For each date in the period (weekdays only) that is before today, determine missing sessions
-    absentDates = allDates
-      .map((d) => d.toISOString().slice(0, 10))
-      .filter((dateStr) => dateStr < todayStr)
-      .map((dateStr) => {
-        const rec = attendanceByDate[dateStr] || null;
-        if (!rec) {
-          // no attendance record at all -> full day absent
-          return { date: dateStr, missing: "Full Day" };
-        }
-        const hasMorning = !!rec.morningIn;
-        const hasAfternoon = !!rec.afternoonIn;
-
-        if (expectsMorningOnly) {
+          if (expectsAfternoonOnly) {
+            if (!hasAfternoon) return { date: dateStr, missing: "Afternoon" };
+            return null;
+          }
+          if (expectsSingleSession) {
+            // half-day staff: missing if neither session present
+            if (!hasMorning && !hasAfternoon)
+              return { date: dateStr, missing: "Session" };
+            return null;
+          }
+          // default: if both sessions missing -> full day absent. If one session missing, mark which one
+          if (!hasMorning && !hasAfternoon)
+            return { date: dateStr, missing: "Full Day" };
           if (!hasMorning) return { date: dateStr, missing: "Morning" };
-          return null;
-        }
-        if (expectsAfternoonOnly) {
           if (!hasAfternoon) return { date: dateStr, missing: "Afternoon" };
           return null;
-        }
-        if (expectsSingleSession) {
-          // half-day staff: missing if neither session present
-          if (!hasMorning && !hasAfternoon)
-            return { date: dateStr, missing: "Session" };
-          return null;
-        }
-        // default: if both sessions missing -> full day absent. If one session missing, mark which one
-        if (!hasMorning && !hasAfternoon)
-          return { date: dateStr, missing: "Full Day" };
-        if (!hasMorning) return { date: dateStr, missing: "Morning" };
-        if (!hasAfternoon) return { date: dateStr, missing: "Afternoon" };
-        return null;
-      })
-      .filter(Boolean);
+        })
+        .filter(Boolean);
+    }
   }
   const absentCount = absentDates.length;
 
@@ -508,146 +548,22 @@ export default function PayslipModal({
     )
     .flat();
 
-  const styles = {
-    overlay: {
-      position: "fixed",
-      top: 0,
-      left: 0,
-      width: "100%",
-      height: "100%",
-      background: "rgba(0,0,0,0.5)",
-      display: "flex",
-      justifyContent: "center",
-      alignItems: "center",
-      zIndex: 1000,
-      backdropFilter: "blur(4px)",
-    },
-    modal: {
-      background: "#fff",
-      color: "#1f2937",
-      padding: "32px",
-      borderRadius: "28px",
-      maxWidth: "900px",
-      width: "95%",
-      overflowY: "auto",
-      maxHeight: "90%",
-      boxShadow: "0 20px 40px rgba(0,0,0,0.2)",
-      border: "1px solid #e5e7eb",
-      fontFamily:
-        '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif',
-    },
-    title: {
-      fontSize: "2rem",
-      fontWeight: 700,
-      color: "#237227",
-      textAlign: "center",
-      margin: "0 0 8px 0",
-    },
-    subtitle: {
-      textAlign: "center",
-      color: "#6b7280",
-      marginBottom: "32px",
-      fontSize: "1rem",
-    },
-    sectionTitle: {
-      fontSize: "1.4rem",
-      fontWeight: 600,
-      color: "#1f2937",
-      margin: "32px 0 16px 0",
-      borderBottom: "2px solid #237227",
-      paddingBottom: "8px",
-    },
-    table: {
-      width: "100%",
-      borderCollapse: "collapse",
-      marginBottom: "24px",
-      fontSize: "0.95rem",
-    },
-    th: {
-      background: "#f9fafb",
-      color: "#4b5563",
-      fontWeight: 600,
-      padding: "12px 8px",
-      textAlign: "left",
-      borderBottom: "2px solid #e5e7eb",
-      textTransform: "uppercase",
-      fontSize: "0.8rem",
-      letterSpacing: "0.03em",
-    },
-    td: {
-      padding: "10px 8px",
-      borderBottom: "1px solid #e5e7eb",
-      color: "#1f2937",
-    },
-    trEven: { backgroundColor: "#f9fafb" },
-    trOdd: { backgroundColor: "#ffffff" },
-    summaryRow: { background: "#f3f4f6", fontWeight: 600 },
-    lateText: { color: "#ef4444" },
-    netPay: {
-      textAlign: "right",
-      fontSize: "1.6rem",
-      fontWeight: 700,
-      color: "#237227",
-      margin: "16px 0 0 0",
-    },
-    buttonContainer: {
-      marginTop: "24px",
-      display: "flex",
-      justifyContent: "flex-end",
-      gap: "12px",
-    },
-    button: {
-      padding: "10px 24px",
-      borderRadius: "40px",
-      fontSize: "0.95rem",
-      fontWeight: 500,
-      border: "none",
-      cursor: "pointer",
-      transition: "all 0.2s",
-      boxShadow: "0 4px 10px rgba(0,0,0,0.1)",
-      display: "inline-flex",
-      alignItems: "center",
-      justifyContent: "center",
-    },
-    buttonPrimary: { background: "#237227", color: "#fff" },
-    buttonSecondary: {
-      background: "#e5e7eb",
-      color: "#1f2937",
-      border: "1px solid #d1d5db",
-    },
-  };
-
   return (
-    <div style={styles.overlay}>
-      <div style={styles.modal}>
+    <div className="fixed inset-0 w-full h-full bg-black/50 flex justify-center items-center z-[1000] backdrop-blur-[4px] payslip-modal-wrapper">
+      <div className="bg-white text-gray-800 p-8 rounded-[28px] max-w-[900px] w-[95%] overflow-y-auto max-h-[90%] shadow-[0_20px_40px_rgba(0,0,0,0.2)] border border-gray-200 font-sans">
         {/* ✅ PDF ONLY CONTENT */}
         <div className="payslip-modal-content-inner">
-          <h2 style={styles.title}>Payslip</h2>
-          <p style={styles.subtitle}>
+          <h2 className="text-[2rem] font-bold text-[#237227] text-center m-0 mb-2">Payslip</h2>
+          <p className="text-center text-gray-500 mb-8 text-base">
             {person.name} • {person.department} • ID: {person.id}
           </p>
           {period && (
-            <p
-              style={{
-                textAlign: "center",
-                color: "#237227",
-                fontWeight: 600,
-                marginBottom: 8,
-              }}
-            >
+            <p className="text-center text-[#237227] font-semibold mb-2">
               Period: {formatPeriod(period)}
             </p>
           )}
           {released && (
-            <p
-              style={{
-                textAlign: "center",
-                color: "#237227",
-                fontWeight: 700,
-                fontSize: "1.1rem",
-                marginBottom: 8,
-              }}
-            >
+            <p className="text-center text-[#237227] font-bold text-[1.1rem] mb-2">
               Payslip Released
             </p>
           )}
@@ -655,7 +571,7 @@ export default function PayslipModal({
           {/* Holiday Table */}
           {!loadingHoliday && holidayPayDetails.length > 0 && (
             <>
-              <h3 style={styles.sectionTitle}>
+              <h3 className="text-[1.4rem] font-semibold text-gray-800 mt-8 mb-4 border-b-2 border-[#237227] pb-2">
                 <Icon
                   as={FiCalendar}
                   style={{ marginRight: 8 }}
@@ -663,26 +579,26 @@ export default function PayslipModal({
                 />
                 Holidays This Month
               </h3>
-              <table style={styles.table}>
+              <table className="w-full border-collapse mb-6 text-[0.95rem]">
                 <thead>
                   <tr>
-                    <th style={styles.th}>Date</th>
-                    <th style={styles.th}>Type</th>
-                    <th style={styles.th}>Rate (%)</th>
-                    {/* <th style={styles.th}>Amount</th> */}
+                    <th className="bg-gray-50 text-gray-600 font-semibold py-3 px-2 text-left border-b-2 border-gray-200 uppercase text-sm tracking-wide">Date</th>
+                    <th className="bg-gray-50 text-gray-600 font-semibold py-3 px-2 text-left border-b-2 border-gray-200 uppercase text-sm tracking-wide">Type</th>
+                    <th className="bg-gray-50 text-gray-600 font-semibold py-3 px-2 text-left border-b-2 border-gray-200 uppercase text-sm tracking-wide">Rate (%)</th>
+                    {/* <th className="bg-gray-50 text-gray-600 font-semibold py-3 px-2 text-left border-b-2 border-gray-200 uppercase text-sm tracking-wide">Amount</th> */}
                   </tr>
                 </thead>
                 <tbody>
                   {holidayPayDetails.map((h, i) => (
-                    <tr key={h.date + h.type}>
-                      <td style={styles.td}>{h.date}</td>
-                      <td style={styles.td}>
+                    <tr key={h.date + h.type} className={i % 2 === 0 ? "bg-gray-50" : "bg-white"}>
+                      <td className="py-2.5 px-2 border-b border-gray-200 text-gray-800">{h.date}</td>
+                      <td className="py-2.5 px-2 border-b border-gray-200 text-gray-800">
                         {h.type === "regular"
                           ? "Regular Holiday"
                           : "Special Holiday"}
                       </td>
-                      <td style={styles.td}>{h.ratePercent}</td>
-                      {/* <td style={styles.td}>₱{h.amount.toLocaleString(undefined, { minimumFractionDigits: 2 })}</td> */}
+                      <td className="py-2.5 px-2 border-b border-gray-200 text-gray-800">{h.ratePercent}</td>
+                      {/* <td className="py-2.5 px-2 border-b border-gray-200 text-gray-800">₱{h.amount.toLocaleString(undefined, { minimumFractionDigits: 2 })}</td> */}
                     </tr>
                   ))}
                 </tbody>
@@ -691,7 +607,7 @@ export default function PayslipModal({
           )}
 
           {/* Attendance Table */}
-          <h3 style={styles.sectionTitle}>
+          <h3 className="text-[1.4rem] font-semibold text-gray-800 mt-8 mb-4 border-b-2 border-[#237227] pb-2">
             <Icon
               as={FiClipboard}
               style={{ marginRight: 8 }}
@@ -700,23 +616,22 @@ export default function PayslipModal({
             Attendance Details
           </h3>
 
-          <table style={styles.table}>
+          <table className="w-full border-collapse mb-6 text-[0.95rem]">
             <thead>
               <tr>
-                <th style={styles.th}>Date</th>
-                <th style={styles.th}>Morning In</th>
-                <th style={styles.th}>Afternoon Out</th>
-                <th style={styles.th}>OT</th>
-                <th style={styles.th}>Late Count</th>
-                <th style={styles.th}>Late Details</th>
+                <th className="bg-gray-50 text-gray-600 font-semibold py-3 px-2 text-left border-b-2 border-gray-200 uppercase text-sm tracking-wide">Date</th>
+                <th className="bg-gray-50 text-gray-600 font-semibold py-3 px-2 text-left border-b-2 border-gray-200 uppercase text-sm tracking-wide">Morning In</th>
+                <th className="bg-gray-50 text-gray-600 font-semibold py-3 px-2 text-left border-b-2 border-gray-200 uppercase text-sm tracking-wide">Afternoon Out</th>
+                <th className="bg-gray-50 text-gray-600 font-semibold py-3 px-2 text-left border-b-2 border-gray-200 uppercase text-sm tracking-wide">OT</th>
+                <th className="bg-gray-50 text-gray-600 font-semibold py-3 px-2 text-left border-b-2 border-gray-200 uppercase text-sm tracking-wide">Late Count</th>
+                <th className="bg-gray-50 text-gray-600 font-semibold py-3 px-2 text-left border-b-2 border-gray-200 uppercase text-sm tracking-wide">Late Details</th>
                 {/* Removed unused OT (hrs) column */}
               </tr>
             </thead>
             <tbody>
               {detailedAttendance.length ? (
                 detailedAttendance.map((rec, i) => {
-                  const rowStyle = i % 2 === 0 ? styles.trEven : styles.trOdd;
-                  // Removed unused otDisplay variable
+                  const trClass = i % 2 === 0 ? "bg-gray-50" : "bg-white";
 
                   // Settings for time-in/time-out
                   const settings =
@@ -800,29 +715,21 @@ export default function PayslipModal({
                   const recOtHours = Math.round((otMinutes / 60) * 100) / 100;
 
                   return (
-                    <tr key={i} style={rowStyle}>
-                      <td style={styles.td}>{rec.date}</td>
-                      <td
-                        style={{
-                          ...styles.td,
-                          color:
-                            rec.morningInStatus === "late"
-                              ? styles.lateText.color
-                              : undefined,
-                        }}
-                      >
+                    <tr key={i} className={trClass}>
+                      <td className="py-2.5 px-2 border-b border-gray-200 text-gray-800">{rec.date}</td>
+                      <td className={`py-2.5 px-2 border-b border-gray-200 ${rec.morningInStatus === 'late' ? 'text-red-500' : 'text-gray-800'}`}>
                         {morningInDisplay}
                       </td>
-                      <td style={styles.td}>{afternoonOutDisplay}</td>
-                      <td style={styles.td}>
+                      <td className="py-2.5 px-2 border-b border-gray-200 text-gray-800">{afternoonOutDisplay}</td>
+                      <td className="py-2.5 px-2 border-b border-gray-200 text-gray-800">
                         {getHourMinute(recOtHours)} ({recOtHours.toFixed(2)})
                       </td>
-                      <td style={styles.td}>{rec.lateCount || 0}</td>
-                      <td style={styles.td}>
+                      <td className="py-2.5 px-2 border-b border-gray-200 text-gray-800">{rec.lateCount || 0}</td>
+                      <td className="py-2.5 px-2 border-b border-gray-200 text-gray-800">
                         {rec.lateDetails && rec.lateDetails.length ? (
-                          <ul style={{ margin: 0, paddingLeft: 16 }}>
+                          <ul className="m-0 pl-4">
                             {rec.lateDetails.map((d, idx) => (
-                              <li key={idx} style={styles.lateText}>
+                              <li key={idx} className="text-red-500">
                                 {d.session}: {d.time} ({d.status})
                               </li>
                             ))}
@@ -839,11 +746,7 @@ export default function PayslipModal({
                 <tr>
                   <td
                     colSpan="9"
-                    style={{
-                      ...styles.td,
-                      textAlign: "center",
-                      color: "#9ca3af",
-                    }}
+                    className="py-2.5 px-2 border-b border-gray-200 text-center text-gray-400"
                   >
                     No attendance records
                   </td>
@@ -852,15 +755,15 @@ export default function PayslipModal({
             </tbody>
           </table>
 
-          <h3 style={styles.sectionTitle}>
+          <h3 className="text-[1.4rem] font-semibold text-gray-800 mt-8 mb-4 border-b-2 border-[#237227] pb-2">
             <Icon as={FiX} style={{ marginRight: 8 }} ariaLabel="Absent days" />
             Absent Days in Period
           </h3>
-          <table style={styles.table}>
+          <table className="w-full border-collapse mb-6 text-[0.95rem]">
             <thead>
               <tr>
-                <th style={styles.th}>Absent Day</th>
-                <th style={styles.th}>Missing Session</th>
+                <th className="bg-gray-50 text-gray-600 font-semibold py-3 px-2 text-left border-b-2 border-gray-200 uppercase text-sm tracking-wide">Absent Day</th>
+                <th className="bg-gray-50 text-gray-600 font-semibold py-3 px-2 text-left border-b-2 border-gray-200 uppercase text-sm tracking-wide">Missing Session</th>
               </tr>
             </thead>
             <tbody>
@@ -868,23 +771,19 @@ export default function PayslipModal({
                 absentDates.map((item, idx) => (
                   <tr
                     key={item.date}
-                    style={idx % 2 === 0 ? styles.trEven : styles.trOdd}
+                    className={idx % 2 === 0 ? "bg-gray-50" : "bg-white"}
                   >
-                    <td style={styles.td}>
+                    <td className="py-2.5 px-2 border-b border-gray-200 text-gray-800">
                       {formatDateWithWeekday(item.date)}
                     </td>
-                    <td style={styles.td}>{item.missing}</td>
+                    <td className="py-2.5 px-2 border-b border-gray-200 text-gray-800">{item.missing}</td>
                   </tr>
                 ))
               ) : (
                 <tr>
                   <td
                     colSpan={2}
-                    style={{
-                      ...styles.td,
-                      color: "#237227",
-                      textAlign: "center",
-                    }}
+                    className="py-2.5 px-2 border-b border-gray-200 text-center text-[#237227]"
                   >
                     No absences in this period
                   </td>
@@ -893,7 +792,7 @@ export default function PayslipModal({
             </tbody>
           </table>
           {/* Late Records */}
-          <h3 style={styles.sectionTitle}>
+          <h3 className="text-[1.4rem] font-semibold text-gray-800 mt-8 mb-4 border-b-2 border-[#237227] pb-2">
             <Icon
               as={FiClock}
               style={{ marginRight: 8 }}
@@ -901,33 +800,25 @@ export default function PayslipModal({
             />
             All Late Records
           </h3>
-          <table style={styles.table}>
+          <table className="w-full border-collapse mb-6 text-[0.95rem]">
             <thead>
               <tr>
-                <th style={styles.th}>Date</th>
-                <th style={styles.th}>Session</th>
-                <th style={styles.th}>Time</th>
-                <th style={styles.th}>Status</th>
+                <th className="bg-gray-50 text-gray-600 font-semibold py-3 px-2 text-left border-b-2 border-gray-200 uppercase text-sm tracking-wide">Date</th>
+                <th className="bg-gray-50 text-gray-600 font-semibold py-3 px-2 text-left border-b-2 border-gray-200 uppercase text-sm tracking-wide">Session</th>
+                <th className="bg-gray-50 text-gray-600 font-semibold py-3 px-2 text-left border-b-2 border-gray-200 uppercase text-sm tracking-wide">Time</th>
+                <th className="bg-gray-50 text-gray-600 font-semibold py-3 px-2 text-left border-b-2 border-gray-200 uppercase text-sm tracking-wide">Status</th>
               </tr>
             </thead>
             <tbody>
               {allLateDetails.length ? (
                 allLateDetails.map((d, i) => {
-                  const rowStyle = i % 2 === 0 ? styles.trEven : styles.trOdd;
+                  const trClass = i % 2 === 0 ? "bg-gray-50" : "bg-white";
                   return (
-                    <tr key={i} style={rowStyle}>
-                      <td style={styles.td}>{d.date}</td>
-                      <td style={styles.td}>{d.session}</td>
-                      <td style={styles.td}>{d.time}</td>
-                      <td
-                        style={{
-                          ...styles.td,
-                          color:
-                            d.status === "late"
-                              ? styles.lateText.color
-                              : undefined,
-                        }}
-                      >
+                    <tr key={i} className={trClass}>
+                      <td className="py-2.5 px-2 border-b border-gray-200 text-gray-800">{d.date}</td>
+                      <td className="py-2.5 px-2 border-b border-gray-200 text-gray-800">{d.session}</td>
+                      <td className="py-2.5 px-2 border-b border-gray-200 text-gray-800">{d.time}</td>
+                      <td className={`py-2.5 px-2 border-b border-gray-200 ${d.status === 'late' ? 'text-red-500' : 'text-gray-800'}`}>
                         {d.status}
                       </td>
                     </tr>
@@ -937,11 +828,7 @@ export default function PayslipModal({
                 <tr>
                   <td
                     colSpan="4"
-                    style={{
-                      ...styles.td,
-                      textAlign: "center",
-                      color: "#9ca3af",
-                    }}
+                    className="py-2.5 px-2 border-b border-gray-200 text-center text-gray-400"
                   >
                     No late records
                   </td>
@@ -952,45 +839,45 @@ export default function PayslipModal({
 
           {/* Earnings */}
 
-          <h3 style={styles.sectionTitle}>
+          <h3 className="text-[1.4rem] font-semibold text-gray-800 mt-8 mb-4 border-b-2 border-[#237227] pb-2">
             <span
               aria-label="Peso"
-              style={{ marginRight: 8, fontSize: 18, fontWeight: 700 }}
+              className="mr-2 text-lg font-bold"
             >
               ₱
             </span>
             Earnings
           </h3>
-          <table style={styles.table}>
+          <table className="w-full border-collapse mb-6 text-[0.95rem]">
             <thead>
               <tr>
-                <th style={styles.th}>Type</th>
-                <th style={styles.th}>Days/Hours</th>
-                <th style={styles.th}>Rate</th>
-                <th style={styles.th}>Amount</th>
+                <th className="bg-gray-50 text-gray-600 font-semibold py-3 px-2 text-left border-b-2 border-gray-200 uppercase text-sm tracking-wide">Type</th>
+                <th className="bg-gray-50 text-gray-600 font-semibold py-3 px-2 text-left border-b-2 border-gray-200 uppercase text-sm tracking-wide">Days/Hours</th>
+                <th className="bg-gray-50 text-gray-600 font-semibold py-3 px-2 text-left border-b-2 border-gray-200 uppercase text-sm tracking-wide">Rate</th>
+                <th className="bg-gray-50 text-gray-600 font-semibold py-3 px-2 text-left border-b-2 border-gray-200 uppercase text-sm tracking-wide">Amount</th>
               </tr>
             </thead>
             <tbody>
-              <tr style={styles.trEven}>
-                <td style={styles.td}>Standard Pay</td>
-                <td style={styles.td}>{daysWorkedDisplay}</td>
-                <td style={styles.td}>
+              <tr className="bg-gray-50">
+                <td className="py-2.5 px-2 border-b border-gray-200 text-gray-800">Standard Pay</td>
+                <td className="py-2.5 px-2 border-b border-gray-200 text-gray-800">{daysWorkedDisplay}</td>
+                <td className="py-2.5 px-2 border-b border-gray-200 text-gray-800">
                   ₱{(payroll.dailyRate ?? 0).toFixed(2)}
                 </td>
-                <td style={styles.td}>
+                <td className="py-2.5 px-2 border-b border-gray-200 text-gray-800">
                   ₱
                   {standardPayAmount.toLocaleString(undefined, {
                     minimumFractionDigits: 2,
                   })}
                 </td>
               </tr>
-              <tr style={styles.trOdd}>
-                <td style={styles.td}>Overtime Pay</td>
-                <td style={styles.td}>{getHourMinute(otHours)}</td>
-                <td style={styles.td}>
+              <tr className="bg-white">
+                <td className="py-2.5 px-2 border-b border-gray-200 text-gray-800">Overtime Pay</td>
+                <td className="py-2.5 px-2 border-b border-gray-200 text-gray-800">{getHourMinute(otHours)}</td>
+                <td className="py-2.5 px-2 border-b border-gray-200 text-gray-800">
                   (Daily Rate) ÷ 8hrs =₱{hourlyRate.toFixed(2)}
                 </td>
-                <td style={styles.td}>₱{otPay.toFixed(2)}</td>
+                <td className="py-2.5 px-2 border-b border-gray-200 text-gray-800">₱{otPay.toFixed(2)}</td>
               </tr>
               {/* ✅ Holiday Pay */}
               {holidayPayDetails.length > 0 ? (
@@ -998,33 +885,33 @@ export default function PayslipModal({
                   {holidayPayDetails.map((h, idx) => (
                     <tr
                       key={idx}
-                      style={idx % 2 === 0 ? styles.trEven : styles.trOdd}
+                      className={idx % 2 === 0 ? "bg-gray-50" : "bg-white"}
                     >
-                      <td style={styles.td}>Holiday Pay</td>
-                      <td style={styles.td}>
+                      <td className="py-2.5 px-2 border-b border-gray-200 text-gray-800">Holiday Pay</td>
+                      <td className="py-2.5 px-2 border-b border-gray-200 text-gray-800">
                         {h.date} (
                         {h.type === "regular"
                           ? "Regular Holiday"
                           : "Special Holiday"}
                         )
                       </td>
-                      <td style={styles.td}>
-                        <span style={{ color: "#237227", fontWeight: 600 }}>
+                      <td className="py-2.5 px-2 border-b border-gray-200 text-gray-800">
+                        <span className="text-[#237227] font-semibold">
                           {" "}
                           ({h.ratePercent}%)
                         </span>
                       </td>
-                      <td style={styles.td}>
+                      <td className="py-2.5 px-2 border-b border-gray-200 text-gray-800">
                         ₱{(h.amount ?? 0).toLocaleString()}
                       </td>
                     </tr>
                   ))}
 
-                  <tr style={styles.summaryRow}>
-                    <td colSpan="3" style={styles.td}>
+                  <tr className="bg-gray-100 font-semibold">
+                    <td colSpan="3" className="py-2.5 px-2 border-b border-gray-200 text-gray-800">
                       Total Holiday Pay
                     </td>
-                    <td style={styles.td}>
+                    <td className="py-2.5 px-2 border-b border-gray-200 text-gray-800">
                       ₱{totalHolidayPay.toLocaleString()}
                     </td>
                   </tr>
@@ -1033,17 +920,17 @@ export default function PayslipModal({
                 <tr>
                   <td
                     colSpan="4"
-                    style={{ textAlign: "center", color: "#9ca3af" }}
+                    className="py-2.5 px-2 border-b border-gray-200 text-center text-gray-400"
                   >
                     No holiday pay for this period
                   </td>
                 </tr>
               )}
-              <tr style={styles.summaryRow}>
-                <td colSpan="3" style={styles.td}>
+              <tr className="bg-gray-100 font-semibold">
+                <td colSpan="3" className="py-2.5 px-2 border-b border-gray-200 text-gray-800">
                   Gross Pay
                 </td>
-                <td style={styles.td}>
+                <td className="py-2.5 px-2 border-b border-gray-200 text-gray-800">
                   ₱{(
                     Number(
                       payroll.gross ??
@@ -1056,7 +943,7 @@ export default function PayslipModal({
           </table>
 
           {/* Deductions */}
-          <h3 style={styles.sectionTitle}>
+          <h3 className="text-[1.4rem] font-semibold text-gray-800 mt-8 mb-4 border-b-2 border-[#237227] pb-2">
             <Icon
               as={FiTrendingDown}
               style={{ marginRight: 8 }}
@@ -1064,33 +951,33 @@ export default function PayslipModal({
             />
             Deductions
           </h3>
-          <table style={styles.table}>
+          <table className="w-full border-collapse mb-6 text-[0.95rem]">
             <tbody>
-              <tr style={styles.trEven}>
-                <td style={styles.td}>Total Late Occurrences</td>
-                <td style={styles.td}>{totalLateOccurrences} occurrence(s)</td>
+              <tr className="bg-gray-50">
+                <td className="py-2.5 px-2 border-b border-gray-200 text-gray-800">Total Late Occurrences</td>
+                <td className="py-2.5 px-2 border-b border-gray-200 text-gray-800">{totalLateOccurrences} occurrence(s)</td>
               </tr>
-              <tr style={styles.trOdd}>
-                <td style={styles.td}>Late Count</td>
-                <td style={styles.td}>{payroll.lateCount} occurrence(s)</td>
+              <tr className="bg-white">
+                <td className="py-2.5 px-2 border-b border-gray-200 text-gray-800">Late Count</td>
+                <td className="py-2.5 px-2 border-b border-gray-200 text-gray-800">{payroll.lateCount} occurrence(s)</td>
               </tr>
-              <tr style={styles.trEven}>
-                <td style={styles.td}>Late Count Limit for Deduction</td>
-                <td style={styles.td}>{lateCountLimit} occurrence(s)</td>
+              <tr className="bg-gray-50">
+                <td className="py-2.5 px-2 border-b border-gray-200 text-gray-800">Late Count Limit for Deduction</td>
+                <td className="py-2.5 px-2 border-b border-gray-200 text-gray-800">{lateCountLimit} occurrence(s)</td>
               </tr>
-              <tr style={styles.trOdd}>
-                <td style={styles.td}>Total Late Deduction</td>
-                <td style={styles.td}>₱{lateDeduction.toLocaleString()}</td>
+              <tr className="bg-white">
+                <td className="py-2.5 px-2 border-b border-gray-200 text-gray-800">Total Late Deduction</td>
+                <td className="py-2.5 px-2 border-b border-gray-200 text-gray-800">₱{lateDeduction.toLocaleString()}</td>
               </tr>
               {deductions.map((d, i) => (
                 <tr
                   key={d.label}
-                  style={i % 2 === 0 ? styles.trEven : styles.trOdd}
+                  className={i % 2 === 0 ? "bg-gray-50" : "bg-white"}
                 >
-                  <td style={styles.td}>{d.label}</td>
-                  <td style={styles.td}>
+                  <td className="py-2.5 px-2 border-b border-gray-200 text-gray-800">{d.label}</td>
+                  <td className="py-2.5 px-2 border-b border-gray-200 text-gray-800">
                     {d.loading ? (
-                      <span style={{ color: "#6b7280" }}>Loading...</span>
+                      <span className="text-gray-500">Loading...</span>
                     ) : (
                       `₱${Number(d.value || 0).toLocaleString()}`
                     )}
@@ -1100,42 +987,42 @@ export default function PayslipModal({
               {cashAdvanceEntries && cashAdvanceEntries.length > 0 && (
                 <>
                   <tr>
-                    <td colSpan={2} style={{ ...styles.td, fontWeight: 700 }}>
+                    <td colSpan={2} className="py-2.5 px-2 border-b border-gray-200 text-gray-800 font-bold">
                       Cash Advance Details
                     </td>
                   </tr>
                   {cashAdvanceEntries.map((h, idx) => (
                     <tr
                       key={h.id}
-                      style={idx % 2 === 0 ? styles.trEven : styles.trOdd}
+                      className={idx % 2 === 0 ? "bg-gray-50" : "bg-white"}
                     >
-                      <td style={styles.td}>
+                      <td className="py-2.5 px-2 border-b border-gray-200 text-gray-800">
                         {h.created_at
                           ? new Date(h.created_at).toLocaleString()
                           : "-"}
                       </td>
-                      <td style={styles.td}>₱{Number(h.amount).toFixed(2)}</td>
+                      <td className="py-2.5 px-2 border-b border-gray-200 text-gray-800">₱{Number(h.amount).toFixed(2)}</td>
                     </tr>
                   ))}
-                  <tr style={styles.tr}>
-                    <td style={{ ...styles.td, fontWeight: 700 }}>
+                  <tr className="transition-colors duration-200">
+                    <td className="py-2.5 px-2 border-b border-gray-200 text-gray-800 font-bold">
                       Cash Advance Total
                     </td>
-                    <td style={{ ...styles.td, fontWeight: 700 }}>
+                    <td className="py-2.5 px-2 border-b border-gray-200 text-gray-800 font-bold">
                       ₱{Number(cashAdvanceTotalInPeriod || 0).toFixed(2)}
                     </td>
                   </tr>
                 </>
               )}
-              <tr style={styles.summaryRow}>
-                <td style={styles.td}>Total Deductions</td>
-                <td style={styles.td}>₱{totalDeductions.toLocaleString()}</td>
+              <tr className="bg-gray-100 font-semibold">
+                <td className="py-2.5 px-2 border-b border-gray-200 text-gray-800">Total Deductions</td>
+                <td className="py-2.5 px-2 border-b border-gray-200 text-gray-800">₱{totalDeductions.toLocaleString()}</td>
               </tr>
             </tbody>
           </table>
 
           {/* Net Pay: use rounded OT pay in gross calculation */}
-          <h3 style={styles.netPay}>
+          <h3 className="text-right text-[1.6rem] font-bold text-[#237227] mt-4 mb-0">
             Net Pay: ₱{(
               Number(
                 payroll.net ??
@@ -1152,25 +1039,20 @@ export default function PayslipModal({
         </div>
 
         {/* ✅ BUTTONS OUTSIDE PDF */}
-        <div style={styles.buttonContainer}>
+        <div className="mt-6 flex justify-end gap-3">
           {showPrintButton && (
             <button
               onClick={handlePdf}
-              style={{ ...styles.button, ...styles.buttonPrimary }}
+              className="py-2.5 px-6 rounded-lg text-[0.95rem] font-semibold border-none cursor-pointer inline-flex items-center justify-center bg-[#237227] text-white focus:outline-none focus:ring-0 focus-visible:outline-none focus-visible:ring-0 shadow-none hover:shadow-none transition-none transform-none [-webkit-tap-highlight-color:transparent]"
             >
-              <Icon
-                as={FiPrinter}
-                style={{ marginRight: 8, color: "#ffff" }}
-                ariaLabel="Print PDF"
-              />
+              <FiPrinter style={{ marginRight: 8, color: "#ffffff", fontSize: "1.1rem" }} />
               PDF
             </button>
           )}
           <button
             onClick={onClose}
-            style={{ ...styles.button, ...styles.buttonSecondary }}
+            className="py-2.5 px-6 rounded-lg text-[0.95rem] font-semibold cursor-pointer inline-flex items-center justify-center bg-white text-gray-700 border border-gray-300 focus:outline-none focus:ring-0 focus-visible:outline-none focus-visible:ring-0 shadow-none hover:shadow-none transition-none transform-none [-webkit-tap-highlight-color:transparent]"
           >
-            <Icon as={FiX} style={{ marginRight: 8 }} ariaLabel="Close" />
             Close
           </button>
         </div>

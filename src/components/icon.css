@@ -2,9 +2,7 @@
   display: inline-flex;
   vertical-align: middle;
   color: var(--icon-color, #374151);
-  transition: transform 120ms ease, color 120ms ease;
 }
 .modern-icon:hover {
-  transform: translateY(-2px);
   color: var(--icon-hover, #111827);
 }

@@ -8,7 +8,6 @@ import Icon from "../components/Icon";
 
 export default function DepartmentRates() {
   const [rates, setRates] = useState([]);
-  const [originalRates, setOriginalRates] = useState([]);
   // Track original department names for rename
   const [originalNames, setOriginalNames] = useState([]);
   const [saving, setSaving] = useState(false);
@@ -17,9 +16,11 @@ export default function DepartmentRates() {
   const toggleEdit = (idx) => {
     setEditModes((prev) => ({ ...prev, [idx]: !prev[idx] }));
   };
+  
   const Icons = {
     circlePlus: <Icon as={FiPlusCircle} ariaLabel="Add" color="#ffffff" />,
   };
+
   useEffect(() => {
     fetchRates();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -33,7 +34,6 @@ export default function DepartmentRates() {
         .order("department");
       if (!error && data) {
         setRates(data);
-        setOriginalRates(JSON.parse(JSON.stringify(data)));
         setOriginalNames(data.map((row) => row.department));
       }
     } catch (e) {
@@ -41,29 +41,84 @@ export default function DepartmentRates() {
     }
   };
 
-  // Add Department (modal version)
+  const showToast = (title, icon = "success") => {
+    Swal.fire({
+      toast: true,
+      position: "top-end",
+      icon,
+      title,
+      showConfirmButton: false,
+      timer: 2500,
+      timerProgressBar: true,
+      iconColor: icon === "success" ? "#237227" : undefined,
+      customClass: {
+        popup: "!rounded-2xl !shadow-[0_12px_30px_rgba(0,0,0,0.12)] !border !border-gray-200 !px-4 !py-3 !bg-white font-sans",
+        title: "!text-sm !font-semibold !text-gray-800 !m-0 !leading-tight",
+        timerProgressBar: "!bg-[#237227]",
+      },
+    });
+  };
+
   const handleAddDepartment = async () => {
     const { value: deptName } = await Swal.fire({
       title: "Add Department",
-      input: "text",
-      inputLabel: "Department Name",
-      inputPlaceholder: "Enter department name",
+      html: `
+        <div style="text-align: left; margin-top: 1.25rem;">
+          <div style="margin-bottom: 0.5rem;">
+            <label style="display: block; font-size: 0.85rem; font-weight: 600; color: #374151; margin-bottom: 0.35rem;">
+              Department Name
+            </label>
+            <input 
+              id="swal-dept-name" 
+              type="text"
+              placeholder="Enter department name" 
+              style="display: block; width: 100%; padding: 0.65rem 0.85rem; font-size: 0.95rem; border: 1px solid #d1d5db; border-radius: 0.75rem; outline: none !important; box-shadow: none !important; box-sizing: border-box; background: #ffffff; color: #1f2937;"
+              onfocus="this.style.outline='none'; this.style.boxShadow='none'; this.style.borderColor='#237227';"
+              onblur="this.style.borderColor='#d1d5db';"
+            />
+          </div>
+        </div>
+      `,
       showCancelButton: true,
+      confirmButtonText: "Add Department",
+      confirmButtonColor: "#237227",
+      cancelButtonColor: "#E5E7EB",
+      buttonsStyling: false,
+      customClass: {
+        popup: "!rounded-3xl !shadow-[0_24px_60px_rgba(0,0,0,0.15)] !px-8 !py-8 !max-w-[420px] font-sans",
+        title: "!text-gray-800 !text-[1.4rem] !font-bold !mt-1 !mb-0",
+        actions: "!flex !items-center !justify-center !gap-3 !mt-6 !w-full",
+        confirmButton: "!bg-[#237227] !text-white !font-semibold !rounded-lg !px-5 !py-2.5 !text-sm cursor-pointer !m-0 !min-w-[130px] border-none !shadow-none hover:!shadow-none !transform-none hover:!transform-none outline-none focus:outline-none focus:ring-0",
+        cancelButton: "!bg-white !border !border-gray-300 !text-gray-700 !font-semibold !rounded-lg !px-5 !py-2.5 !text-sm cursor-pointer !m-0 !min-w-[90px] !shadow-none hover:!shadow-none !transform-none hover:!transform-none outline-none focus:outline-none focus:ring-0",
+      },
+      didOpen: () => {
+        const input = document.getElementById("swal-dept-name");
+        if (input) input.focus();
+      },
+      preConfirm: () => {
+        const input = document.getElementById("swal-dept-name");
+        const trimmed = (input ? input.value : "").trim();
+        if (!trimmed) {
+          Swal.showValidationMessage("Department name is required!");
+          return false;
+        }
+        const exists = rates.find(
+          (r) => r.department.toLowerCase() === trimmed.toLowerCase()
+        );
+        if (exists) {
+          Swal.showValidationMessage("Department name already exists!");
+          return false;
+        }
+        return trimmed;
+      },
     });
 
-    if (!deptName) return;
+    if (!deptName || !deptName.trim()) return;
 
-    // Check duplicate
-    const exists = rates.find(
-      (r) => r.department.toLowerCase() === deptName.toLowerCase(),
-    );
-
-    if (exists) {
-      return Swal.fire("Error", "Department already exists", "error");
-    }
+    const trimmedDept = deptName.trim();
 
     const { error } = await supabase.from("department_rates").insert({
-      department: deptName,
+      department: trimmedDept,
       daily_rate: 0,
       late_penalty: 0,
       sss: 0,
@@ -75,9 +130,9 @@ export default function DepartmentRates() {
     });
 
     if (error) {
-      Swal.fire("Error", error.message, "error");
+      showToast(error.message, "error");
     } else {
-      Swal.fire("Success", "Department added", "success");
+      showToast(`Department "${trimmedDept}" added!`, "success");
       fetchRates();
     }
   };
@@ -92,20 +147,13 @@ export default function DepartmentRates() {
     setRates(updated);
   };
 
-  // Handle holiday type checkbox
-  // Removed unused handleHolidayTypeChange
-
-  // Handle holiday date change
-  // Removed unused handleHolidayDateChange
-
   const handleSave = async (index) => {
     setSaving(true);
     const item = rates[index];
     const originalName = originalNames[index];
     let error = null;
-    // If department name changed, update by filtering on original name
+
     if (item.department !== originalName) {
-      // Check for duplicate
       if (
         rates.some(
           (r, i) =>
@@ -113,7 +161,7 @@ export default function DepartmentRates() {
             r.department.toLowerCase() === item.department.toLowerCase(),
         )
       ) {
-        Swal.fire("Error", "Department name already exists", "error");
+        showToast("Department name already exists", "error");
         setSaving(false);
         return;
       }
@@ -150,10 +198,11 @@ export default function DepartmentRates() {
         .eq("department", item.department);
       error = updateError;
     }
+
     if (error) {
-      Swal.fire("Error", error.message, "error");
+      showToast(error.message, "error");
     } else {
-      Swal.fire("Saved", "", "success");
+      showToast("Department rates updated successfully!", "success");
       setEditModes((prev) => ({ ...prev, [index]: false }));
     }
     setSaving(false);
@@ -161,31 +210,64 @@ export default function DepartmentRates() {
   };
 
   return (
-    <div style={styles.container}>
+    <div className="department-rates-container mx-auto py-6 px-5 max-w-full bg-white min-h-screen text-gray-800 font-sans">
+      <style>{`
+        .department-rates-container button,
+        .department-rates-container button:hover,
+        .department-rates-container button:focus,
+        .department-rates-container button:active,
+        .department-rates-container * {
+          transform: none !important;
+        }
+        .department-rates-container button:hover {
+          box-shadow: none !important;
+        }
+        .department-rates-container input:focus {
+          outline: none !important;
+          box-shadow: none !important;
+          border-color: #237227 !important;
+        }
+        .swal2-container .swal2-actions button,
+        .swal2-container .swal2-actions button:hover,
+        .swal2-container .swal2-actions button:focus,
+        .swal2-container .swal2-actions button:active {
+          transform: none !important;
+          box-shadow: none !important;
+          outline: none !important;
+        }
+        .swal2-container input:focus,
+        .swal2-container input:focus-visible,
+        #swal-dept-name:focus,
+        #swal-dept-name:focus-visible {
+          outline: none !important;
+          box-shadow: none !important;
+          border-color: #237227 !important;
+        }
+      `}</style>
       {/* Header */}
-      <div style={styles.header}>
-        <h1 style={styles.title}>
-          <span style={styles.titleBlack}>Employee </span>
-          <span style={styles.titlePrimary}>Rates</span>
+      <div className="mb-5 flex flex-col items-start gap-1">
+        <h1 className="text-[2rem] font-extrabold m-0 tracking-[-0.02em] inline-block">
+          <span className="text-[#2c382d]">Employee </span>
+          <span className="text-[#237227]">Rates</span>
         </h1>
       </div>
 
       {/* Add Department Button (modal) */}
-      <div style={{ marginBottom: 24 }}>
+      <div className="mb-6">
         <button
           onClick={handleAddDepartment}
-          style={{ ...styles.saveButton, minWidth: 180 }}
+          className="inline-flex items-center justify-center gap-1.5 py-2 px-4 text-[0.85rem] font-semibold rounded-lg border-none cursor-pointer transition-colors bg-[#237227] text-white shadow-none min-w-[180px] focus:outline-none"
         >
           {Icons.circlePlus} Add Department
         </button>
       </div>
 
-      {/* Vertically scrollable grid */}
-      <div className="cardsContainer" style={styles.cardsContainer}>
+      {/* 3 cards per row grid */}
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 p-2">
         {rates.map((row, idx) => (
-          <div key={row.department} style={styles.card}>
-            <div style={styles.cardHeader}>
-              <span style={styles.cardIcon}>
+          <div key={row.department} className="bg-gray-50 rounded-2xl p-5 border border-gray-200 shadow-none transition-colors flex flex-col">
+            <div className="flex items-center gap-2.5 mb-4">
+              <span className="flex items-center justify-center w-11 h-11 rounded-xl bg-[#237227] text-white shrink-0">
                 <Icon as={FiHome} size={24} color="#ffffff" ariaLabel="Department" />
               </span>
               <input
@@ -197,32 +279,15 @@ export default function DepartmentRates() {
                   handleChange(idx, "department", e.target.value)
                 }
                 disabled={!editModes[idx]}
-                style={{
-                  ...styles.departmentName,
-                  border: editModes[idx] ? "1px solid #d1d5db" : "1px solid transparent",
-                  backgroundColor: editModes[idx] ? "#ffffff" : "transparent",
-                  borderRadius: 6,
-                  padding: "4px 10px",
-                  fontSize: "1.2rem",
-                  flex: 1,
-                  minWidth: 0,
-                  outline: "none",
-                }}
+                className={`text-[1.2rem] font-semibold m-0 rounded-lg py-1 px-2.5 flex-1 min-w-0 outline-none focus:outline-none focus:ring-0 focus:border-[#237227] disabled:bg-transparent disabled:border-transparent disabled:text-gray-600 disabled:pl-0 disabled:font-medium transition-colors ${
+                  editModes[idx] ? "border border-gray-300 bg-white text-gray-800" : "border border-transparent bg-transparent text-gray-800"
+                }`}
               />
-              <div style={{ display: "flex", gap: "8px", flexShrink: 0 }}>
+              <div className="flex gap-2 shrink-0">
                 {!editModes[idx] && (
                   <button
                     onClick={() => toggleEdit(idx)}
-                    style={{
-                      background: "#f3f4f6",
-                      color: "#4b5563",
-                      border: "1px solid #d1d5db",
-                      borderRadius: 6,
-                      padding: "6px 12px",
-                      cursor: "pointer",
-                      fontWeight: 600,
-                      fontSize: "0.85rem",
-                    }}
+                    className="bg-[#237227] text-white border-none rounded-lg py-1.5 px-4 cursor-pointer font-semibold text-[0.85rem] focus:outline-none shadow-none hover:shadow-none transition-colors"
                   >
                     Edit
                   </button>
@@ -231,12 +296,12 @@ export default function DepartmentRates() {
             </div>
 
             {/* Rates Section */}
-            <div style={styles.section}>
-              <div style={styles.inputGrid}>
-                <div style={styles.inputGroup}>
+            <div className="mb-4">
+              <div className="grid grid-cols-2 gap-3">
+                <div className="flex flex-col gap-1">
                   <label
                     htmlFor={`daily-rate-${row.department || idx}`}
-                    style={styles.label}
+                    className="text-[0.75rem] font-semibold text-gray-600 uppercase tracking-[0.5px]"
                   >
                     Daily Rate (₱)
                   </label>
@@ -251,13 +316,13 @@ export default function DepartmentRates() {
                       handleChange(idx, "daily_rate", e.target.value)
                     }
                     disabled={!editModes[idx]}
-                    style={styles.input}
+                    className="py-1.5 px-2.5 text-[0.85rem] rounded-lg border border-gray-300 bg-white text-gray-800 outline-none transition-colors w-full box-border disabled:bg-gray-100 disabled:border-gray-300 disabled:text-gray-700 focus:outline-none focus:ring-0 focus:border-[#237227]"
                   />
                 </div>
-                <div style={styles.inputGroup}>
+                <div className="flex flex-col gap-1">
                   <label
                     htmlFor={`late-penalty-${row.department || idx}`}
-                    style={styles.label}
+                    className="text-[0.75rem] font-semibold text-gray-600 uppercase tracking-[0.5px]"
                   >
                     Late Penalty (₱)
                   </label>
@@ -272,13 +337,13 @@ export default function DepartmentRates() {
                       handleChange(idx, "late_penalty", e.target.value)
                     }
                     disabled={!editModes[idx]}
-                    style={styles.input}
+                    className="py-1.5 px-2.5 text-[0.85rem] rounded-lg border border-gray-300 bg-white text-gray-800 outline-none transition-colors w-full box-border disabled:bg-gray-100 disabled:border-gray-300 disabled:text-gray-700 focus:outline-none focus:ring-0 focus:border-[#237227]"
                   />
                 </div>
-                <div style={styles.inputGroup}>
+                <div className="flex flex-col gap-1">
                   <label
                     htmlFor={`regular-holiday-rate-${row.department || idx}`}
-                    style={styles.label}
+                    className="text-[0.75rem] font-semibold text-gray-600 uppercase tracking-[0.5px]"
                   >
                     Regular Holiday Rate (%)
                   </label>
@@ -293,13 +358,13 @@ export default function DepartmentRates() {
                       handleChange(idx, "regular_holiday_rate", e.target.value)
                     }
                     disabled={!editModes[idx]}
-                    style={styles.input}
+                    className="py-1.5 px-2.5 text-[0.85rem] rounded-lg border border-gray-300 bg-white text-gray-800 outline-none transition-colors w-full box-border disabled:bg-gray-100 disabled:border-gray-300 disabled:text-gray-700 focus:outline-none focus:ring-0 focus:border-[#237227]"
                   />
                 </div>
-                <div style={styles.inputGroup}>
+                <div className="flex flex-col gap-1">
                   <label
                     htmlFor={`special-holiday-rate-${row.department || idx}`}
-                    style={styles.label}
+                    className="text-[0.75rem] font-semibold text-gray-600 uppercase tracking-[0.5px]"
                   >
                     Special Holiday Rate (%)
                   </label>
@@ -314,15 +379,15 @@ export default function DepartmentRates() {
                       handleChange(idx, "special_holiday_rate", e.target.value)
                     }
                     disabled={!editModes[idx]}
-                    style={styles.input}
+                    className="py-1.5 px-2.5 text-[0.85rem] rounded-lg border border-gray-300 bg-white text-gray-800 outline-none transition-colors w-full box-border disabled:bg-gray-100 disabled:border-gray-300 disabled:text-gray-700 focus:outline-none focus:ring-0 focus:border-[#237227]"
                   />
                 </div>
               </div>
             </div>
 
             {/* Deductions Section */}
-            <div style={styles.section}>
-              <h3 style={styles.sectionTitle}>
+            <div className="mb-4">
+              <h3 className="text-[1.05rem] font-semibold text-gray-600 mb-3 border-b border-gray-200 pb-1.5 flex items-center">
                 <Icon
                   as={FiTrendingDown}
                   style={{ marginRight: 8 }}
@@ -330,11 +395,11 @@ export default function DepartmentRates() {
                 />
                 Deductions
               </h3>
-              <div style={styles.inputGridDeductions}>
-                <div style={styles.inputGroup}>
+              <div className="grid grid-cols-3 gap-3">
+                <div className="flex flex-col gap-1">
                   <label
                     htmlFor={`sss-${row.department || idx}`}
-                    style={styles.label}
+                    className="text-[0.75rem] font-semibold text-gray-600 uppercase tracking-[0.5px]"
                   >
                     SSS (₱)
                   </label>
@@ -347,13 +412,13 @@ export default function DepartmentRates() {
                     value={row.sss || 0}
                     onChange={(e) => handleChange(idx, "sss", e.target.value)}
                     disabled={!editModes[idx]}
-                    style={styles.input}
+                    className="py-1.5 px-2.5 text-[0.85rem] rounded-lg border border-gray-300 bg-white text-gray-800 outline-none transition-colors w-full box-border disabled:bg-gray-100 disabled:border-gray-300 disabled:text-gray-700 focus:outline-none focus:ring-0 focus:border-[#237227]"
                   />
                 </div>
-                <div style={styles.inputGroup}>
+                <div className="flex flex-col gap-1">
                   <label
                     htmlFor={`pag-ibig-${row.department || idx}`}
-                    style={styles.label}
+                    className="text-[0.75rem] font-semibold text-gray-600 uppercase tracking-[0.5px]"
                   >
                     Pag-ibig (₱)
                   </label>
@@ -368,13 +433,13 @@ export default function DepartmentRates() {
                       handleChange(idx, "pag_ibig", e.target.value)
                     }
                     disabled={!editModes[idx]}
-                    style={styles.input}
+                    className="py-1.5 px-2.5 text-[0.85rem] rounded-lg border border-gray-300 bg-white text-gray-800 outline-none transition-colors w-full box-border disabled:bg-gray-100 disabled:border-gray-300 disabled:text-gray-700 focus:outline-none focus:ring-0 focus:border-[#237227]"
                   />
                 </div>
-                <div style={styles.inputGroup}>
+                <div className="flex flex-col gap-1">
                   <label
                     htmlFor={`philhealth-${row.department || idx}`}
-                    style={styles.label}
+                    className="text-[0.75rem] font-semibold text-gray-600 uppercase tracking-[0.5px]"
                   >
                     PhilHealth (₱)
                   </label>
@@ -389,7 +454,7 @@ export default function DepartmentRates() {
                       handleChange(idx, "philhealth", e.target.value)
                     }
                     disabled={!editModes[idx]}
-                    style={styles.input}
+                    className="py-1.5 px-2.5 text-[0.85rem] rounded-lg border border-gray-300 bg-white text-gray-800 outline-none transition-colors w-full box-border disabled:bg-gray-100 disabled:border-gray-300 disabled:text-gray-700 focus:outline-none focus:ring-0 focus:border-[#237227]"
                   />
                 </div>
               </div>
@@ -397,22 +462,13 @@ export default function DepartmentRates() {
 
             {/* Action Buttons (Bottom Right) */}
             {editModes[idx] && (
-              <div style={{ ...styles.action, gap: "10px" }}>
+              <div className="mt-5 flex justify-end gap-2.5">
                 <button
                   onClick={() => {
                     toggleEdit(idx);
                     fetchRates();
                   }}
-                  style={{
-                    background: "#6b7280",
-                    color: "#ffffff",
-                    border: "none",
-                    borderRadius: 6,
-                    padding: "8px 16px",
-                    cursor: "pointer",
-                    fontWeight: 600,
-                    fontSize: "0.85rem",
-                  }}
+                  className="bg-white text-gray-700 border border-gray-300 rounded-lg py-2 px-4 cursor-pointer font-semibold text-[0.85rem] focus:outline-none shadow-none hover:shadow-none transition-colors"
                 >
                   Cancel
                 </button>
@@ -422,9 +478,24 @@ export default function DepartmentRates() {
                       title: `Delete ${row.department}?`,
                       text: "This will remove the department and all its rates.",
                       icon: "warning",
+                      iconColor: "#ef4444",
+                      width: "380px",
+                      padding: "1.75rem",
+                      backdrop: false,
                       showCancelButton: true,
-                      confirmButtonText: "Delete",
+                      confirmButtonText: "Yes, delete it",
                       cancelButtonText: "Cancel",
+                      buttonsStyling: false,
+                      customClass: {
+                        container: "!bg-transparent !backdrop-blur-none",
+                        popup: "!rounded-3xl !shadow-[0_24px_60px_rgba(0,0,0,0.15)] !border !border-gray-100 font-sans",
+                        title: "!text-xl !font-bold !text-gray-800 !mt-2",
+                        htmlContainer: "!text-sm !text-gray-600",
+                        icon: "!scale-90 !my-2",
+                        actions: "!flex !items-center !justify-center !gap-3 !mt-5 !w-full",
+                        confirmButton: "!bg-[#ef4444] !text-white !font-semibold !rounded-xl !px-6 !py-2.5 !text-sm !border-none cursor-pointer !m-0 !shadow-sm",
+                        cancelButton: "!bg-white !text-gray-700 !font-semibold !rounded-xl !px-6 !py-2.5 !text-sm !border !border-gray-300 cursor-pointer !m-0",
+                      },
                     });
                     if (confirm.isConfirmed) {
                       setSaving(true);
@@ -432,48 +503,29 @@ export default function DepartmentRates() {
                         .from("department_rates")
                         .delete()
                         .eq("department", row.department);
-                      if (error) Swal.fire("Error", error.message, "error");
-                      else {
-                        Swal.fire("Deleted", "", "success");
+                      if (error) {
+                        showToast(error.message, "error");
+                      } else {
+                        showToast(`${row.department} has been removed.`, "success");
                         fetchRates();
                       }
                       setSaving(false);
                     }
                   }}
-                  style={{
-                    background: "#ef4444",
-                    color: "#ffffff",
-                    border: "none",
-                    borderRadius: 6,
-                    padding: "8px 16px",
-                    cursor: "pointer",
-                    fontWeight: 600,
-                    fontSize: "0.85rem",
-                  }}
                   disabled={saving}
                   title="Delete Department"
+                  className="bg-red-600 text-white border-none rounded-lg py-2 px-4 cursor-pointer font-semibold text-[0.85rem] focus:outline-none shadow-none hover:shadow-none transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   Delete
                 </button>
-                {JSON.stringify(rates[idx]) !== JSON.stringify(originalRates[idx]) && (
-                  <button
-                    onClick={() => handleSave(idx)}
-                    disabled={saving}
-                    style={{
-                      background: "#237227",
-                      color: "#fff",
-                      border: "none",
-                      borderRadius: 6,
-                      padding: "8px 16px",
-                      cursor: saving ? "not-allowed" : "pointer",
-                      fontWeight: 600,
-                      fontSize: "0.85rem",
-                    }}
-                    title="Save Changes"
-                  >
-                    Save Changes
-                  </button>
-                )}
+                <button
+                  onClick={() => handleSave(idx)}
+                  disabled={saving}
+                  title="Save Changes"
+                  className="bg-[#237227] text-white border-none rounded-lg py-2 px-4 cursor-pointer font-semibold text-[0.85rem] focus:outline-none shadow-none hover:shadow-none transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {saving ? "Saving..." : "Save Changes"}
+                </button>
               </div>
             )}
           </div>
@@ -482,268 +534,3 @@ export default function DepartmentRates() {
     </div>
   );
 }
-
-// Light theme styles with green accent
-const styles = {
-  container: {
-    margin: "0 auto",
-    padding: "24px 20px",
-    maxWidth: "100%",
-    background: "#ffffff",
-    minHeight: "100vh",
-    color: "#1f2937",
-    fontFamily:
-      '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif',
-  },
-  header: {
-    marginBottom: "20px",
-    display: "flex",
-    flexDirection: "column",
-    alignItems: "flex-start",
-    gap: "4px",
-  },
-  title: {
-    fontSize: "2rem",
-    fontWeight: 800,
-    margin: 0,
-    letterSpacing: "-0.02em",
-    display: "inline-block",
-  },
-  titleBlack: {
-    color: "#2c382d",
-  },
-  titlePrimary: {
-    color: "#237227",
-  },
-  tabContainer: {
-    display: "flex",
-    justifyContent: "center",
-    gap: "8px",
-    marginBottom: "24px",
-    borderBottom: "2px solid #e5e7eb",
-    paddingBottom: "8px",
-  },
-  tab: {
-    padding: "8px 20px",
-    fontSize: "0.95rem",
-    fontWeight: 600,
-    borderRadius: "20px 20px 0 0",
-    border: "none",
-    cursor: "pointer",
-    transition: "all 0.2s",
-    backgroundColor: "transparent",
-    color: "#6b7280",
-    borderBottom: "3px solid transparent",
-  },
-  activeTab: {
-    color: "#237227",
-    borderBottom: "3px solid #237227",
-    backgroundColor: "transparent",
-  },
-  inactiveTab: {
-    color: "#6b7280",
-    "&:hover": {
-      color: "#1f2937",
-      borderBottom: "3px solid #d1d5db",
-    },
-  },
-  cardsContainer: {
-    display: "grid",
-    gridTemplateColumns: "repeat(auto-fill, minmax(350px, 1fr))",
-    gap: "24px",
-    padding: "8px",
-    paddingRight: "16px",
-    maxHeight: "75vh",
-    overflowY: "auto",
-  },
-  card: {
-    background: "#f9fafb",
-    borderRadius: "16px",
-    padding: "20px",
-    border: "1px solid #e5e7eb",
-    boxShadow: "0 2px 8px rgba(0, 0, 0, 0.04)",
-    transition: "transform 0.2s, box-shadow 0.2s",
-    display: "flex",
-    flexDirection: "column",
-  },
-  cardHeader: {
-    display: "flex",
-    alignItems: "center",
-    gap: "10px",
-    marginBottom: "16px",
-  },
-  cardIcon: {
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    width: "44px",
-    height: "44px",
-    borderRadius: "12px",
-    background: "#237227",
-    color: "#ffffff",
-    flexShrink: 0,
-  },
-  departmentName: {
-    fontSize: "1.4rem",
-    fontWeight: 600,
-    margin: 0,
-    color: "#1f2937",
-  },
-  smallIconWrapperPrimary: {
-    display: "inline-flex",
-    alignItems: "center",
-    justifyContent: "center",
-    width: "28px",
-    height: "28px",
-    borderRadius: "8px",
-    background: "#f0fdf4",
-    color: "#237227",
-    marginRight: "8px",
-    fontSize: "1rem",
-    fontWeight: 700,
-  },
-  smallIconWrapperSecondary: {
-    display: "inline-flex",
-    alignItems: "center",
-    justifyContent: "center",
-    width: "28px",
-    height: "28px",
-    borderRadius: "8px",
-    background: "#f3f4f6",
-    color: "#4b5563",
-    marginRight: "8px",
-  },
-  section: {
-    marginBottom: "16px",
-  },
-  sectionTitle: {
-    fontSize: "1.05rem",
-    fontWeight: 600,
-    color: "#4b5563",
-    marginBottom: "12px",
-    borderBottom: "1px solid #e5e7eb",
-    paddingBottom: "6px",
-  },
-  inputGrid: {
-    display: "grid",
-    gridTemplateColumns: "repeat(2, 1fr)",
-    gap: "12px",
-  },
-  inputGridDeductions: {
-    display: "grid",
-    gridTemplateColumns: "repeat(3, 1fr)",
-    gap: "12px",
-  },
-  inputGroup: {
-    display: "flex",
-    flexDirection: "column",
-    gap: "4px",
-  },
-  label: {
-    fontSize: "0.75rem",
-    fontWeight: 600,
-    color: "#4b5563",
-    textTransform: "uppercase",
-    letterSpacing: "0.5px",
-  },
-  input: {
-    padding: "4px 8px",
-    fontSize: "0.85rem",
-    borderRadius: "4px",
-    border: "1px solid #d1d5db",
-    background: "#ffffff",
-    color: "#1f2937",
-    outline: "none",
-    transition: "border-color 0.2s, box-shadow 0.2s",
-    width: "100%",
-    boxSizing: "border-box",
-  },
-  action: {
-    marginTop: "20px",
-    display: "flex",
-    justifyContent: "flex-end",
-  },
-  saveButton: {
-    display: "inline-flex",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: "6px",
-    padding: "8px 16px",
-    fontSize: "0.85rem",
-    fontWeight: 600,
-    borderRadius: "6px",
-    border: "none",
-    cursor: "pointer",
-    transition: "all 0.2s",
-    background: "#237227",
-    color: "#ffffff",
-    boxShadow: "0 1px 4px rgba(35, 114, 39, 0.2)",
-    width: "100%",
-    maxWidth: "200px",
-  },
-  spinnerContainer: {
-    display: "flex",
-    justifyContent: "center",
-    alignItems: "center",
-    minHeight: "300px",
-    background: "#ffffff",
-  },
-  spinner: {
-    width: "50px",
-    height: "50px",
-    border: "4px solid #e5e7eb",
-    borderTop: "4px solid #237227",
-    borderRadius: "50%",
-    animation: "spin 1s linear infinite",
-  },
-};
-
-// Add global keyframes and focus styles
-const styleSheet = document.createElement("style");
-styleSheet.textContent = `
-  @keyframes spin {
-    0% { transform: rotate(0deg); }
-    100% { transform: rotate(360deg); }
-  }
-  input:focus {
-    border-color: #d1d5db !important;
-    outline: none !important;
-    box-shadow: none !important;
-  }
-  button:focus {
-    outline: none !important;
-    box-shadow: none !important;
-  }
-  button:hover:not(:disabled) {
-    transform: translateY(-2px);
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
-  }
-  .inactiveTab:hover {
-    color: #1f2937 !important;
-    border-bottom: 3px solid #d1d5db !important;
-  }
-  .cardsContainer input:disabled {
-    background-color: transparent !important;
-    border-color: transparent !important;
-    color: #4b5563 !important;
-    padding-left: 0 !important;
-    font-weight: 500;
-  }
-  /* Custom scrollbar for light theme */
-  .cardsContainer::-webkit-scrollbar {
-    height: 8px;
-    width: 8px;
-  }
-  .cardsContainer::-webkit-scrollbar-track {
-    background: #f1f5f9;
-    border-radius: 10px;
-  }
-  .cardsContainer::-webkit-scrollbar-thumb {
-    background: #cbd5e0;
-    border-radius: 10px;
-  }
-  .cardsContainer::-webkit-scrollbar-thumb:hover {
-    background: #94a3b8;
-  }
-`;
-document.head.appendChild(styleSheet);

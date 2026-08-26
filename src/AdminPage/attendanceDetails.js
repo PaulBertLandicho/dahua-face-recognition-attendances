@@ -7,7 +7,11 @@ export function getDetailedAttendance(attendance, personId, settings = {}) {
     .filter((r) => r.person_id === personId)
     .forEach((r) => {
       const dt = new Date(r.device_time);
-      const dateStr = dt.toLocaleDateString();
+      if (isNaN(dt.getTime())) return;
+      const y = dt.getFullYear();
+      const m = String(dt.getMonth() + 1).padStart(2, "0");
+      const d = String(dt.getDate()).padStart(2, "0");
+      const dateStr = `${y}-${m}-${d}`;
       if (!byDate[dateStr]) byDate[dateStr] = [];
       byDate[dateStr].push({ ...r, dt });
     });

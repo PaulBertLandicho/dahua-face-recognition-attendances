@@ -11,6 +11,7 @@ import {
   FiMail,
   FiPlusCircle,
   FiRefreshCw,
+  FiSearch,
 } from "react-icons/fi";
 import { determineAttendanceStatus } from "./attendanceUtils";
 import { syncDahuaUsers } from "../utils/dahuaApi";
@@ -180,14 +181,6 @@ export default function PersonsTable() {
   const [sortKey] = useState("created_at");
   const [sortOrder] = useState("desc");
   const [showArchived, setShowArchived] = useState(false);
-  
-  // Pagination
-  const [currentPage, setCurrentPage] = useState(1);
-  const itemsPerPage = 12; // 12 fits nicely in a grid (e.g. 4x3 or 3x4)
-
-  useEffect(() => {
-    setCurrentPage(1);
-  }, [search, departmentFilter, showArchived]);
 
   const [persons, setPersons] = useState([]);
   const [photoModal, setPhotoModal] = useState({ visible: false, src: "", title: "" });
@@ -207,13 +200,6 @@ export default function PersonsTable() {
   const [locLoading, setLocLoading] = useState(false);
   const editPhotoInputRef = useRef(null);
   const [adminModal, setAdminModal] = useState({ visible: false, person: null, event: "time-in", datetime: "", photo: null, note: "", point: null, locationStatus: null, locationMessage: "" });
-
-  const Icons = {
-    download: <FiDownload color="#ffffff" style={{ marginRight: 8 }} />,
-    archive: <FiArchive />,
-    edit: <FiEdit color="#ffffff" style={{ marginRight: 8 }} />,
-    circle: <FiPlusCircle color="#ffffff" style={{ marginRight: 0 }} />,
-  };
 
   useEffect(() => {
     async function fetchPersons() {
@@ -447,10 +433,40 @@ export default function PersonsTable() {
       await computeAndUpdatePersonCashAdvance();
       setNewCashAmount("");
       setNewCashNote("");
-      Swal.fire("Added", "Cash advance recorded.", "success");
+      Swal.fire({
+        toast: true,
+        position: "top-end",
+        icon: "success",
+        title: "Cash advance recorded successfully!",
+        showConfirmButton: false,
+        timer: 2500,
+        timerProgressBar: true,
+        iconColor: "#237227",
+        customClass: {
+          popup: "!rounded-2xl !shadow-[0_12px_30px_rgba(0,0,0,0.12)] !border !border-gray-200 !px-4 !py-3 !bg-white font-sans",
+          title: "!text-sm !font-semibold !text-gray-800 !m-0 !leading-tight",
+          timerProgressBar: "!bg-[#237227]",
+        },
+      });
     } catch (e) {
       console.error(e);
-      Swal.fire("Error", e.message || String(e), "error");
+      Swal.fire({
+        icon: "error",
+        title: "Error",
+        text: e.message || String(e),
+        width: "380px",
+        padding: "1.75rem",
+        confirmButtonText: "OK",
+        buttonsStyling: false,
+        customClass: {
+          popup: "!rounded-3xl !shadow-[0_24px_60px_rgba(0,0,0,0.15)] !border !border-gray-100 font-sans",
+          title: "!text-xl !font-bold !text-gray-800 !mt-2",
+          htmlContainer: "!text-sm !text-gray-600",
+          icon: "!scale-90 !my-2",
+          actions: "!flex !items-center !justify-center !mt-5 !w-full",
+          confirmButton: "!bg-[#237227] hover:!bg-[#1e5f21] !text-white !font-semibold !rounded-xl !px-8 !py-2.5 !text-sm !border-none cursor-pointer !m-0 !shadow-none !transform-none",
+        },
+      });
     } finally {
       setActionLoading(false);
     }
@@ -462,8 +478,21 @@ export default function PersonsTable() {
       title: "Delete entry?",
       text: "This will remove the cash advance record.",
       icon: "warning",
+      width: "380px",
+      padding: "1.75rem",
       showCancelButton: true,
       confirmButtonText: "Delete",
+      cancelButtonText: "Cancel",
+      buttonsStyling: false,
+      customClass: {
+        popup: "!rounded-3xl !shadow-[0_24px_60px_rgba(0,0,0,0.15)] !border !border-gray-100 font-sans",
+        title: "!text-xl !font-bold !text-gray-800 !mt-2",
+        htmlContainer: "!text-sm !text-gray-600",
+        icon: "!scale-90 !my-2",
+        actions: "!flex !items-center !justify-center !gap-3 !mt-5 !w-full",
+        confirmButton: "!bg-red-600 hover:!bg-red-700 !text-white !font-semibold !rounded-xl !px-6 !py-2.5 !text-sm !border-none cursor-pointer !m-0 !shadow-none !transform-none",
+        cancelButton: "!bg-white !text-gray-700 !font-semibold !rounded-xl !px-6 !py-2.5 !text-sm !border !border-gray-300 cursor-pointer !m-0 !shadow-none !transform-none",
+      },
     });
     if (!res.isConfirmed) return;
     setActionLoading(true);
@@ -475,10 +504,40 @@ export default function PersonsTable() {
       if (error) throw error;
       await refreshCashAdvances();
       await computeAndUpdatePersonCashAdvance();
-      Swal.fire("Deleted", "Cash advance removed.", "success");
+      Swal.fire({
+        toast: true,
+        position: "top-end",
+        icon: "success",
+        title: "Cash advance removed successfully!",
+        showConfirmButton: false,
+        timer: 2500,
+        timerProgressBar: true,
+        iconColor: "#237227",
+        customClass: {
+          popup: "!rounded-2xl !shadow-[0_12px_30px_rgba(0,0,0,0.12)] !border !border-gray-200 !px-4 !py-3 !bg-white font-sans",
+          title: "!text-sm !font-semibold !text-gray-800 !m-0 !leading-tight",
+          timerProgressBar: "!bg-[#237227]",
+        },
+      });
     } catch (e) {
       console.error(e);
-      Swal.fire("Error", e.message || String(e), "error");
+      Swal.fire({
+        icon: "error",
+        title: "Error",
+        text: e.message || String(e),
+        width: "380px",
+        padding: "1.75rem",
+        confirmButtonText: "OK",
+        buttonsStyling: false,
+        customClass: {
+          popup: "!rounded-3xl !shadow-[0_24px_60px_rgba(0,0,0,0.15)] !border !border-gray-100 font-sans",
+          title: "!text-xl !font-bold !text-gray-800 !mt-2",
+          htmlContainer: "!text-sm !text-gray-600",
+          icon: "!scale-90 !my-2",
+          actions: "!flex !items-center !justify-center !mt-5 !w-full",
+          confirmButton: "!bg-[#237227] hover:!bg-[#1e5f21] !text-white !font-semibold !rounded-xl !px-8 !py-2.5 !text-sm !border-none cursor-pointer !m-0 !shadow-none !transform-none",
+        },
+      });
     } finally {
       setActionLoading(false);
     }
@@ -494,11 +553,21 @@ export default function PersonsTable() {
         person.name || person.id
       }</b>?</div>`,
       icon: "warning",
+      width: "380px",
+      padding: "1.75rem",
       showCancelButton: true,
       confirmButtonText: "Archive",
       cancelButtonText: "Cancel",
-      focusCancel: true,
-      customClass: { popup: "swal2-modal" },
+      buttonsStyling: false,
+      customClass: {
+        popup: "!rounded-3xl !shadow-[0_24px_60px_rgba(0,0,0,0.15)] !border !border-gray-100 font-sans",
+        title: "!text-xl !font-bold !text-gray-800 !mt-2",
+        htmlContainer: "!text-sm !text-gray-600",
+        icon: "!scale-90 !my-2",
+        actions: "!flex !items-center !justify-center !gap-3 !mt-5 !w-full",
+        confirmButton: "!bg-[#237227] hover:!bg-[#1e5f21] !text-white !font-semibold !rounded-xl !px-6 !py-2.5 !text-sm !border-none cursor-pointer !m-0 !shadow-none !transform-none",
+        cancelButton: "!bg-white !text-gray-700 !font-semibold !rounded-xl !px-6 !py-2.5 !text-sm !border !border-gray-300 cursor-pointer !m-0 !shadow-none !transform-none",
+      },
     }).then(async (result) => {
       if (result.isConfirmed) {
         const { error: archErr } = await supabase
@@ -506,14 +575,44 @@ export default function PersonsTable() {
           .update({ archived: true })
           .eq("id", person.id);
         if (archErr) {
-          Swal.fire("Error", archErr.message, "error");
+          Swal.fire({
+            icon: "error",
+            title: "Error",
+            text: archErr.message,
+            width: "380px",
+            padding: "1.75rem",
+            confirmButtonText: "OK",
+            buttonsStyling: false,
+            customClass: {
+              popup: "!rounded-3xl !shadow-[0_24px_60px_rgba(0,0,0,0.15)] !border !border-gray-100 font-sans",
+              title: "!text-xl !font-bold !text-gray-800 !mt-2",
+              htmlContainer: "!text-sm !text-gray-600",
+              icon: "!scale-90 !my-2",
+              actions: "!flex !items-center !justify-center !mt-5 !w-full",
+              confirmButton: "!bg-[#237227] hover:!bg-[#1e5f21] !text-white !font-semibold !rounded-xl !px-8 !py-2.5 !text-sm !border-none cursor-pointer !m-0 !shadow-none !transform-none",
+            },
+          });
         } else {
           setPersons((prev) =>
             prev.map((p) =>
               p.id === person.id ? { ...p, archived: true } : p,
             ),
           );
-          Swal.fire("Archived!", "", "success");
+          Swal.fire({
+            toast: true,
+            position: "top-end",
+            icon: "success",
+            title: `${person.name || person.id} archived successfully!`,
+            showConfirmButton: false,
+            timer: 2500,
+            timerProgressBar: true,
+            iconColor: "#237227",
+            customClass: {
+              popup: "!rounded-2xl !shadow-[0_12px_30px_rgba(0,0,0,0.12)] !border !border-gray-200 !px-4 !py-3 !bg-white font-sans",
+              title: "!text-sm !font-semibold !text-gray-800 !m-0 !leading-tight",
+              timerProgressBar: "!bg-[#237227]",
+            },
+          });
         }
       }
     });
@@ -524,30 +623,43 @@ export default function PersonsTable() {
     if (!person || !person.id) return;
     const now = new Date();
     const pad = (n) => String(n).padStart(2, "0");
-    const localIsoForInput = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}T${pad(now.getHours())}:${pad(now.getMinutes())}`;
-    setLocLoading(true);
-    try {
-      const locationResult = adminModal.point ? { point: adminModal.point, status: adminModal.locationStatus || "ok", message: adminModal.locationMessage || "" } : await getCurrentLocationPoint();
-      setAdminModal({ visible: true, person, event: "time-in", datetime: localIsoForInput, photo: person.registration_photo || null, note: "", point: locationResult.point, locationStatus: locationResult.status, locationMessage: locationResult.message });
-    } catch (e) {
-      setAdminModal({ visible: true, person, event: "time-in", datetime: localIsoForInput, photo: person.registration_photo || null, note: "", point: null, locationStatus: "unavailable", locationMessage: "Location could not be determined on this device." });
-    } finally {
-      setLocLoading(false);
-    }
+    const localIso = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(
+      now.getDate(),
+    )}T${pad(now.getHours())}:${pad(now.getMinutes())}`;
+    setAdminModal({
+      visible: true,
+      person,
+      event: "time-in",
+      datetime: localIso,
+      photo: null,
+      note: "",
+      point: null,
+      locationStatus: "fetching",
+      locationMessage: "Fetching current location...",
+    });
+    const locationResult = await getCurrentLocationPoint();
+    setAdminModal((s) => ({
+      ...s,
+      point: locationResult.point,
+      locationStatus: locationResult.status,
+      locationMessage: locationResult.message,
+    }));
   };
 
-  // Helper to get photo for a person (latest attendance photo or registration photo)
-  const getPersonPhoto = (person) => {
-    // Always use registration photo if available
-    if (person && person.registration_photo) return person.registration_photo;
-    return null;
-  };
-
-  // Removed unused: closeModal
-
-  const handleEditModalClose = () => {
-    setShowEditModal(false);
-    setEditPerson(null);
+  // eslint-disable-next-line no-unused-vars
+  const handleRefreshAdminLocation = async () => {
+    setAdminModal((s) => ({
+      ...s,
+      locationStatus: "fetching",
+      locationMessage: "Fetching current location...",
+    }));
+    const locationResult = await getCurrentLocationPoint();
+    setAdminModal((s) => ({
+      ...s,
+      point: locationResult.point,
+      locationStatus: locationResult.status,
+      locationMessage: locationResult.message,
+    }));
   };
 
   // Admin attendance modal handlers
@@ -635,11 +747,41 @@ export default function PersonsTable() {
         }
       } catch (e) {}
 
-      Swal.fire("Recorded", "Attendance recorded.", "success");
+      Swal.fire({
+        toast: true,
+        position: "top-end",
+        icon: "success",
+        title: "Attendance recorded successfully!",
+        showConfirmButton: false,
+        timer: 2500,
+        timerProgressBar: true,
+        iconColor: "#237227",
+        customClass: {
+          popup: "!rounded-2xl !shadow-[0_12px_30px_rgba(0,0,0,0.12)] !border !border-gray-200 !px-4 !py-3 !bg-white font-sans",
+          title: "!text-sm !font-semibold !text-gray-800 !m-0 !leading-tight",
+          timerProgressBar: "!bg-[#237227]",
+        },
+      });
       setAdminModal({ visible: false, person: null, event: "time-in", datetime: "", photo: null, note: "", point: null, locationStatus: null, locationMessage: "" });
     } catch (err) {
       console.error(err);
-      Swal.fire("Error", err.message || String(err), "error");
+      Swal.fire({
+        icon: "error",
+        title: "Error",
+        text: err.message || String(err),
+        width: "380px",
+        padding: "1.75rem",
+        confirmButtonText: "OK",
+        buttonsStyling: false,
+        customClass: {
+          popup: "!rounded-3xl !shadow-[0_24px_60px_rgba(0,0,0,0.15)] !border !border-gray-100 font-sans",
+          title: "!text-xl !font-bold !text-gray-800 !mt-2",
+          htmlContainer: "!text-sm !text-gray-600",
+          icon: "!scale-90 !my-2",
+          actions: "!flex !items-center !justify-center !mt-5 !w-full",
+          confirmButton: "!bg-[#237227] hover:!bg-[#1e5f21] !text-white !font-semibold !rounded-xl !px-8 !py-2.5 !text-sm !border-none cursor-pointer !m-0 !shadow-none !transform-none",
+        },
+      });
     } finally {
       setActionLoading(false);
     }
@@ -663,24 +805,29 @@ export default function PersonsTable() {
     return () => window.removeEventListener("keydown", onKey);
   }, [photoModal.visible]);
 
+  const getPersonPhoto = (person) => {
+    if (person && person.registration_photo) return person.registration_photo;
+    return null;
+  };
+
+  const handleEditModalClose = () => {
+    setShowEditModal(false);
+    setEditPerson(null);
+  };
+
   const handleEditPhotoChange = (e) => {
     const file = e.target.files && e.target.files[0];
     if (!file) return;
-    e.target.value = "";
-
     const reader = new FileReader();
     reader.onload = () => {
-      const dataUrl = reader.result;
-      if (typeof dataUrl !== "string") return;
-      setEditPerson((prev) =>
-        prev ? { ...prev, registration_photo: dataUrl } : prev,
-      );
+      setEditPerson((p) => ({ ...p, registration_photo: reader.result }));
     };
     reader.readAsDataURL(file);
   };
 
   const handleEditModalSave = async (e) => {
     e.preventDefault();
+    if (!editPerson || !editPerson.id) return;
     const {
       id,
       name,
@@ -713,7 +860,23 @@ export default function PersonsTable() {
       })
       .eq("id", id);
     if (error) {
-      Swal.fire("Error", error.message, "error");
+      Swal.fire({
+        icon: "error",
+        title: "Error",
+        text: error.message,
+        width: "380px",
+        padding: "1.75rem",
+        confirmButtonText: "OK",
+        buttonsStyling: false,
+        customClass: {
+          popup: "!rounded-3xl !shadow-[0_24px_60px_rgba(0,0,0,0.15)] !border !border-gray-100 font-sans",
+          title: "!text-xl !font-bold !text-gray-800 !mt-2",
+          htmlContainer: "!text-sm !text-gray-600",
+          icon: "!scale-90 !my-2",
+          actions: "!flex !items-center !justify-center !mt-5 !w-full",
+          confirmButton: "!bg-[#237227] hover:!bg-[#1e5f21] !text-white !font-semibold !rounded-xl !px-8 !py-2.5 !text-sm !border-none cursor-pointer !m-0 !shadow-none !transform-none",
+        },
+      });
     } else {
       setPersons((prev) =>
         prev.map((p) =>
@@ -735,7 +898,21 @@ export default function PersonsTable() {
             : p,
         ),
       );
-      Swal.fire("Updated!", "", "success");
+      Swal.fire({
+        toast: true,
+        position: "top-end",
+        icon: "success",
+        title: "Person details updated successfully!",
+        showConfirmButton: false,
+        timer: 2500,
+        timerProgressBar: true,
+        iconColor: "#237227",
+        customClass: {
+          popup: "!rounded-2xl !shadow-[0_12px_30px_rgba(0,0,0,0.12)] !border !border-gray-200 !px-4 !py-3 !bg-white font-sans",
+          title: "!text-sm !font-semibold !text-gray-800 !m-0 !leading-tight",
+          timerProgressBar: "!bg-[#237227]",
+        },
+      });
       handleEditModalClose();
     }
   };
@@ -807,12 +984,7 @@ export default function PersonsTable() {
     return 0;
   });
 
-  // Pagination logic
-  const activeRecords = sortedPersons;
-  const totalRecords = activeRecords.length;
-  const totalPages = Math.ceil(totalRecords / itemsPerPage) || 1;
-  const startIndex = (currentPage - 1) * itemsPerPage;
-  const currentRecords = activeRecords.slice(startIndex, startIndex + itemsPerPage);
+  const currentRecords = sortedPersons;
 
   // Export to Excel
   const handleSyncDahuaPersons = async () => {
@@ -878,335 +1050,260 @@ export default function PersonsTable() {
   };
 
   return (
-    <div style={styles.container}>
+    <div className="mx-auto p-7 md:p-9 max-w-full bg-white min-h-screen text-gray-800 font-sans">
       {error && (
         <div
           role="alert"
-          style={{
-            marginBottom: 16,
-            padding: "10px 14px",
-            border: "1px solid #fecaca",
-            borderRadius: 8,
-            background: "#fef2f2",
-            color: "#b91c1c",
-            fontSize: 14,
-          }}
+          className="mb-4 p-3 px-3.5 border border-red-200 rounded-lg bg-red-50 text-red-700 text-sm"
         >
           {error}
         </div>
       )}
-      <div style={styles.header}>
-        <h1 style={styles.title}>
-          <span style={styles.titleBlack}>Registered </span>
-          <span style={styles.titlePrimary}>Persons</span>
+      {/* Header */}
+      <div className="mb-6 flex flex-col items-start gap-1.5">
+        <h1 className="text-[2rem] md:text-4xl font-extrabold m-0 tracking-tight inline-block">
+          <span className="text-[#2c382d]">Registered </span>
+          <span className="text-[#237227]">Persons</span>
         </h1>
       </div>
 
       {/* Filter Bar */}
-      <div style={styles.filterBar}>
-        <div style={styles.filterGroup}>
-          <div style={styles.searchWrapper}>
-            <label htmlFor="persons-search" style={{ display: "block", marginBottom: 4, fontSize: 12, color: "#4b5563", fontWeight: 600 }}>Search</label>
-            <input
-              id="persons-search"
-              name="persons-search"
-              type="text"
-              placeholder="Search name or ID"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              style={styles.searchInput}
-            />
+      <div className="flex flex-wrap justify-between items-end gap-3.5 mb-5 p-3 px-4 bg-white rounded-xl border border-[#edf2ee] shadow-sm">
+        <div className="flex flex-wrap gap-3.5 items-end">
+          <div>
+            <label
+              htmlFor="persons-search"
+              className="block mb-1 text-xs text-gray-600 font-semibold"
+            >
+              Search
+            </label>
+            <div className="relative">
+              <FiSearch className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 text-sm" />
+              <input
+                id="persons-search"
+                name="persons-search"
+                type="text"
+                placeholder="Search name or ID"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                className="pl-9 pr-3.5 py-2 text-sm rounded-md border border-[#dce3dd] bg-white text-[#2c382d] outline-none focus:outline-none focus:border-[#dce3dd] focus:ring-0 min-w-[200px]"
+              />
+            </div>
           </div>
           <div>
-            <label htmlFor="persons-department-filter" style={{ display: "block", marginBottom: 4, fontSize: 12, color: "#4b5563", fontWeight: 600 }}>Department</label>
+            <label
+              htmlFor="persons-department-filter"
+              className="block mb-1 text-xs text-gray-600 font-semibold"
+            >
+              Department
+            </label>
             <select
               id="persons-department-filter"
               name="persons-department-filter"
               value={departmentFilter}
               onChange={(e) => setDepartmentFilter(e.target.value)}
-              style={styles.select}
+              className="py-2 px-3 text-sm rounded-md border border-[#dce3dd] bg-white text-[#2c382d] outline-none cursor-pointer focus:outline-none focus:border-[#dce3dd] focus:ring-0 min-w-[150px]"
             >
               <option value="">All Departments</option>
-              {[...new Set(persons.map((p) => p.department).filter(Boolean))].map(
-                (dept) => (
-                  <option key={dept} value={dept}>
-                    {dept}
-                  </option>
-                ),
-              )}
+              {[
+                ...new Set(persons.map((p) => p.department).filter(Boolean)),
+              ].map((dept) => (
+                <option key={dept} value={dept}>
+                  {dept}
+                </option>
+              ))}
             </select>
           </div>
           <button
             onClick={() => setShowArchived((a) => !a)}
-            style={{ ...styles.button, ...styles.buttonSecondary }}
+            className="inline-flex items-center justify-center gap-1.5 py-2 px-4 rounded-md text-sm font-semibold border border-[#237227] cursor-pointer transition-colors bg-white text-[#237227] shadow-sm whitespace-nowrap focus:outline-none"
           >
-            {showArchived ? (
-              <>{Icons.archive} Show Active</>
-            ) : (
-              <>{Icons.archive} Show Archived</>
-            )}
+            <FiArchive className="mr-1" />
+            {showArchived ? "Show Active" : "Show Archived"}
           </button>
         </div>
 
-        <div style={styles.actionButtons}>
+        <div className="flex gap-2.5 items-center flex-wrap">
           <button
             onClick={handleSyncDahuaPersons}
             disabled={syncingDahuaUsers}
-            style={{
-              ...styles.button,
-              ...styles.buttonPrimary,
-              opacity: syncingDahuaUsers ? 0.7 : 1,
-            }}
+            className={`inline-flex items-center justify-center gap-1.5 py-2 px-4 rounded-md text-sm font-semibold border-none cursor-pointer transition-colors bg-[#237227] text-white shadow-sm whitespace-nowrap focus:outline-none ${
+              syncingDahuaUsers ? "opacity-70 cursor-not-allowed" : ""
+            }`}
           >
-            <FiRefreshCw color="#ffffff" style={{ marginRight: 8 }} />
+            <FiRefreshCw className="mr-1 text-white" />
             {syncingDahuaUsers ? "Syncing Dahua Users..." : "Sync Dahua Users"}
           </button>
           <button
             onClick={handleExportExcel}
-            style={{ ...styles.button, ...styles.buttonPrimary }}
+            className="inline-flex items-center justify-center gap-1.5 py-2 px-4 rounded-md text-sm font-semibold border-none cursor-pointer transition-colors bg-[#237227] text-white shadow-sm whitespace-nowrap focus:outline-none"
           >
-            {Icons.download} Export Excel
+            <FiDownload className="mr-1 text-white" /> Export Excel
           </button>
         </div>
       </div>
 
       {/* Card Grid */}
-      <div style={styles.tableContainer}>
-        <div style={{ padding: 24 }}>
-          <div style={styles.cardsGrid}>
-            {currentRecords.length === 0 ? (
-              <div style={styles.emptyState}>No persons found.</div>
-            ) : (
-              currentRecords.map((p) => {
-                const initials = (p.name || "")
-                  .split(" ")
-                  .map((n) => (n ? n[0] : ""))
-                  .slice(0, 2)
-                  .join("")
-                  .toUpperCase();
-                // Compute display amount: prefer explicit daily_rate, then payroll gross, then net
-                const displayAmount = Number(
-                  p.daily_rate ??
-                    payrollGrossMap[p.id] ??
-                    p.gross ??
-                    payrollMap[p.id] ??
-                    p.net ??
-                    0,
-                );
-                return (
-                  <div key={p.id} style={styles.card}>
-                    <div style={styles.cardHeader}>
-                      <div style={styles.cardAvatarWrapper}>
-                        {getPersonPhoto(p) ? (
-                          <img
-                            src={getPersonPhoto(p)}
-                            alt={p.name || "person"}
-                            style={{ ...styles.cardAvatar, cursor: 'pointer' }}
-                            onClick={() => openPhotoModal(getPersonPhoto(p), p.name || p.id)}
-                          />
-                        ) : (
-                          <div style={styles.cardAvatarPlaceholder}>
-                            {initials || "?"}
-                          </div>
-                        )}
+      <div className="grid grid-cols-[repeat(auto-fill,minmax(280px,1fr))] gap-5 items-stretch mb-6">
+        {currentRecords.length === 0 ? (
+          <div className="col-span-full text-center py-16 px-5 text-gray-500 text-base bg-white rounded-2xl border border-gray-100 shadow-sm">
+            No persons found.
+          </div>
+        ) : (
+          currentRecords.map((p) => {
+            const initials = (p.name || "")
+              .split(" ")
+              .map((n) => (n ? n[0] : ""))
+              .slice(0, 2)
+              .join("")
+              .toUpperCase();
+            // Compute display amount: prefer explicit daily_rate, then payroll gross, then net
+            const displayAmount = Number(
+              p.daily_rate ??
+                payrollGrossMap[p.id] ??
+                p.gross ??
+                payrollMap[p.id] ??
+                p.net ??
+                0,
+            );
+            return (
+              <div
+                key={p.id}
+                className="bg-white rounded-xl border border-gray-200 p-5 flex flex-col justify-between shadow-[0_8px_20px_rgba(16,185,129,0.05)]"
+              >
+                {/* Card Header */}
+                <div className="flex justify-between items-center mb-3">
+                  <div className="flex items-center justify-center w-[84px] h-[84px] mr-3 shrink-0">
+                    {getPersonPhoto(p) ? (
+                      <img
+                        src={getPersonPhoto(p)}
+                        alt={p.name || "person"}
+                        className="w-[84px] h-[84px] rounded-full object-cover border-4 border-white shadow-md cursor-pointer"
+                        onClick={() =>
+                          openPhotoModal(
+                            getPersonPhoto(p),
+                            p.name || p.id,
+                          )
+                        }
+                      />
+                    ) : (
+                      <div className="w-[84px] h-[84px] rounded-full bg-gradient-to-br from-[#0284c7] to-[#0ea5e9] text-white flex items-center justify-center font-bold text-2xl border-4 border-white shadow-md">
+                        {initials}
                       </div>
-                      <div style={styles.cardStatus}>
-                        {p.archived ? (
-                          <span style={styles.badgeArchived}>Archived</span>
-                        ) : presenceMap[p.id] && presenceMap[p.id].present ? (
-                          <span style={styles.badgePresent}>Present</span>
-                        ) : (
-                          <span style={styles.badgeAbsent}>Absent</span>
-                        )}
-                      </div>
-                    </div>
-
-                    <div style={styles.cardBody}>
-                      <h3 style={styles.cardName}>{p.name || "Unnamed"}</h3>
-                      <div style={styles.cardId}>{p.id}</div>
-
-                      <div style={styles.cardInfoRow}>
-                        <span style={styles.iconAndText}>
-                          <FiBriefcase style={styles.deptIcon} />{" "}
-                          {p.department || ""}
-                        </span>
-                      </div>
-                      <div style={styles.phoneRow}>
-                        <span style={styles.iconAndText}>
-                          <FiMail style={styles.emailIcon} />
-                          <span style={styles.contactText}>
-                            {p.email || ""}
-                          </span>
-                        </span>
-                      </div>
-                      <div style={styles.phoneRow}>
-                        <span style={styles.iconAndText}>
-                          <FiPhone style={styles.phoneIcon} />
-                          <span style={styles.contactText}>
-                            {p.phone_number || ""}
-                          </span>
-                        </span>
-                      </div>
-                      <div style={styles.netPayRow}>
-                        <div style={styles.iconAndTexts}>
-                          Daily Rate (₱):{" "}
-                          <strong>
-                            {`₱${displayAmount.toLocaleString(undefined, {
-                              minimumFractionDigits: 2,
-                              maximumFractionDigits: 2,
-                            })}`}
-                          </strong>
-                        </div>
-                      </div>
-                    </div>
-
-                    <div style={{ display: "flex", flexDirection: "column", gap: "8px", marginTop: "16px" }}>
-                      <div style={{ display: "flex", gap: "8px" }}>
-                        <button
-                          onClick={() => handleEdit(p)}
-                          style={{
-                            flex: 1,
-                            padding: "10px 0",
-                            borderRadius: "10px",
-                            fontSize: "0.85rem",
-                            fontWeight: 600,
-                            cursor: "pointer",
-                            transition: "all 0.2s",
-                            background: "#237227",
-                            color: "#ffffff",
-                            border: "none",
-                            textAlign: "center"
-                          }}
-                        >
-                          Edit
-                        </button>
-                        {!p.archived && (
-                          <button
-                            onClick={() => handleArchive(p)}
-                            style={{
-                              flex: 1,
-                              padding: "10px 0",
-                              borderRadius: "10px",
-                              fontSize: "0.85rem",
-                              fontWeight: 600,
-                              cursor: "pointer",
-                              transition: "all 0.2s",
-                              background: "#ffffff",
-                              color: "#1f2937",
-                              border: "1px solid #d1d5db",
-                              textAlign: "center"
-                            }}
-                          >
-                            Archive
-                          </button>
-                        )}
-                      </div>
-                      {!p.archived && (
-                        <button
-                          onClick={() => handleAdminAttendance(p)}
-                          style={{
-                            width: "100%",
-                            padding: "10px 0",
-                            borderRadius: "10px",
-                            fontSize: "0.85rem",
-                            fontWeight: 600,
-                            cursor: "pointer",
-                            transition: "all 0.2s",
-                            background: "#e5e7eb",
-                            color: "#1f2937",
-                            border: "none",
-                            textAlign: "center"
-                          }}
-                        >
-                          Customize Attendance
-                        </button>
-                      )}
-                    </div>
+                    )}
                   </div>
-                );
-              })
-            )}
-          </div>
-        </div>
+                  <div>
+                    {p.archived ? (
+                      <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-red-500 text-white shadow-sm">
+                        Archived
+                      </span>
+                    ) : presenceMap[p.id] && presenceMap[p.id].present ? (
+                      <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-[#237227] text-white shadow-sm">
+                        Present
+                      </span>
+                    ) : (
+                      <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-red-500 text-white shadow-sm">
+                        Absent
+                      </span>
+                    )}
+                  </div>
+                </div>
 
-        {/* Pagination Footer */}
-        <div style={styles.paginationContainer}>
-          <div style={styles.paginationText}>
-            Showing <strong>{totalRecords === 0 ? 0 : startIndex + 1}</strong> to <strong>{Math.min(startIndex + itemsPerPage, totalRecords)}</strong> of <strong>{totalRecords}</strong> records
-          </div>
-          <div style={styles.paginationControls}>
-            <button 
-              style={{ ...styles.pageButton, ...(currentPage === 1 ? styles.pageButtonDisabled : {}) }}
-              onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
-              disabled={currentPage === 1}
-            >
-              &lt;
-            </button>
-            
-            {Array.from({ length: totalPages }, (_, i) => i + 1)
-              .filter(p => p === 1 || p === totalPages || Math.abs(currentPage - p) <= 1)
-              .map((p, idx, arr) => {
-                const renderButton = (
-                  <button
-                    key={p}
-                    style={p === currentPage ? { ...styles.pageButton, ...styles.pageButtonActive } : styles.pageButton}
-                    onClick={() => setCurrentPage(p)}
-                  >
-                    {p}
-                  </button>
-                );
-
-                if (idx > 0 && arr[idx] - arr[idx - 1] > 1) {
-                  return (
-                    <div key={`group-${p}`} style={{ display: "flex", alignItems: "center", gap: "6px" }}>
-                      <span style={{ color: "#677368", padding: "0 2px" }}>...</span>
-                      {renderButton}
+                {/* Person Info */}
+                <div className="mb-4">
+                  <div className="font-bold text-base text-gray-800 mb-1 truncate">
+                    {p.name || "Unnamed"}
+                  </div>
+                  <div className="inline-flex items-center justify-center w-5 h-5 rounded-full bg-gray-100 text-gray-600 text-xs font-bold mb-2">
+                    {p.id}
+                  </div>
+                  {p.department && (
+                    <div className="flex items-center text-xs text-gray-600 mb-1 truncate">
+                      <FiBriefcase className="mr-1.5 text-cyan-600 text-sm shrink-0" />
+                      <span className="truncate">{p.department}</span>
                     </div>
-                  );
-                }
-                return renderButton;
-              })}
-            
-            <button 
-              style={{ ...styles.pageButton, ...(currentPage === totalPages ? styles.pageButtonDisabled : {}) }}
-              onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
-              disabled={currentPage === totalPages}
-            >
-              &gt;
-            </button>
-          </div>
-        </div>
+                  )}
+                  {p.email && (
+                    <div className="flex items-center text-xs text-gray-600 mb-1 truncate">
+                      <FiMail className="mr-1.5 text-cyan-600 text-sm shrink-0" />
+                      <span className="truncate">{p.email}</span>
+                    </div>
+                  )}
+                  {p.phone_number && (
+                    <div className="flex items-center text-xs text-gray-600 mb-2 truncate">
+                      <FiPhone className="mr-1.5 text-cyan-600 text-sm shrink-0" />
+                      <span className="truncate">{p.phone_number}</span>
+                    </div>
+                  )}
+                  <div className="text-xs font-semibold text-[#237227] mt-1">
+                    Daily Rate (₱): ₱
+                    {displayAmount.toLocaleString(undefined, {
+                      minimumFractionDigits: 2,
+                      maximumFractionDigits: 2,
+                    })}
+                  </div>
+                </div>
+
+                {/* Actions */}
+                <div className="flex flex-col gap-2 pt-2 border-t border-gray-100">
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => handleEdit(p)}
+                      className="flex-1 py-1.5 px-3 rounded-md bg-[#237227] text-white text-xs font-semibold transition-colors cursor-pointer border-none focus:outline-none"
+                    >
+                      Edit
+                    </button>
+                    {!p.archived && (
+                      <button
+                        onClick={() => handleArchive(p)}
+                        className="flex-1 py-1.5 px-3 rounded-md bg-white border border-gray-300 text-gray-700 text-xs font-semibold transition-colors cursor-pointer focus:outline-none"
+                      >
+                        Archive
+                      </button>
+                    )}
+                  </div>
+                  {!p.archived && (
+                    <button
+                      onClick={() => handleAdminAttendance(p)}
+                      className="w-full py-1.5 px-3 rounded-md bg-slate-100 text-slate-700 text-xs font-medium transition-colors cursor-pointer border-none focus:outline-none"
+                    >
+                      Customize Attendance
+                    </button>
+                  )}
+                </div>
+              </div>
+            );
+          })
+        )}
       </div>
 
       {/* Edit Modal */}
       {showEditModal && editPerson && (
-        <div style={styles.modalOverlay}>
-          <div style={styles.modalContent}>
-            <h2 style={styles.modalTitle}>
-              <FiEdit style={styles.modalTitleIcon} /> Edit Person
+        <div className="fixed inset-0 z-[1000] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
+          <div className="bg-white text-gray-800 p-7 rounded-3xl max-w-[900px] w-full max-h-[90vh] overflow-y-auto shadow-2xl border border-gray-200 font-sans">
+            <h2 className="text-2xl font-bold mb-4 text-[#0f3d16] text-center flex items-center justify-center gap-2">
+              <FiEdit className="text-[#237227]" /> Edit Person
             </h2>
             <form onSubmit={handleEditModalSave}>
-              <div style={styles.modalField}>
-                <label style={styles.modalLabel}>Registration Photo</label>
-                <div
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    gap: "12px",
-                    flexWrap: "wrap",
-                  }}
-                >
+              <div className="mb-4">
+                <label className="block text-xs font-semibold text-gray-700 mb-2">
+                  Registration Photo
+                </label>
+                <div className="flex items-center gap-3 flex-wrap">
                   {editPerson.registration_photo ? (
                     <img
                       src={editPerson.registration_photo}
                       alt="person"
-                      style={{ ...styles.photoPreview, cursor: 'pointer' }}
-                      onClick={() => openPhotoModal(editPerson.registration_photo, editPerson.name || editPerson.id)}
+                      className="w-[88px] h-[88px] object-cover rounded-xl border-2 border-emerald-500/20 shadow-md cursor-pointer"
+                      onClick={() =>
+                        openPhotoModal(
+                          editPerson.registration_photo,
+                          editPerson.name || editPerson.id,
+                        )
+                      }
                     />
                   ) : (
-                    <span style={{ color: "#9ca3af", fontSize: "0.9rem" }}>
-                      No photo
-                    </span>
+                    <span className="text-gray-400 text-sm">No photo</span>
                   )}
                   <button
                     type="button"
@@ -1214,11 +1311,7 @@ export default function PersonsTable() {
                       editPhotoInputRef.current &&
                       editPhotoInputRef.current.click()
                     }
-                    style={{
-                      ...styles.button,
-                      ...styles.buttonSecondary,
-                      padding: "8px 16px",
-                    }}
+                    className="inline-flex items-center justify-center gap-1.5 py-2 px-4 rounded-md text-sm font-semibold border border-[#237227] bg-white text-[#237227] shadow-sm cursor-pointer"
                   >
                     Upload New Photo
                   </button>
@@ -1227,14 +1320,19 @@ export default function PersonsTable() {
                   ref={editPhotoInputRef}
                   type="file"
                   accept="image/*"
-                  style={{ display: "none" }}
+                  className="hidden"
                   onChange={handleEditPhotoChange}
                 />
-
               </div>
-              <div className="persons-modal-grid" style={styles.modalGrid}>
-                <div style={styles.modalField}>
-                  <label htmlFor="edit-person-name" style={styles.modalLabel}>Name</label>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 items-start">
+                <div>
+                  <label
+                    htmlFor="edit-person-name"
+                    className="block text-xs font-semibold text-gray-700 mb-1.5"
+                  >
+                    Name
+                  </label>
                   <input
                     id="edit-person-name"
                     name="edit-person-name"
@@ -1242,19 +1340,27 @@ export default function PersonsTable() {
                     onChange={(e) =>
                       setEditPerson({ ...editPerson, name: e.target.value })
                     }
-                    style={styles.modalInput}
+                    className="w-full p-2.5 text-sm rounded-xl border border-gray-200 bg-white text-gray-900 outline-none focus:border-[#237227] focus:ring-0 transition-colors"
                   />
                 </div>
-                <div style={styles.modalField}>
-                  <label htmlFor="edit-person-department" style={styles.modalLabel}>Department</label>
+                <div>
+                  <label
+                    htmlFor="edit-person-department"
+                    className="block text-xs font-semibold text-gray-700 mb-1.5"
+                  >
+                    Department
+                  </label>
                   <select
                     id="edit-person-department"
                     name="edit-person-department"
                     value={editPerson.department || ""}
                     onChange={(e) =>
-                      setEditPerson({ ...editPerson, department: e.target.value })
+                      setEditPerson({
+                        ...editPerson,
+                        department: e.target.value,
+                      })
                     }
-                    style={styles.modalSelect}
+                    className="w-full p-2.5 text-sm rounded-xl border border-gray-200 bg-white text-gray-900 outline-none focus:border-[#237227] focus:ring-0 transition-colors cursor-pointer"
                   >
                     <option value="">(Select department)</option>
                     {departments && departments.length
@@ -1275,8 +1381,13 @@ export default function PersonsTable() {
                   </select>
                 </div>
 
-                <div style={styles.modalField}>
-                  <label htmlFor="edit-person-phone" style={styles.modalLabel}>Phone</label>
+                <div>
+                  <label
+                    htmlFor="edit-person-phone"
+                    className="block text-xs font-semibold text-gray-700 mb-1.5"
+                  >
+                    Phone
+                  </label>
                   <input
                     id="edit-person-phone"
                     name="edit-person-phone"
@@ -1287,11 +1398,16 @@ export default function PersonsTable() {
                         phone_number: e.target.value,
                       })
                     }
-                    style={styles.modalInput}
+                    className="w-full p-2.5 text-sm rounded-xl border border-gray-200 bg-white text-gray-900 outline-none focus:border-[#237227] focus:ring-0 transition-colors"
                   />
                 </div>
-                <div style={styles.modalField}>
-                  <label htmlFor="edit-person-email" style={styles.modalLabel}>Email</label>
+                <div>
+                  <label
+                    htmlFor="edit-person-email"
+                    className="block text-xs font-semibold text-gray-700 mb-1.5"
+                  >
+                    Email
+                  </label>
                   <input
                     id="edit-person-email"
                     name="edit-person-email"
@@ -1299,12 +1415,17 @@ export default function PersonsTable() {
                     onChange={(e) =>
                       setEditPerson({ ...editPerson, email: e.target.value })
                     }
-                    style={styles.modalInput}
+                    className="w-full p-2.5 text-sm rounded-xl border border-gray-200 bg-white text-gray-900 outline-none focus:border-[#237227] focus:ring-0 transition-colors"
                   />
                 </div>
 
-                <div style={styles.modalField}>
-                  <label htmlFor="edit-person-address" style={styles.modalLabel}>Address</label>
+                <div>
+                  <label
+                    htmlFor="edit-person-address"
+                    className="block text-xs font-semibold text-gray-700 mb-1.5"
+                  >
+                    Address
+                  </label>
                   <input
                     id="edit-person-address"
                     name="edit-person-address"
@@ -1312,11 +1433,16 @@ export default function PersonsTable() {
                     onChange={(e) =>
                       setEditPerson({ ...editPerson, address: e.target.value })
                     }
-                    style={styles.modalInput}
+                    className="w-full p-2.5 text-sm rounded-xl border border-gray-200 bg-white text-gray-900 outline-none focus:border-[#237227] focus:ring-0 transition-colors"
                   />
                 </div>
-                <div style={styles.modalField}>
-                  <label htmlFor="edit-person-sex" style={styles.modalLabel}>Sex</label>
+                <div>
+                  <label
+                    htmlFor="edit-person-sex"
+                    className="block text-xs font-semibold text-gray-700 mb-1.5"
+                  >
+                    Sex
+                  </label>
                   <select
                     id="edit-person-sex"
                     name="edit-person-sex"
@@ -1324,7 +1450,7 @@ export default function PersonsTable() {
                     onChange={(e) =>
                       setEditPerson({ ...editPerson, sex: e.target.value })
                     }
-                    style={styles.modalSelect}
+                    className="w-full p-2.5 text-sm rounded-xl border border-gray-200 bg-white text-gray-900 outline-none focus:border-[#237227] focus:ring-0 transition-colors cursor-pointer"
                   >
                     <option value="">Select sex</option>
                     <option value="Male">Male</option>
@@ -1333,66 +1459,86 @@ export default function PersonsTable() {
                   </select>
                 </div>
 
-                <div style={{ gridColumn: "1 / -1" }}>
-                <label style={styles.modalLabel}>Mandatory Contributions</label>
-                  <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
-                    <div style={{ minWidth: 200 }}>
-                      <label htmlFor="edit-person-sss" style={{ display: 'block', fontSize: 12, color: '#374151', marginBottom: 6 }}>SSS Number</label>
+                {/* Mandatory Contributions */}
+                <div className="col-span-1 sm:col-span-2">
+                  <label className="block text-xs font-semibold text-gray-700 mb-2">
+                    Mandatory Contributions
+                  </label>
+                  <div className="flex gap-3 items-center flex-wrap">
+                    <div className="min-w-[200px] flex-1">
+                      <label
+                        htmlFor="edit-person-sss"
+                        className="block text-xs text-gray-700 mb-1.5"
+                      >
+                        SSS Number
+                      </label>
                       <input
                         id="edit-person-sss"
                         name="edit-person-sss"
                         type="text"
                         placeholder="e.g. 12-3456789-0"
-                        value={editPerson.sss ?? ''}
+                        value={editPerson.sss ?? ""}
                         onChange={(e) =>
                           setEditPerson({ ...editPerson, sss: e.target.value })
                         }
-                        style={styles.modalInput}
+                        className="w-full p-2.5 text-sm rounded-xl border border-gray-200 bg-white text-gray-900 outline-none focus:border-[#237227] focus:ring-0 transition-colors"
                       />
                     </div>
 
-                    <div style={{ minWidth: 200 }}>
-                      <label htmlFor="edit-person-pag-ibig" style={{ display: 'block', fontSize: 12, color: '#374151', marginBottom: 6 }}>Pag-ibig Number</label>
+                    <div className="min-w-[200px] flex-1">
+                      <label
+                        htmlFor="edit-person-pag-ibig"
+                        className="block text-xs text-gray-700 mb-1.5"
+                      >
+                        Pag-ibig Number
+                      </label>
                       <input
                         id="edit-person-pag-ibig"
                         name="edit-person-pag-ibig"
                         type="text"
                         placeholder="e.g. 0000-0000-0000"
-                        value={editPerson.pag_ibig ?? ''}
+                        value={editPerson.pag_ibig ?? ""}
                         onChange={(e) =>
-                          setEditPerson({ ...editPerson, pag_ibig: e.target.value })
+                          setEditPerson({
+                            ...editPerson,
+                            pag_ibig: e.target.value,
+                          })
                         }
-                        style={styles.modalInput}
+                        className="w-full p-2.5 text-sm rounded-xl border border-gray-200 bg-white text-gray-900 outline-none focus:border-[#237227] focus:ring-0 transition-colors"
                       />
                     </div>
 
-                    <div style={{ minWidth: 200 }}>
-                      <label htmlFor="edit-person-philhealth" style={{ display: 'block', fontSize: 12, color: '#374151', marginBottom: 6 }}>PhilHealth Number</label>
+                    <div className="min-w-[200px] flex-1">
+                      <label
+                        htmlFor="edit-person-philhealth"
+                        className="block text-xs text-gray-700 mb-1.5"
+                      >
+                        PhilHealth Number
+                      </label>
                       <input
                         id="edit-person-philhealth"
                         name="edit-person-philhealth"
                         type="text"
                         placeholder="e.g. 123456789012"
-                        value={editPerson.philhealth ?? ''}
+                        value={editPerson.philhealth ?? ""}
                         onChange={(e) =>
-                          setEditPerson({ ...editPerson, philhealth: e.target.value })
+                          setEditPerson({
+                            ...editPerson,
+                            philhealth: e.target.value,
+                          })
                         }
-                        style={styles.modalInput}
+                        className="w-full p-2.5 text-sm rounded-xl border border-gray-200 bg-white text-gray-900 outline-none focus:border-[#237227] focus:ring-0 transition-colors"
                       />
                     </div>
                   </div>
                 </div>
 
-                <div style={{ gridColumn: "1 / -1" }}>
-                  <label style={styles.modalLabel}>Add Cash Advance</label>
-                  <div
-                    style={{
-                      display: "flex",
-                      gap: 8,
-                      alignItems: "center",
-                      flexWrap: "wrap",
-                    }}
-                  >
+                {/* Add Cash Advance */}
+                <div className="col-span-1 sm:col-span-2">
+                  <label className="block text-xs font-semibold text-gray-700 mb-2">
+                    Add Cash Advance
+                  </label>
+                  <div className="flex gap-2 items-center flex-wrap">
                     <input
                       id="cash-advance-amount"
                       name="cash-advance-amount"
@@ -1400,7 +1546,7 @@ export default function PersonsTable() {
                       placeholder="Amount"
                       value={newCashAmount}
                       onChange={(e) => setNewCashAmount(e.target.value)}
-                      style={{ ...styles.modalInput, maxWidth: 160 }}
+                      className="p-2.5 text-sm rounded-xl border border-gray-200 bg-white text-gray-900 outline-none focus:border-[#237227] focus:ring-0 transition-colors max-w-[160px]"
                     />
                     <input
                       id="cash-advance-note"
@@ -1408,65 +1554,42 @@ export default function PersonsTable() {
                       placeholder="Note (optional)"
                       value={newCashNote}
                       onChange={(e) => setNewCashNote(e.target.value)}
-                      style={{ ...styles.modalInput, flex: 1 }}
+                      className="p-2.5 text-sm rounded-xl border border-gray-200 bg-white text-gray-900 outline-none focus:border-[#237227] focus:ring-0 transition-colors flex-1"
                     />
                     <button
                       type="button"
                       onClick={addCashAdvance}
                       disabled={actionLoading}
-                      style={{
-                        ...styles.button,
-                        ...styles.buttonPrimary,
-                        padding: "8px 12px",
-                      }}
+                      className="inline-flex items-center justify-center gap-1.5 py-2.5 px-4 rounded-xl text-sm font-semibold border-none cursor-pointer transition-colors bg-[#237227] text-white shadow-sm focus:outline-none"
                     >
-                     {Icons.circle}{actionLoading ? "Working..." : "Add"}
+                      <FiPlusCircle className="mr-1 text-white text-base" />
+                      {actionLoading ? "Working..." : "Add"}
                     </button>
                   </div>
                 </div>
 
-                <div style={{ gridColumn: "1 / -1", marginTop: 6 }}>
-                  <label style={styles.modalLabel}>Cash Advance History</label>
+                {/* Cash Advance History */}
+                <div className="col-span-1 sm:col-span-2 mt-1.5">
+                  <label className="block text-xs font-semibold text-gray-700 mb-1.5">
+                    Cash Advance History
+                  </label>
                   {loadingCashAdvances ? (
-                    <div style={{ color: "#6b7280" }}>Loading...</div>
+                    <div className="text-gray-500 text-xs">Loading...</div>
                   ) : editCashAdvances && editCashAdvances.length ? (
-                    <div
-                      style={{
-                        maxHeight: 140,
-                        overflow: "auto",
-                        border: "1px solid #e6eef6",
-                        borderRadius: 8,
-                        padding: 6,
-                      }}
-                    >
+                    <div className="max-h-36 overflow-auto border border-gray-200 rounded-xl p-2 bg-gray-50/50">
                       {editCashAdvances.map((c) => (
                         <div
                           key={c.id}
-                          style={{
-                            display: "flex",
-                            justifyContent: "space-between",
-                            alignItems: "center",
-                            padding: "6px 8px",
-                            borderBottom: "1px solid #f1f5f9",
-                          }}
+                          className="flex justify-between items-center py-2 px-2.5 border-b border-gray-100 last:border-none"
                         >
-                          <div style={{ color: "#374151", fontSize: 13 }}>
+                          <div className="text-gray-700 text-xs">
                             {new Date(c.created_at).toLocaleString()}
                           </div>
-                          <div
-                            style={{
-                              textAlign: "right",
-                              display: "flex",
-                              gap: 12,
-                              alignItems: "center",
-                            }}
-                          >
+                          <div className="text-right flex gap-3 items-center">
                             <div>
-                              <div
-                                style={{ fontWeight: 700, color: "#0f172a" }}
-                              >{`₱${Number(c.amount || 0).toFixed(2)}`}</div>
+                              <div className="font-bold text-gray-900 text-xs">{`₱${Number(c.amount || 0).toFixed(2)}`}</div>
                               {c.note ? (
-                                <div style={{ fontSize: 12, color: "#9ca3af" }}>
+                                <div className="text-[11px] text-gray-400">
                                   {c.note}
                                 </div>
                               ) : null}
@@ -1475,10 +1598,7 @@ export default function PersonsTable() {
                               <button
                                 type="button"
                                 onClick={() => deleteCashAdvance(c.id)}
-                                style={{
-                                  ...styles.smallButton,
-                                  ...styles.buttonSecondary,
-                                }}
+                                className="py-1 px-3 rounded-lg text-xs font-semibold border border-red-200 bg-white text-red-600 transition-colors cursor-pointer"
                                 disabled={actionLoading}
                               >
                                 Delete
@@ -1489,25 +1609,28 @@ export default function PersonsTable() {
                       ))}
                     </div>
                   ) : (
-                    <div style={{ color: "#9ca3af" }}>
+                    <div className="text-gray-400 text-xs">
                       No cash advance history
                     </div>
                   )}
                 </div>
               </div>
-              <div style={styles.modalActions}>
-                <button
-                  type="submit"
-                  style={{ ...styles.button, ...styles.buttonPrimary }}
-                >
-                  Save
-                </button>
+
+              {/* Modal Actions */}
+              <div className="flex gap-2.5 justify-end mt-6">
                 <button
                   type="button"
                   onClick={handleEditModalClose}
-                  style={{ ...styles.button, ...styles.buttonSecondary }}
+                  className="py-2.5 px-6 rounded-xl text-sm font-semibold border border-gray-300 bg-white text-gray-700 transition-colors cursor-pointer focus:outline-none"
                 >
                   Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={actionLoading}
+                  className="py-2.5 px-7 rounded-xl text-sm font-semibold border-none bg-[#237227] text-white transition-colors cursor-pointer focus:outline-none shadow-sm"
+                >
+                  {actionLoading ? "Saving..." : "Save"}
                 </button>
               </div>
             </form>
@@ -1517,80 +1640,178 @@ export default function PersonsTable() {
 
       {/* Admin Attendance Modal */}
       {adminModal.visible && adminModal.person && (
-        <div style={styles.modalOverlay}>
-          <div style={styles.modalContent}>
-            <h2 style={styles.modalTitle}>Record Attendance</h2>
-            <div style={{ display: "grid", gap: 12 }}>
-              <div>
-                <label style={styles.modalLabel}>Person</label>
-                <div style={{ padding: 8, background: "#f9fafb", borderRadius: 8 }}>{adminModal.person.name} • ID: {adminModal.person.id}</div>
+        <div className="fixed inset-0 z-[1000] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
+          <div className="bg-white text-gray-800 p-7 rounded-3xl max-w-[680px] w-full max-h-[90vh] overflow-y-auto shadow-2xl border border-gray-200 font-sans">
+            <h2 className="text-2xl font-bold mb-4 text-[#0f3d16] text-center">
+              Record Attendance
+            </h2>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              {/* Row 1: Person (Full Width) */}
+              <div className="col-span-1 sm:col-span-2">
+                <label className="block text-xs font-semibold text-gray-700 mb-1.5">
+                  Person
+                </label>
+                <div className="py-2.5 px-3.5 bg-gray-50 rounded-xl border border-gray-200 text-sm text-gray-800 font-medium">
+                  {adminModal.person.name} • ID: {adminModal.person.id}
+                </div>
               </div>
+
+              {/* Row 2: Event and Date & Time */}
               <div>
-                <label htmlFor="admin-attendance-event" style={styles.modalLabel}>Event</label>
-                <select id="admin-attendance-event" name="admin-attendance-event" value={adminModal.event} onChange={(e) => setAdminModal((s) => ({ ...s, event: e.target.value }))} style={styles.modalSelect}>
+                <label
+                  htmlFor="admin-attendance-event"
+                  className="block text-xs font-semibold text-gray-700 mb-1.5"
+                >
+                  Event
+                </label>
+                <select
+                  id="admin-attendance-event"
+                  name="admin-attendance-event"
+                  value={adminModal.event}
+                  onChange={(e) =>
+                    setAdminModal((s) => ({ ...s, event: e.target.value }))
+                  }
+                  className="w-full py-2.5 px-3.5 rounded-xl border border-gray-200 bg-white text-gray-900 outline-none focus:border-[#237227] focus:ring-0 text-sm cursor-pointer"
+                >
                   <option value="time-in">Time In</option>
                   <option value="time-out">Time Out</option>
                 </select>
               </div>
               <div>
-                <label htmlFor="admin-attendance-datetime" style={styles.modalLabel}>Date & time</label>
-                <input id="admin-attendance-datetime" name="admin-attendance-datetime" type="datetime-local" value={adminModal.datetime} onChange={(e) => setAdminModal((s) => ({ ...s, datetime: e.target.value }))} style={styles.modalInput} />
+                <label
+                  htmlFor="admin-attendance-datetime"
+                  className="block text-xs font-semibold text-gray-700 mb-1.5"
+                >
+                  Date & time
+                </label>
+                <input
+                  id="admin-attendance-datetime"
+                  name="admin-attendance-datetime"
+                  type="datetime-local"
+                  value={adminModal.datetime}
+                  onChange={(e) =>
+                    setAdminModal((s) => ({ ...s, datetime: e.target.value }))
+                  }
+                  className="w-full py-2.5 px-3.5 rounded-xl border border-gray-200 bg-white text-gray-900 outline-none focus:border-[#237227] focus:ring-0 text-sm"
+                />
               </div>
-              <div>
-                <label style={styles.modalLabel}>Location</label>
-                <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                  <div style={{ flex: 1, padding: 8, background: '#f9fafb', borderRadius: 8, minHeight: 40 }}>{adminModal.point ? adminModal.point : <span style={{ color: '#9ca3af' }}>—</span>}</div>
+
+              {/* Row 3: Location (Full Width) */}
+              <div className="col-span-1 sm:col-span-2">
+                <label className="block text-xs font-semibold text-gray-700 mb-1.5">
+                  Location
+                </label>
+                <div className="flex gap-2 items-center">
+                  <div
+                    className="flex-1 py-2.5 px-3.5 bg-gray-50 rounded-xl border border-gray-200 min-h-[42px] text-xs text-gray-800 overflow-hidden text-ellipsis whitespace-nowrap"
+                    title={adminModal.point || ""}
+                  >
+                    {adminModal.point ? (
+                      adminModal.point
+                    ) : (
+                      <span className="text-gray-400">—</span>
+                    )}
+                  </div>
                   <button
+                    type="button"
                     onClick={async () => {
                       try {
                         setLocLoading(true);
                         const locationResult = await getCurrentLocationPoint();
-                        setAdminModal((s) => ({ ...s, point: locationResult.point, locationStatus: locationResult.status, locationMessage: locationResult.message }));
+                        setAdminModal((s) => ({
+                          ...s,
+                          point: locationResult.point,
+                          locationStatus: locationResult.status,
+                          locationMessage: locationResult.message,
+                        }));
                       } catch (e) {
-                        setAdminModal((s) => ({ ...s, point: null, locationStatus: "unavailable", locationMessage: "Location could not be determined on this device." }));
+                        setAdminModal((s) => ({
+                          ...s,
+                          point: null,
+                          locationStatus: "unavailable",
+                          locationMessage:
+                            "Location could not be determined on this device.",
+                        }));
                       } finally {
                         setLocLoading(false);
                       }
                     }}
-                    style={{ padding: '8px 12px', borderRadius: 6, border: '1px solid #e5e7eb', background: '#fff', cursor: 'pointer' }}
+                    className="py-2.5 px-4 rounded-xl border border-gray-300 bg-white cursor-pointer font-semibold text-xs text-gray-700 whitespace-nowrap"
                     disabled={locLoading}
                   >
-                    {locLoading ? 'Refreshing...' : 'Refresh'}
+                    {locLoading ? "..." : "Refresh"}
                   </button>
                 </div>
-                {adminModal.locationMessage && adminModal.locationStatus && adminModal.locationStatus !== "ok" && (
-                  <div style={{ marginTop: 6, color: '#b45309', fontSize: 12, lineHeight: 1.4 }}>
-                    {adminModal.locationMessage}
-                  </div>
-                )}
+                {adminModal.locationMessage &&
+                  adminModal.locationStatus &&
+                  adminModal.locationStatus !== "ok" && (
+                    <div className="mt-1.5 text-amber-700 text-xs leading-relaxed">
+                      {adminModal.locationMessage}
+                    </div>
+                  )}
               </div>
-              {/* <div>
-                <label style={styles.modalLabel}>Registered Photo</label>
-                <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                  {adminModal.photo && <img src={adminModal.photo} alt="preview" style={{ width: 80, height: 80, objectFit: "cover", borderRadius: 8 }} />}
-                </div>
-              </div> */}
-              <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
-                <button onClick={() => setAdminModal({ visible: false, person: null, event: "time-in", datetime: "", photo: null, note: "", point: null })} style={{ ...styles.button, ...styles.buttonSecondary }}>Cancel</button>
-                <button onClick={submitAdminAttendance} style={{ ...styles.button, ...styles.buttonPrimary }}>{actionLoading ? "Recording..." : "Record"}</button>
-              </div>
+            </div>
+
+            {/* Modal Actions */}
+            <div className="flex gap-2.5 justify-end mt-6">
+              <button
+                onClick={() =>
+                  setAdminModal({
+                    visible: false,
+                    person: null,
+                    event: "time-in",
+                    datetime: "",
+                    photo: null,
+                    note: "",
+                    point: null,
+                  })
+                }
+                className="py-2.5 px-6 rounded-xl text-sm font-semibold border border-gray-300 bg-white text-gray-700 transition-colors cursor-pointer focus:outline-none"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={submitAdminAttendance}
+                disabled={actionLoading}
+                className="py-2.5 px-7 rounded-xl text-sm font-semibold border-none bg-[#237227] text-white transition-colors cursor-pointer focus:outline-none shadow-sm"
+              >
+                {actionLoading ? "Recording..." : "Record"}
+              </button>
             </div>
           </div>
         </div>
       )}
+
       {/* Photo modal for Registered Persons */}
       {photoModal.visible && (
         <div
           onClick={() => closePhotoModal()}
-          style={{ position: 'fixed', left: 0, top: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.6)', zIndex: 10000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}
+          className="fixed inset-0 bg-black/60 z-[10000] flex items-center justify-center p-5 backdrop-blur-sm"
         >
-          <div onClick={(e) => e.stopPropagation()} style={{ maxWidth: '90%', maxHeight: '90%', borderRadius: 8, overflow: 'hidden', background: '#fff', padding: 12, boxShadow: '0 12px 40px rgba(2,6,23,0.4)' }}>
-            <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-              <button onClick={() => closePhotoModal()} aria-label="Close photo" style={{ background: 'transparent', border: 'none', color: '#0f172a', fontSize: 22, cursor: 'pointer' }}>×</button>
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="max-w-[90%] max-h-[90%] rounded-2xl overflow-hidden bg-white p-3.5 shadow-2xl border border-gray-200"
+          >
+            <div className="flex justify-end">
+              <button
+                onClick={() => closePhotoModal()}
+                aria-label="Close photo"
+                className="bg-transparent border-none text-gray-700 hover:text-gray-900 text-2xl cursor-pointer"
+              >
+                ×
+              </button>
             </div>
-            <div style={{ textAlign: 'center' }}>
-              <img src={photoModal.src} alt={photoModal.title} style={{ maxWidth: '100%', maxHeight: '80vh', display: 'block', margin: '0 auto' }} />
-              {photoModal.title && <div style={{ marginTop: 8, color: '#0f172a' }}>{photoModal.title}</div>}
+            <div className="text-center">
+              <img
+                src={photoModal.src}
+                alt={photoModal.title}
+                className="max-w-full max-h-[80vh] block mx-auto rounded-lg object-contain"
+              />
+              {photoModal.title && (
+                <div className="mt-2 text-gray-800 font-semibold text-sm">
+                  {photoModal.title}
+                </div>
+              )}
             </div>
           </div>
         </div>
@@ -1598,600 +1819,3 @@ export default function PersonsTable() {
     </div>
   );
 }
-
-// Light theme styles with green accent
-const styles = {
-  container: {
-    margin: "0 auto",
-    padding: "36px 28px",
-    maxWidth: "100%",
-    background: "#ffffff",
-    minHeight: "100vh",
-    color: "#1f2937",
-    fontFamily:
-      '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif',
-  },
-  header: {
-    marginBottom: "24px",
-    display: "flex",
-    flexDirection: "column",
-    alignItems: "flex-start",
-    gap: "6px",
-  },
-  title: {
-    fontSize: "2.5rem",
-    fontWeight: 800,
-    margin: 0,
-    letterSpacing: "-0.02em",
-    display: "inline-block",
-  },
-  titleBlack: {
-    color: "#2c382d",
-  },
-  titlePrimary: {
-    color: "#237227",
-  },
-  filterBar: {
-    display: "flex",
-    flexWrap: "nowrap",
-    justifyContent: "space-between",
-    alignItems: "flex-end",
-    gap: "14px",
-    marginBottom: "20px",
-    padding: "12px 16px",
-    backgroundColor: "#ffffff",
-    borderRadius: "12px",
-    border: "1px solid #edf2ee",
-    boxShadow: "0 1px 4px rgba(0, 0, 0, 0.04)",
-    overflowX: "auto",
-  },
-  filterGroup: {
-    display: "flex",
-    flexWrap: "nowrap",
-    gap: "10px",
-    alignItems: "flex-end",
-  },
-  searchWrapper: {
-    position: "relative",
-  },
-  searchInput: {
-    padding: "8px 14px 8px 34px",
-    fontSize: "0.85rem",
-    borderRadius: "6px",
-    border: "1px solid #d1d5db",
-    backgroundColor: "#ffffff",
-    color: "#1f2937",
-    outline: "none",
-    transition: "border-color 0.2s, box-shadow 0.2s",
-    backgroundImage: `url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="%236b7280" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>')`,
-    backgroundRepeat: "no-repeat",
-    backgroundPosition: "10px center",
-    backgroundSize: "14px",
-    minWidth: "180px",
-  },
-  select: {
-    padding: "8px 12px",
-    fontSize: "0.85rem",
-    borderRadius: "6px",
-    border: "1px solid #d1d5db",
-    backgroundColor: "#ffffff",
-    color: "#1f2937",
-    outline: "none",
-    cursor: "pointer",
-    minWidth: "130px",
-  },
-  actionButtons: {
-    display: "flex",
-    gap: "10px",
-    flexWrap: "nowrap",
-    alignItems: "center",
-  },
-  button: {
-    display: "inline-flex",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: "6px",
-    padding: "8px 16px",
-    borderRadius: "6px",
-    fontSize: "0.85rem",
-    fontWeight: 600,
-    border: "none",
-    cursor: "pointer",
-    transition: "opacity 0.18s, transform 0.12s",
-    letterSpacing: "0.01em",
-    whiteSpace: "nowrap",
-  },
-  buttonPrimary: {
-    background: "#237227",
-    color: "#ffffff",
-    boxShadow: "0 1px 4px rgba(35, 114, 39, 0.2)",
-  },
-  buttonSecondary: {
-    background: "#ffffff",
-    color: "#237227",
-    border: "1px solid #237227",
-    boxShadow: "0 1px 2px rgba(0,0,0,0.03)",
-  },
-  buttonSuccess: {
-    background: "#237227",
-    color: "#ffffff",
-  },
-  smallButton: {
-    padding: "6px 14px",
-    borderRadius: "6px",
-    border: "none",
-    fontSize: "0.85rem",
-    fontWeight: 600,
-    cursor: "pointer",
-    transition: "all 0.2s",
-    display: "inline-flex",
-    alignItems: "center",
-    gap: "6px",
-  },
-  tableContainer: {
-    borderRadius: "16px",
-    overflow: "hidden",
-    backgroundColor: "#ffffff",
-    boxShadow: "0 2px 14px rgba(44, 56, 45, 0.06)",
-    border: "none",
-  },
-  tableWrapper: {
-    overflowX: "auto",
-    maxHeight: "600px",
-  },
-  table: {
-    width: "100%",
-    borderCollapse: "collapse",
-    fontSize: "0.95rem",
-    minWidth: "1200px",
-  },
-  th: {
-    position: "sticky",
-    top: 0,
-    zIndex: 10,
-    backgroundColor: "#ffffff",
-    color: "#000000",
-    fontWeight: 700,
-    padding: "14px 14px",
-    textAlign: "left",
-    borderBottom: "2px solid #e5e7eb",
-    letterSpacing: "0.05em",
-    textTransform: "uppercase",
-    fontSize: "0.75rem",
-    whiteSpace: "nowrap",
-  },
-  td: {
-    padding: "14px 12px",
-    borderBottom: "1px solid #e5e7eb",
-    color: "#1f2937",
-  },
-  tr: {
-    transition: "background 0.2s",
-  },
-  photo: {
-    width: "48px",
-    height: "48px",
-    objectFit: "cover",
-    borderRadius: "8px",
-    border: "1px solid #e5e7eb",
-  },
-  photoPreview: {
-    width: "88px",
-    height: "88px",
-    objectFit: "cover",
-    borderRadius: "12px",
-    border: "2px solid rgba(34,197,94,0.12)",
-    boxShadow: "0 6px 18px rgba(16,185,129,0.08)",
-  },
-  actionCell: {
-    display: "flex",
-    gap: "8px",
-    flexWrap: "wrap",
-  },
-  cardsGrid: {
-    display: "grid",
-    gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))",
-    gap: "20px",
-    alignItems: "stretch",
-  },
-  card: {
-    background: "#ffffff",
-    borderRadius: "12px",
-    border: "1px solid #e5e7eb",
-    padding: "20px",
-    display: "flex",
-    flexDirection: "column",
-    justifyContent: "space-between",
-    boxShadow: "0 8px 20px rgba(16,185,129,0.05)",
-  },
-  cardHeader: {
-    display: "flex",
-    justifyContent: "space-between",
-    alignItems: "center",
-    marginBottom: "12px",
-  },
-  cardAvatarWrapper: {
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    width: "84px",
-    height: "84px",
-    marginRight: "12px",
-  },
-  cardAvatar: {
-    width: "84px",
-    height: "84px",
-    borderRadius: "50%",
-    objectFit: "cover",
-    border: "4px solid #fff",
-    boxShadow: "0 4px 12px rgba(0,0,0,0.08)",
-  },
-  cardAvatarPlaceholder: {
-    width: "84px",
-    height: "84px",
-    borderRadius: "50%",
-    background: "linear-gradient(135deg,#3b82f6,#06b6d4)",
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    color: "#fff",
-    fontWeight: 700,
-    fontSize: "1.2rem",
-  },
-  cardStatus: {
-    marginLeft: "auto",
-  },
-  badgePresent: {
-    background: "#237227",
-    color: "#fff",
-    padding: "6px 10px",
-    borderRadius: "20px",
-    fontSize: "0.8rem",
-    fontWeight: 600,
-  },
-  badgeAbsent: {
-    background: "#ef4444",
-    color: "#fff",
-    padding: "6px 10px",
-    borderRadius: "20px",
-    fontSize: "0.8rem",
-    fontWeight: 600,
-  },
-  badgeActive: {
-    background: "#237227",
-    color: "#fff",
-    padding: "6px 10px",
-    borderRadius: "20px",
-    fontSize: "0.8rem",
-    fontWeight: 600,
-  },
-  badgeArchived: {
-    background: "#ef4444",
-    color: "#fff",
-    padding: "6px 10px",
-    borderRadius: "20px",
-    fontSize: "0.8rem",
-    fontWeight: 600,
-  },
-  cardBody: {
-    paddingTop: "6px",
-    paddingBottom: "12px",
-  },
-  cardName: {
-    margin: 0,
-    fontSize: "1.05rem",
-    fontWeight: 700,
-    color: "#111827",
-  },
-  cardId: {
-    display: "inline-block",
-    marginTop: "6px",
-    padding: "6px 10px",
-    borderRadius: "12px",
-    background: "#e5e7eb",
-    color: "#374151",
-    fontSize: "0.8rem",
-    fontFamily: "monospace",
-  },
-  cardInfoRow: {
-    marginTop: "10px",
-    color: "#6b7280",
-    fontSize: "0.95rem",
-  },
-  iconAndText: {
-    display: "inline-flex",
-    alignItems: "center",
-    gap: "8px",
-    color: "#374151",
-    flexWrap: "wrap",
-  },
-  deptIcon: {
-    color: "#06b6d4",
-    fontSize: "1.05rem",
-  },
-  phoneRow: {
-    display: "flex",
-    justifyContent: "space-between",
-    alignItems: "center",
-    marginTop: "8px",
-  },
-  phoneIcon: {
-    color: "#3b82f6",
-    fontSize: "1rem",
-  },
-  emailIcon: {
-    color: "#6b7280",
-    fontSize: "1rem",
-    marginRight: 6,
-    marginTop: 2,
-  },
-  contactText: {
-    maxWidth: "220px",
-    overflowWrap: "anywhere",
-    wordBreak: "break-word",
-    color: "#374151",
-    display: "inline-block",
-  },
-  netPayRow: {
-    display: "flex",
-    justifyContent: "space-between",
-    alignItems: "center",
-    marginTop: "8px",
-  },
-  iconAndTexts: {
-    display: "inline-flex",
-    alignItems: "center",
-    gap: "8px",
-    fontWeight: 700,
-    color: "#237227",
-  },
-  cardActions: {
-    display: "flex",
-    gap: "8px",
-    marginTop: "12px",
-    justifyContent: "flex-start",
-  },
-  emptyState: {
-    textAlign: "center",
-    padding: "60px 20px",
-    color: "#6b7280",
-    fontSize: "1.1rem",
-  },
-  paginationContainer: {
-    display: "flex",
-    justifyContent: "space-between",
-    alignItems: "center",
-    padding: "16px 20px",
-    backgroundColor: "#ffffff",
-    borderTop: "1px solid #edf2ee",
-    borderBottomLeftRadius: "12px",
-    borderBottomRightRadius: "12px",
-  },
-  paginationText: {
-    color: "#6b7280",
-    fontSize: "0.875rem",
-  },
-  paginationControls: {
-    display: "flex",
-    gap: "6px",
-    alignItems: "center",
-  },
-  pageButton: {
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    minWidth: "32px",
-    height: "32px",
-    padding: "0 6px",
-    borderRadius: "8px",
-    border: "1px solid #d1d5db",
-    backgroundColor: "#ffffff",
-    color: "#6b7280",
-    fontSize: "0.85rem",
-    fontWeight: 600,
-    cursor: "pointer",
-    transition: "all 0.2s",
-  },
-  pageButtonActive: {
-    backgroundColor: "#237227",
-    color: "#ffffff",
-    border: "1px solid #237227",
-  },
-  pageButtonDisabled: {
-    opacity: 0.4,
-    cursor: "not-allowed",
-  },
-  error: {
-    color: "#ef4444",
-    textAlign: "center",
-    padding: "40px",
-    background: "#ffffff",
-    borderRadius: "32px",
-    margin: "40px auto",
-    maxWidth: "800px",
-  },
-  spinnerContainer: {
-    display: "flex",
-    justifyContent: "center",
-    alignItems: "center",
-    minHeight: "300px",
-    background: "#ffffff",
-  },
-  spinner: {
-    width: "50px",
-    height: "50px",
-    border: "4px solid #e5e7eb",
-    borderTop: "4px solid #237227",
-    borderRadius: "50%",
-    animation: "spin 1s linear infinite",
-  },
-  modalOverlay: {
-    position: "fixed",
-    top: 0,
-    left: 0,
-    width: "100%",
-    height: "100%",
-    background: "rgba(0, 0, 0, 0.5)",
-    display: "flex",
-    justifyContent: "center",
-    alignItems: "center",
-    zIndex: 1000,
-    backdropFilter: "blur(4px)",
-  },
-  modalContent: {
-    background: "#fff",
-    color: "#1f2937",
-    padding: "28px",
-    borderRadius: "28px",
-    maxWidth: "900px",
-    width: "95%",
-    overflowY: "auto",
-    maxHeight: "90%",
-    boxShadow: "0 20px 40px rgba(0,0,0,0.2)",
-    border: "1px solid #e5e7eb",
-    fontFamily:
-      '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif',
-  },
-  modalClose: {
-    position: "absolute",
-    top: "14px",
-    right: "14px",
-    background: "#fff",
-    border: "none",
-    color: "#6b7280",
-    fontSize: "1.1rem",
-    cursor: "pointer",
-    lineHeight: 1,
-    width: 40,
-    height: 40,
-    borderRadius: "50%",
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    boxShadow: "0 6px 18px rgba(15,23,42,0.06)",
-  },
-  modalTitle: {
-    fontSize: "2rem",
-    fontWeight: 700,
-    marginBottom: "16px",
-    color: "#0f3d16",
-    textAlign: "center",
-  },
-  modalTitleIcon: {
-    color: "#237227",
-    marginRight: 8,
-    verticalAlign: "middle",
-    fontSize: "1.25rem",
-  },
-  modalField: {
-    marginBottom: "18px",
-    display: "block",
-  },
-  modalLabel: {
-    display: "block",
-    fontSize: "0.85rem",
-    fontWeight: 600,
-    color: "#374151",
-    marginBottom: "8px",
-  },
-  modalInput: {
-    width: "100%",
-    padding: "12px 14px",
-    fontSize: "1rem",
-    borderRadius: "12px",
-    border: "1px solid #e6eef6",
-    background: "#ffffff",
-    color: "#0f172a",
-    outline: "none",
-    transition: "border-color 0.12s, box-shadow 0.12s",
-    boxSizing: "border-box",
-    boxShadow: "inset 0 1px 2px rgba(15,23,42,0.03)",
-  },
-  modalSelect: {
-    width: "100%",
-    padding: "12px 14px",
-    fontSize: "1rem",
-    borderRadius: "12px",
-    border: "1px solid #e6eef6",
-    background: "#ffffff",
-    color: "#0f172a",
-    outline: "none",
-  },
-  modalCheckboxGroup: {
-    display: "flex",
-    gap: "20px",
-    flexWrap: "wrap",
-  },
-  modalCheckbox: {
-    display: "flex",
-    alignItems: "center",
-    gap: "8px",
-    color: "#374151",
-  },
-  modalActions: {
-    display: "flex",
-    justifyContent: "flex-end",
-    gap: "12px",
-    marginTop: "20px",
-  },
-  modalGrid: {
-    display: "grid",
-    gridTemplateColumns: "1fr 1fr",
-    gap: 12,
-    alignItems: "start",
-  },
-};
-
-// Add global keyframes and focus styles
-const styleSheet = document.createElement("style");
-styleSheet.textContent = `
-  @keyframes spin {
-    0% { transform: rotate(0deg); }
-    100% { transform: rotate(360deg); }
-  }
-  input:focus, select:focus, button:focus {
-    border-color: #237227 !important;
-    box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.2) !important;
-    outline: none;
-  }
-  button:hover:not(:disabled) {
-    transform: translateY(-2px);
-    box-shadow: 0 8px 20px rgba(0, 0, 0, 0.15);
-  }
-  /* SweetAlert2 light theme overrides */
-  .swal-light-popup {
-    background: #ffffff !important;
-    color: #1f2937 !important;
-    border-radius: 28px !important;
-    border: 1px solid #e5e7eb !important;
-  }
-  .swal-light-title {
-    color: #1f2937 !important;
-  }
-  .swal-light-html {
-    color: #4b5563 !important;
-  }
-  .swal-light-confirm {
-    background: #237227 !important;
-    border: none !important;
-    border-radius: 40px !important;
-    padding: 10px 24px !important;
-    font-weight: 600 !important;
-  }
-  .swal-light-cancel {
-    background: #e5e7eb !important;
-    color: #1f2937 !important;
-    border-radius: 40px !important;
-    border: 1px solid #d1d5db !important;
-  }
-`;
-document.head.appendChild(styleSheet);
-// Responsive grid for the modal form
-const extraStyles = document.createElement("style");
-extraStyles.textContent = `
-.persons-modal-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; align-items: start; }
-@media (max-width: 640px) {
-  .persons-modal-grid { grid-template-columns: 1fr !important; }
-}
-`;
-document.head.appendChild(extraStyles);

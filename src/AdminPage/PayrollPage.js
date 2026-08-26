@@ -347,10 +347,45 @@ export default function PayrollPage() {
               absentCount: (() => {
                 try {
                   if (!period) return 0;
-                  const [start, end] = period.split("_to_");
-                  const startDate = new Date(start);
-                  const endDate = new Date(end);
-                  const todayStr = new Date().toISOString().slice(0, 10);
+                  const formatYMD = (val) => {
+                    if (!val) return "";
+                    if (typeof val === "string") {
+                      const trimmed = val.trim();
+                      const m = trimmed.match(/^(\d{4})-(\d{2})-(\d{2})/);
+                      if (m) return `${m[1]}-${m[2]}-${m[3]}`;
+                      const slash = trimmed.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+                      if (slash) {
+                        return `${slash[3]}-${slash[1].padStart(2, "0")}-${slash[2].padStart(2, "0")}`;
+                      }
+                    }
+                    try {
+                      const d = val instanceof Date ? val : new Date(val);
+                      if (!isNaN(d.getTime())) {
+                        return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+                      }
+                    } catch (e) {}
+                    return "";
+                  };
+
+                  const todayStr = formatYMD(new Date());
+                  let startDate = null;
+                  let endDate = null;
+
+                  if (typeof period === "string" && period.includes("_to_")) {
+                    const [start, end] = period.split("_to_");
+                    startDate = new Date(start);
+                    endDate = new Date(end);
+                  } else if (typeof period === "string") {
+                    const matches = Array.from(period.matchAll(/(\d{4}[-/]\d{2}[-/]\d{2})/g)).map((m) => m[1]);
+                    if (matches.length >= 2) {
+                      startDate = new Date(matches[0]);
+                      endDate = new Date(matches[1]);
+                    }
+                  }
+
+                  if (!startDate || !endDate || isNaN(startDate.getTime()) || isNaN(endDate.getTime())) {
+                    return 0;
+                  }
 
                   const allDates = [];
                   for (
@@ -360,17 +395,12 @@ export default function PayrollPage() {
                   ) {
                     // weekday only
                     if (d.getDay() === 0 || d.getDay() === 6) continue;
-                    allDates.push(new Date(d).toISOString().slice(0, 10));
+                    const dateStr = formatYMD(d);
+                    if (dateStr) allDates.push(dateStr);
                   }
 
                   const attendedDatesSet = new Set(
-                    (detailed || []).map((a) => {
-                      try {
-                        return new Date(a.date).toISOString().slice(0, 10);
-                      } catch (e) {
-                        return String(a.date || "").slice(0, 10);
-                      }
-                    }),
+                    (detailed || []).map((a) => formatYMD(a.date || a.device_time)).filter(Boolean),
                   );
 
                   // holidaysData is available in outer scope; filter to person's department
@@ -380,9 +410,7 @@ export default function PayrollPage() {
                       (person.department || "").toLowerCase().trim(),
                   );
                   const holidaySet = new Set(
-                    (holidaysForDept || []).map((h) =>
-                      new Date(h.date).toISOString().slice(0, 10),
-                    ),
+                    (holidaysForDept || []).map((h) => formatYMD(h.date || h.holiday_date)).filter(Boolean),
                   );
 
                   const absentDates = allDates.filter(
@@ -453,8 +481,6 @@ export default function PayrollPage() {
     return String(period);
   }
 
-  // Removed unused filtered and sortedPersons variables
-
   // Helper: Check if period has ended based on work-hour settings
   function isPeriodEndedNow(period, settings) {
     if (!period) return false;
@@ -501,6 +527,7 @@ export default function PayrollPage() {
     });
     setShowPayslip(true);
   };
+
   // RELEASE PAYROLL (by DB id) — works with filtered/sorted lists
   const handleReleasePayroll = async (dbId) => {
     const idx = payrollPeriods.findIndex((p) => p.dbId === dbId);
@@ -679,35 +706,64 @@ export default function PayrollPage() {
           settings,
         );
 
+        const formatYMD = (val) => {
+          if (!val) return "";
+          if (typeof val === "string") {
+            const trimmed = val.trim();
+            const m = trimmed.match(/^(\d{4})-(\d{2})-(\d{2})/);
+            if (m) return `${m[1]}-${m[2]}-${m[3]}`;
+            const slash = trimmed.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+            if (slash) {
+              return `${slash[3]}-${slash[1].padStart(2, "0")}-${slash[2].padStart(2, "0")}`;
+            }
+          }
+          try {
+            const d = val instanceof Date ? val : new Date(val);
+            if (!isNaN(d.getTime())) {
+              return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+            }
+          } catch (e) {}
+          return "";
+        };
+
         let absentDates = [];
         if (period) {
-          const [start, end] = period.split("_to_");
-          const startDate = new Date(start);
-          const endDate = new Date(end);
-          const todayStr = new Date().toISOString().slice(0, 10);
-
-          const allDates = [];
-          for (
-            let d = new Date(startDate);
-            d <= endDate;
-            d.setDate(d.getDate() + 1)
-          ) {
-            if (d.getDay() !== 0 && d.getDay() !== 6) {
-              allDates.push(new Date(d));
+          let startDate = null;
+          let endDate = null;
+          if (typeof period === "string" && period.includes("_to_")) {
+            const [start, end] = period.split("_to_");
+            startDate = new Date(start);
+            endDate = new Date(end);
+          } else if (typeof period === "string") {
+            const matches = Array.from(period.matchAll(/(\d{4}[-/]\d{2}[-/]\d{2})/g)).map((m) => m[1]);
+            if (matches.length >= 2) {
+              startDate = new Date(matches[0]);
+              endDate = new Date(matches[1]);
             }
           }
 
-          const attendedDates = detailedAttendance.map((a) => {
-            const dt = new Date(a.date);
-            return dt.toISOString().slice(0, 10);
-          });
+          const todayStr = formatYMD(new Date());
 
-          absentDates = allDates
-            .map((d) => d.toISOString().slice(0, 10))
-            .filter(
+          if (startDate && endDate && !isNaN(startDate.getTime()) && !isNaN(endDate.getTime())) {
+            const allDates = [];
+            for (
+              let d = new Date(startDate);
+              d <= endDate;
+              d.setDate(d.getDate() + 1)
+            ) {
+              if (d.getDay() !== 0 && d.getDay() !== 6) {
+                const ds = formatYMD(d);
+                if (ds) allDates.push(ds);
+              }
+            }
+
+            const attendedDates = detailedAttendance.map((a) => formatYMD(a.date || a.device_time)).filter(Boolean);
+
+            absentDates = allDates.filter(
               (dateStr) =>
                 dateStr < todayStr && !attendedDates.includes(dateStr),
             );
+          }
         }
         const absentCount = absentDates.length;
 
@@ -968,36 +1024,57 @@ export default function PayrollPage() {
   const currentRecords = activeRecords.slice(startIndex, startIndex + itemsPerPage);
 
   return (
-    <div style={styles.container}>
-      <div style={styles.header}>
-        <h1 style={styles.title}>
-          <span style={styles.titleBlack}>Payroll </span>
-          <span style={styles.titlePrimary}>Summary</span>
+    <div className="payroll-page-container mx-auto py-9 px-7 max-w-full bg-white min-h-screen text-gray-800 font-sans">
+      <style>{`
+        .payroll-page-container button,
+        .payroll-page-container button:hover,
+        .payroll-page-container button:focus,
+        .payroll-page-container button:active,
+        .payroll-page-container svg,
+        .payroll-page-container span,
+        .payroll-page-container * {
+          transform: none !important;
+        }
+        .payroll-page-container button:hover {
+          box-shadow: none !important;
+        }
+        .payroll-page-container input:focus,
+        .payroll-page-container select:focus {
+          border-color: #dce3dd !important;
+          outline: none !important;
+          box-shadow: none !important;
+        }
+        .payroll-page-container button:focus,
+        .payroll-page-container button:focus-visible,
+        .payroll-page-container *:focus {
+          outline: none !important;
+          box-shadow: none !important;
+        }
+      `}</style>
+      <div className="mb-6 flex flex-col items-start gap-1.5">
+        <h1 className="text-[2.5rem] font-extrabold m-0 tracking-[-0.02em] inline-block">
+          <span className="text-[#2c382d]">Payroll </span>
+          <span className="text-[#237227]">Summary</span>
         </h1>
-        {/* <button
-          style={{ ...styles.button, ...styles.buttonPrimary, marginTop: 16, float: 'right' }}
-          onClick={() => window.location.href = '/admin/released-history'}
-        >
-          Released History Payroll
-        </button> */}
       </div>
 
       {/* Filter Bar */}
-      <div style={styles.filterBar}>
-        <div style={styles.filterGroup}>
-          <div style={styles.searchWrapper}>
+      <div className="flex flex-nowrap justify-between items-center gap-3.5 mb-5 py-3 px-4 bg-white rounded-xl border border-[#edf2ee] shadow-[0_1px_4px_rgba(0,0,0,0.04)] overflow-x-auto">
+        <div className="flex flex-nowrap gap-2.5 items-center">
+          <div className="relative">
+            <FiSearch className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 text-sm pointer-events-none" />
             <input
               type="text"
               placeholder="Search by name or ID"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              style={styles.searchInput}
+              className="py-2 pr-3.5 pl-9 text-[0.85rem] rounded-md border border-[#dce3dd] bg-white text-[#2c382d] min-w-[180px] outline-none focus:outline-none focus:border-[#dce3dd] focus:ring-0"
             />
           </div>
           <select
             value={departmentFilter}
             onChange={(e) => setDepartmentFilter(e.target.value)}
-            style={styles.select}
+            className="py-2 px-3 text-[0.85rem] rounded-md border border-[#dce3dd] bg-white text-[#2c382d] cursor-pointer min-w-[130px] outline-none focus:outline-none focus:border-[#dce3dd] focus:ring-0"
           >
             <option value="">All Departments</option>
             {Array.from(
@@ -1011,122 +1088,95 @@ export default function PayrollPage() {
           <button
             aria-label="Toggle sort order"
             onClick={() => setSortOrder((s) => (s === "asc" ? "desc" : "asc"))}
-            style={styles.sortToggle}
+            className="py-2 px-4 rounded-md bg-[#237227] border-none text-white text-[0.85rem] cursor-pointer min-w-[60px] text-center font-semibold outline-none focus:outline-none"
           >
             {sortOrder === "asc" ? "Asc" : "Desc"}
           </button>
         </div>
-        <div style={styles.actionButtons}>
+        <div className="flex gap-2.5 flex-nowrap items-center">
           <button
             onClick={handleExportPayslipExcel}
-            style={{
-              ...styles.button,
-              ...styles.buttonPrimary,
-            }}
+            className="inline-flex items-center justify-center gap-1.5 py-2 px-4 rounded-md text-[0.85rem] font-semibold border-none cursor-pointer tracking-[0.01em] whitespace-nowrap bg-[#237227] text-white shadow-[0_1px_4px_rgba(35,114,39,0.2)] transition-all duration-200"
           >
             {Icons.download} Export Excel
           </button>
           <button
             onClick={handleGenerateAllPayslipPdf}
-            style={{ ...styles.button, ...styles.buttonPrimary }}
+            className="inline-flex items-center justify-center gap-1.5 py-2 px-4 rounded-md text-[0.85rem] font-semibold border-none cursor-pointer tracking-[0.01em] whitespace-nowrap bg-[#237227] text-white shadow-[0_1px_4px_rgba(35,114,39,0.2)] transition-all duration-200"
           >
-            <FiPrinter style={{ marginRight: 8 }} />
+            <FiPrinter className="mr-1" />
             Generate All Payslips PDF
           </button>
         </div>
-        {/* <button
-          style={{ ...styles.button, ...styles.buttonSecondary, marginLeft: 12 }}
-          onClick={() => window.location.href = '/admin/ReleasedPayrollLogs'}
-        >
-          Released Payroll Logs
-        </button> */}
-        {/* <button
-          style={{ ...styles.button, ...styles.buttonSecondary }}
-          onClick={() => (window.location.href = "/admin/released-history")}
-        >
-          <MdHistory style={{ marginRight: 8, fontSize: "1.2em" }} />
-          Released History Payroll
-        </button> */}
       </div>
 
       {/* Table: Payroll by 15-day period */}
-      <div style={styles.tableContainer}>
-        <div style={styles.tableWrapper}>
-          <table style={styles.table}>
+      <div className="rounded-2xl overflow-hidden bg-white shadow-[0_2px_14px_rgba(44,56,45,0.06)] border-none">
+        <div className="overflow-x-auto max-h-[600px]">
+          <table className="w-full border-collapse text-[0.95rem] min-w-[1200px]">
             <thead>
               <tr>
-                <th style={styles.th}>ID</th>
-                <th style={styles.th}>Name</th>
-                <th style={styles.th}>Department</th>
-                <th style={styles.th}>Period</th>
-                <th style={styles.th}>Daily Rate (₱)</th>
-                <th style={styles.th}>Late Penalty (₱)</th>
-                <th style={styles.th}>Days Present</th>
-                <th style={styles.th}>Late Count</th>
-                <th style={styles.th}>Absent</th>
-                <th style={styles.th}>Payslip</th>
-                <th style={styles.th}>Advance Release</th>
+                <th className="sticky top-0 z-10 bg-white text-black font-bold p-3.5 text-left border-b-2 border-gray-200 tracking-wide uppercase text-xs whitespace-nowrap">ID</th>
+                <th className="sticky top-0 z-10 bg-white text-black font-bold p-3.5 text-left border-b-2 border-gray-200 tracking-wide uppercase text-xs whitespace-nowrap">Name</th>
+                <th className="sticky top-0 z-10 bg-white text-black font-bold p-3.5 text-left border-b-2 border-gray-200 tracking-wide uppercase text-xs whitespace-nowrap">Department</th>
+                <th className="sticky top-0 z-10 bg-white text-black font-bold p-3.5 text-left border-b-2 border-gray-200 tracking-wide uppercase text-xs whitespace-nowrap">Period</th>
+                <th className="sticky top-0 z-10 bg-white text-black font-bold p-3.5 text-left border-b-2 border-gray-200 tracking-wide uppercase text-xs whitespace-nowrap">Daily Rate (₱)</th>
+                <th className="sticky top-0 z-10 bg-white text-black font-bold p-3.5 text-left border-b-2 border-gray-200 tracking-wide uppercase text-xs whitespace-nowrap">Late Penalty (₱)</th>
+                <th className="sticky top-0 z-10 bg-white text-black font-bold p-3.5 text-left border-b-2 border-gray-200 tracking-wide uppercase text-xs whitespace-nowrap">Days Present</th>
+                <th className="sticky top-0 z-10 bg-white text-black font-bold p-3.5 text-left border-b-2 border-gray-200 tracking-wide uppercase text-xs whitespace-nowrap">Late Count</th>
+                <th className="sticky top-0 z-10 bg-white text-black font-bold p-3.5 text-left border-b-2 border-gray-200 tracking-wide uppercase text-xs whitespace-nowrap">Absent</th>
+                <th className="sticky top-0 z-10 bg-white text-black font-bold p-3.5 text-left border-b-2 border-gray-200 tracking-wide uppercase text-xs whitespace-nowrap">Payslip</th>
+                <th className="sticky top-0 z-10 bg-white text-black font-bold p-3.5 text-left border-b-2 border-gray-200 tracking-wide uppercase text-xs whitespace-nowrap">Advance Release</th>
               </tr>
             </thead>
             <tbody>
               {currentRecords.length === 0 ? (
                 <tr>
-                  <td colSpan={11} style={styles.emptyState}>
+                  <td colSpan={11} className="text-center py-16 px-5 text-gray-500 text-base">
                     No payroll records found.
                   </td>
                 </tr>
               ) : (
                 currentRecords.map((p, idx) => {
                   const { person, period, payroll, released } = p;
-                  const rowStyle = {
-                    ...styles.tr,
-                    backgroundColor: idx % 2 === 0 ? "#f9fafb" : "#ffffff",
-                  };
                   return (
-                    <tr key={person.id + period} style={rowStyle}>
-                      <td style={{ ...styles.td, fontFamily: "monospace" }}>
+                    <tr key={person.id + period} className="even:bg-[#f9fafb] odd:bg-white">
+                      <td className="py-3.5 px-3 border-b border-gray-200 text-gray-800 font-mono">
                         {person.id}
                       </td>
-                      <td style={styles.td}>{person.name}</td>
-                      <td style={styles.td}>{person.department}</td>
-                      <td style={styles.td}>{formatPeriod(period)}</td>
-                      <td style={styles.td}>
+                      <td className="py-3.5 px-3 border-b border-gray-200 text-gray-800">{person.name}</td>
+                      <td className="py-3.5 px-3 border-b border-gray-200 text-gray-800">{person.department}</td>
+                      <td className="py-3.5 px-3 border-b border-gray-200 text-gray-800">{formatPeriod(period)}</td>
+                      <td className="py-3.5 px-3 border-b border-gray-200 text-gray-800">
                         {person.daily_rate != null
                           ? `₱${Number(person.daily_rate).toFixed(2)}`
                           : "-"}
                       </td>
-                      <td style={styles.td}>
+                      <td className="py-3.5 px-3 border-b border-gray-200 text-gray-800">
                         {person.late_penalty != null
                           ? `₱${Number(person.late_penalty).toFixed(2)}`
                           : "-"}
                       </td>
-                      <td style={styles.td}>{payroll.daysPresent}</td>
-                      <td style={styles.td}>{payroll.lateCount}</td>
-                      <td style={styles.td}>{p.absentCount ?? 0}</td>
-                      {/* Calculate and display Gross and Net Pay using the exact PayslipModal formulas */}
-
-                      <td style={styles.td}>
+                      <td className="py-3.5 px-3 border-b border-gray-200 text-gray-800">{payroll.daysPresent}</td>
+                      <td className="py-3.5 px-3 border-b border-gray-200 text-gray-800">{payroll.lateCount}</td>
+                      <td className="py-3.5 px-3 border-b border-gray-200 text-gray-800">{p.absentCount ?? 0}</td>
+                      <td className="py-3.5 px-3 border-b border-gray-200 text-gray-800">
                         <button
                           onClick={() => handleShowPayslip(p)}
-                          style={styles.viewButton}
+                          className="py-1.5 px-3.5 rounded-md border-none text-[0.85rem] font-semibold cursor-pointer transition-all duration-200 inline-flex items-center gap-1.5 bg-[#237227] text-white"
                         >
                           {Icons.eye} View
                         </button>
                       </td>
-                      <td style={styles.td}>
+                      <td className="py-3.5 px-3 border-b border-gray-200 text-gray-800">
                         {released ? (
-                          <span style={{ color: "#556156", fontWeight: 600 }}>
+                          <span className="text-[#556156] font-semibold">
                             ✔ Released
                           </span>
                         ) : (
                           <button
                             onClick={() => handleReleasePayroll(p.dbId)}
-                            style={{
-                              ...styles.button,
-                              ...styles.buttonSecondary,
-                              padding: "6px 12px",
-                              fontSize: "0.85rem",
-                            }}
+                            className="inline-flex items-center justify-center gap-1.5 py-1.5 px-3 rounded-md text-[0.85rem] font-semibold cursor-pointer tracking-[0.01em] whitespace-nowrap bg-white text-[#237227] border border-[#237227] shadow-[0_1px_2px_rgba(0,0,0,0.03)] transition-all duration-200"
                           >
                             Advance Release Payroll
                           </button>
@@ -1141,13 +1191,13 @@ export default function PayrollPage() {
         </div>
 
         {/* Pagination Footer */}
-        <div style={styles.paginationContainer}>
-          <div style={styles.paginationText}>
+        <div className="flex justify-between items-center py-4 px-5 bg-white border-t border-[#edf2ee] rounded-b-xl">
+          <div className="text-gray-500 text-sm">
             Showing <strong>{totalRecords === 0 ? 0 : startIndex + 1}</strong> to <strong>{Math.min(startIndex + itemsPerPage, totalRecords)}</strong> of <strong>{totalRecords}</strong> records
           </div>
-          <div style={styles.paginationControls}>
+          <div className="flex gap-1.5 items-center">
             <button 
-              style={{ ...styles.pageButton, ...(currentPage === 1 ? styles.pageButtonDisabled : {}) }}
+              className="flex items-center justify-center min-w-[32px] h-8 px-1.5 rounded-lg border border-gray-300 bg-white text-gray-500 text-[0.85rem] font-semibold cursor-pointer transition-all duration-200 disabled:opacity-40 disabled:cursor-not-allowed"
               onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
               disabled={currentPage === 1}
             >
@@ -1160,7 +1210,7 @@ export default function PayrollPage() {
                 const renderButton = (
                   <button
                     key={p}
-                    style={p === currentPage ? { ...styles.pageButton, ...styles.pageButtonActive } : styles.pageButton}
+                    className={`flex items-center justify-center min-w-[32px] h-8 px-1.5 rounded-lg border text-[0.85rem] font-semibold cursor-pointer transition-all duration-200 ${p === currentPage ? '!bg-[#237227] !text-white !border-[#237227]' : 'border-gray-300 bg-white text-gray-500'}`}
                     onClick={() => setCurrentPage(p)}
                   >
                     {p}
@@ -1169,8 +1219,8 @@ export default function PayrollPage() {
 
                 if (idx > 0 && arr[idx] - arr[idx - 1] > 1) {
                   return (
-                    <div key={`group-${p}`} style={{ display: "flex", alignItems: "center", gap: "6px" }}>
-                      <span style={{ color: "#677368", padding: "0 2px" }}>...</span>
+                    <div key={`group-${p}`} className="flex items-center gap-1.5">
+                      <span className="text-[#677368] px-0.5">...</span>
                       {renderButton}
                     </div>
                   );
@@ -1179,7 +1229,7 @@ export default function PayrollPage() {
               })}
             
             <button 
-              style={{ ...styles.pageButton, ...(currentPage === totalPages ? styles.pageButtonDisabled : {}) }}
+              className="flex items-center justify-center min-w-[32px] h-8 px-1.5 rounded-lg border border-gray-300 bg-white text-gray-500 text-[0.85rem] font-semibold cursor-pointer transition-all duration-200 disabled:opacity-40 disabled:cursor-not-allowed"
               onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
               disabled={currentPage === totalPages}
             >
@@ -1213,277 +1263,3 @@ export default function PayrollPage() {
     </div>
   );
 }
-
-// Light theme styles with green accent
-const styles = {
-  container: {
-    margin: "0 auto",
-    padding: "36px 28px",
-    maxWidth: "100%",
-    background: "#ffffff",
-    minHeight: "100vh",
-    color: "#1f2937",
-    fontFamily:
-      '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif',
-  },
-  header: {
-    marginBottom: "24px",
-    display: "flex",
-    flexDirection: "column",
-    alignItems: "flex-start",
-    gap: "6px",
-  },
-  title: {
-    fontSize: "2.5rem",
-    fontWeight: 800,
-    margin: 0,
-    letterSpacing: "-0.02em",
-    display: "inline-block",
-  },
-  titleBlack: {
-    color: "#2c382d",
-  },
-  titlePrimary: {
-    color: "#237227",
-  },
-  filterBar: {
-    display: "flex",
-    flexWrap: "nowrap",
-    justifyContent: "space-between",
-    alignItems: "center",
-    gap: "14px",
-    marginBottom: "20px",
-    padding: "12px 16px",
-    backgroundColor: "#ffffff",
-    borderRadius: "12px",
-    border: "1px solid #edf2ee",
-    boxShadow: "0 1px 4px rgba(0, 0, 0, 0.04)",
-    overflowX: "auto",
-  },
-  filterGroup: {
-    display: "flex",
-    flexWrap: "nowrap",
-    gap: "10px",
-    alignItems: "center",
-  },
-  searchWrapper: {
-    position: "relative",
-  },
-  searchInput: {
-    padding: "8px 14px 8px 34px",
-    fontSize: "0.85rem",
-    borderRadius: "6px",
-    border: "1px solid #d1d5db",
-    backgroundColor: "#ffffff",
-    color: "#1f2937",
-    outline: "none",
-    transition: "border-color 0.2s, box-shadow 0.2s",
-    backgroundImage: `url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="%236b7280" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>')`,
-    backgroundRepeat: "no-repeat",
-    backgroundPosition: "10px center",
-    backgroundSize: "14px",
-    minWidth: "180px",
-  },
-  select: {
-    padding: "8px 12px",
-    fontSize: "0.85rem",
-    borderRadius: "6px",
-    border: "1px solid #d1d5db",
-    backgroundColor: "#ffffff",
-    color: "#1f2937",
-    outline: "none",
-    cursor: "pointer",
-    minWidth: "130px",
-  },
-  sortToggle: {
-    padding: "8px 16px",
-    borderRadius: "6px",
-    background: "#237227",
-    border: "none",
-    color: "#ffffff",
-    fontSize: "0.85rem",
-    cursor: "pointer",
-    minWidth: "60px",
-    textAlign: "center",
-    fontWeight: 600,
-    transition: "all 0.2s",
-  },
-  actionButtons: {
-    display: "flex",
-    gap: "10px",
-    flexWrap: "nowrap",
-    alignItems: "center",
-  },
-  button: {
-    display: "inline-flex",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: "6px",
-    padding: "8px 16px",
-    borderRadius: "6px",
-    fontSize: "0.85rem",
-    fontWeight: 600,
-    border: "none",
-    cursor: "pointer",
-    transition: "opacity 0.18s, transform 0.12s",
-    letterSpacing: "0.01em",
-    whiteSpace: "nowrap",
-  },
-  buttonPrimary: {
-    background: "#237227",
-    color: "#ffffff",
-    boxShadow: "0 1px 4px rgba(35, 114, 39, 0.2)",
-  },
-  buttonSecondary: {
-    background: "#ffffff",
-    color: "#237227",
-    border: "1px solid #237227",
-    boxShadow: "0 1px 2px rgba(0,0,0,0.03)",
-  },
-  searchIcon: {
-    position: "absolute",
-    left: "12px",
-    top: "50%",
-    transform: "translateY(-50%)",
-    fontSize: "1rem",
-    color: "#6b7280",
-  },
-
-  viewButton: {
-    padding: "6px 14px",
-    borderRadius: "6px",
-    border: "none",
-    fontSize: "0.85rem",
-    fontWeight: 600,
-    cursor: "pointer",
-    transition: "all 0.2s",
-    display: "inline-flex",
-    alignItems: "center",
-    gap: "6px",
-    backgroundColor: "#237227",
-    color: "#ffffff",
-  },
-  tableContainer: {
-    borderRadius: "16px",
-    overflow: "hidden",
-    backgroundColor: "#ffffff",
-    boxShadow: "0 2px 14px rgba(44, 56, 45, 0.06)",
-    border: "none",
-  },
-  tableWrapper: {
-    overflowX: "auto",
-    maxHeight: "600px",
-  },
-  table: {
-    width: "100%",
-    borderCollapse: "collapse",
-    fontSize: "0.95rem",
-    minWidth: "1200px",
-  },
-  th: {
-    position: "sticky",
-    top: 0,
-    zIndex: 10,
-    backgroundColor: "#ffffff",
-    color: "#000000",
-    fontWeight: 700,
-    padding: "14px 14px",
-    textAlign: "left",
-    borderBottom: "2px solid #e5e7eb",
-    letterSpacing: "0.05em",
-    textTransform: "uppercase",
-    fontSize: "0.75rem",
-    whiteSpace: "nowrap",
-  },
-  td: {
-    padding: "14px 12px",
-    borderBottom: "1px solid #e5e7eb",
-    color: "#1f2937",
-  },
-  tr: {
-    transition: "background 0.2s",
-  },
-  emptyState: {
-    textAlign: "center",
-    padding: "60px 20px",
-    color: "#6b7280",
-    fontSize: "1.1rem",
-  },
-  paginationContainer: {
-    display: "flex",
-    justifyContent: "space-between",
-    alignItems: "center",
-    padding: "16px 20px",
-    backgroundColor: "#ffffff",
-    borderTop: "1px solid #edf2ee",
-    borderBottomLeftRadius: "12px",
-    borderBottomRightRadius: "12px",
-  },
-  paginationText: {
-    color: "#6b7280",
-    fontSize: "0.875rem",
-  },
-  paginationControls: {
-    display: "flex",
-    gap: "6px",
-    alignItems: "center",
-  },
-  pageButton: {
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    minWidth: "32px",
-    height: "32px",
-    padding: "0 6px",
-    borderRadius: "8px",
-    border: "1px solid #d1d5db",
-    backgroundColor: "#ffffff",
-    color: "#6b7280",
-    fontSize: "0.85rem",
-    fontWeight: 600,
-    cursor: "pointer",
-    transition: "all 0.2s",
-  },
-  pageButtonActive: {
-    backgroundColor: "#237227",
-    color: "#ffffff",
-    border: "1px solid #237227",
-  },
-  pageButtonDisabled: {
-    opacity: 0.4,
-    cursor: "not-allowed",
-  },
-  spinnerContainer: {
-    display: "flex",
-    justifyContent: "center",
-    alignItems: "center",
-    minHeight: "300px",
-    background: "#ffffff",
-  },
-  spinner: {
-    width: "50px",
-    height: "50px",
-    border: "4px solid #e5e7eb",
-    borderTop: "4px solid #237227",
-    borderRadius: "50%",
-    animation: "spin 1s linear infinite",
-  },
-};
-
-// Add global keyframes and focus styles
-const styleSheet = document.createElement("style");
-styleSheet.textContent = `
-  @keyframes spin {
-    0% { transform: rotate(0deg); }
-    100% { transform: rotate(360deg); }
-  }
-  input:focus, select:focus {
-    border-color: #237227 !important;
-    box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.2) !important;
-  }
-  button:hover:not(:disabled) {
-    transform: translateY(-2px);
-    box-shadow: 0 8px 20px rgba(0, 0, 0, 0.15);
-  }
-`;
-document.head.appendChild(styleSheet);

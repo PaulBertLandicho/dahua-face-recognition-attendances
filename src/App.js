@@ -34,6 +34,14 @@ import {
   hasAllowedRole,
 } from "./utils/authRoles";
 
+function ProtectedRoute({ session, allowedRoles = STAFF_ROLES, children }) {
+  return hasAllowedRole(session, allowedRoles) ? (
+    children
+  ) : (
+    <Navigate to="/admin" replace />
+  );
+}
+
 function App() {
   const modalTimerRef = useRef(null);
   const [showStaffLogin, setShowStaffLogin] = useState(false);
@@ -88,13 +96,6 @@ function App() {
   // No auto-logout: the attendance account stays logged in until the user
   // explicitly clicks the Logout button. This prevents camera stream loss.
 
-  const ProtectedRoute = ({ allowedRoles = STAFF_ROLES, children }) =>
-    hasAllowedRole(session, allowedRoles) ? (
-      children
-    ) : (
-      <Navigate to="/admin" replace />
-    );
-
   useEffect(() => {
     // show overlay immediately on navigation
     setLoading(true);
@@ -113,8 +114,6 @@ function App() {
     };
   }, []);
 
-  // Removed unused: handleFaceScan, closeModal
-
   // Manual logout handler for attendance account
   const handleAttendanceLogout = async () => {
     await supabase.auth.signOut();
@@ -126,46 +125,29 @@ function App() {
     <div className="App">
       <header className="App-header">
         {(isCameraPath || isAdminLoginPath) && !isMobile && (
-          <div style={styles.headerContainer}>
-            <div style={styles.headerBar}>
-              <div
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 12,
-                  position: "absolute",
-                  left: 5,
-                }}
-              >
+          <div className="w-full bg-[#f9fafc] border-b border-[#eef2f6] px-6 lg:px-8 py-3.5 shadow-[0_4px_14px_rgba(0,0,0,0.03)] sticky top-0 z-[100]">
+            <div className="flex items-center justify-between w-full">
+              <div className="flex items-center gap-3.5">
                 <img
                   src="/image/logosidebar.jpg"
                   alt="Multifactors Sales Logo"
-                  style={{
-                    height: 45,
-                    objectFit: "contain",
-                    paddingLeft: 10,
-                  }}
+                  className="h-[44px] object-contain"
                 />
-                <h1
-                  style={{
-                    ...styles.headerTitle,
-                    margin: 0,
-                    padding: 0,
-                  }}
-                >
+                <h1 className="text-black text-[1.35rem] lg:text-[1.45rem] font-bold m-0 p-0 tracking-[0.01em]">
                   Face Recognition Time and Attendance
                 </h1>
               </div>
+              
               {hasStaffAccess && (
-                <div style={styles.headerActions}>
+                <div className="flex items-center gap-3">
                   {currentRole === ADMIN_ROLE && !location.pathname.startsWith("/admin") && (
                     <button
                       type="button"
                       onClick={() => navigate("/admin/dashboard")}
-                      style={styles.adminButton}
+                      className="py-2 px-[16px] rounded-full border border-[#237227] bg-[#237227] text-white cursor-pointer text-sm font-bold shadow-sm"
                     >
-                      <span style={{ display: "inline-flex", alignItems: "center" }}>
-                        <FiLogIn style={{ marginRight: 8, verticalAlign: "middle" }} />
+                      <span className="inline-flex items-center">
+                        <FiLogIn className="mr-2 align-middle" />
                         Admin Dashboard
                       </span>
                     </button>
@@ -174,10 +156,10 @@ function App() {
                     <button
                       type="button"
                       onClick={() => navigate("/")}
-                      style={styles.adminButton}
+                      className="py-2 px-[16px] rounded-full border border-[#237227] bg-[#237227] text-white cursor-pointer text-sm font-bold shadow-sm"
                     >
-                      <span style={{ display: "inline-flex", alignItems: "center" }}>
-                        <FiCamera style={{ marginRight: 8, verticalAlign: "middle" }} />
+                      <span className="inline-flex items-center">
+                        <FiCamera className="mr-2 align-middle" />
                         Attendance Camera
                       </span>
                     </button>
@@ -187,32 +169,21 @@ function App() {
             </div>
           </div>
         )}
+
         <Routes>
           <Route
             path="/"
             element={
               hasStaffAccess ? (
-                <div style={{ maxWidth: 900, margin: "0 auto" }}>
+                <div className="max-w-[900px] mx-auto">
                   <CameraPlayer />
-                  <div style={{ marginTop: 12, textAlign: "right" }}>
+                  <div className="mt-3 text-right">
                     <button
                       type="button"
                       onClick={handleAttendanceLogout}
-                      style={{
-                        padding: "8px 16px",
-                        borderRadius: 999,
-                        border: "1px solid #dc2626",
-                        background: "#dc2626",
-                        color: "#ffffff",
-                        cursor: "pointer",
-                        fontSize: 13,
-                        fontWeight: 600,
-                        display: "inline-flex",
-                        alignItems: "center",
-                        gap: 6,
-                      }}
+                      className="py-2 px-4 rounded-full border border-[#dc2626] bg-[#dc2626] text-white cursor-pointer text-[13px] font-semibold inline-flex items-center gap-1.5"
                     >
-                      <FiLogOut style={{ fontSize: 14 }} />
+                      <FiLogOut className="text-[14px]" />
                       Logout Attendance
                     </button>
                   </div>
@@ -225,20 +196,22 @@ function App() {
           <Route
             path="/staff-login"
             element={
-              <div style={{ maxWidth: 900, margin: "0 auto" }}>
-                <div style={styles.staffGateCard}>
-                  <div style={styles.staffGatePill}>Staff login</div>
-                  <h2 style={styles.staffGateTitle}>
+              <div className="max-w-[900px] mx-auto">
+                <div className="mt-6 py-10 px-7 rounded-[24px] bg-gradient-to-b from-[#0f172a] to-[#111827] text-[#e5e7eb] text-center border border-white/10 shadow-[0_24px_60px_rgba(15,23,42,0.25)]">
+                  <div className="inline-flex items-center justify-center py-1.5 px-3 rounded-full bg-[rgba(35,114,39,0.16)] text-[#86efac] text-xs font-bold tracking-[0.4px] uppercase mb-[14px]">
+                    Staff login
+                  </div>
+                  <h2 className="m-0 text-[26px] leading-[1.2] text-white">
                     Open the secretary account
                   </h2>
-                  <p style={styles.staffGateText}>
+                  <p className="max-w-[560px] mx-auto mt-[14px] mb-6 text-[15px] leading-[1.7] text-[#cbd5e1]">
                     Use the popup login to sign in with the staff email and
                     password.
                   </p>
                   <button
                     type="button"
                     onClick={() => setShowStaffLogin(true)}
-                    style={styles.staffGateButton}
+                    className="py-3 px-[22px] rounded-full border border-[#237227] bg-[#237227] text-white cursor-pointer text-sm font-bold shadow-[0_12px_30px_rgba(35,114,39,0.25)]"
                   >
                     Open Staff Login
                   </button>
@@ -249,8 +222,8 @@ function App() {
           <Route
             path="/admin/register-person"
             element={
-              <ProtectedRoute allowedRoles={[ADMIN_ROLE]}>
-                <div style={styles.adminLayout}>
+              <ProtectedRoute session={session} allowedRoles={[ADMIN_ROLE]}>
+                <div className="flex min-h-screen bg-white">
                   <AdminSidebar
                     role={currentRole}
                     onLogout={async () => {
@@ -259,12 +232,7 @@ function App() {
                       window.location.href = "/admin";
                     }}
                   />
-                  <div
-                    style={{
-                      ...styles.adminContent,
-                      marginLeft: isMobile ? 0 : styles.adminContent.marginLeft,
-                    }}
-                  >
+                  <div className={`flex-1 p-10 bg-white ${isMobile ? "ml-0" : "ml-[280px]"}`}>
                     <PersonRegistration />
                   </div>
                 </div>
@@ -274,8 +242,8 @@ function App() {
           <Route
             path="/admin/dashboard"
             element={
-              <ProtectedRoute allowedRoles={STAFF_ROLES}>
-                <div style={styles.adminLayout}>
+              <ProtectedRoute session={session} allowedRoles={STAFF_ROLES}>
+                <div className="flex min-h-screen bg-white">
                   <AdminSidebar
                     role={currentRole}
                     onLogout={async () => {
@@ -284,12 +252,7 @@ function App() {
                       window.location.href = "/admin";
                     }}
                   />
-                  <div
-                    style={{
-                      ...styles.adminContent,
-                      marginLeft: isMobile ? 0 : styles.adminContent.marginLeft,
-                    }}
-                  >
+                  <div className={`flex-1 p-10 bg-white ${isMobile ? "ml-0" : "ml-[280px]"}`}>
                     <Dashboard />
                   </div>
                 </div>
@@ -309,8 +272,8 @@ function App() {
           <Route
             path="/admin/settings"
             element={
-              <ProtectedRoute allowedRoles={[ADMIN_ROLE]}>
-                <div style={styles.adminLayout}>
+              <ProtectedRoute session={session} allowedRoles={[ADMIN_ROLE]}>
+                <div className="flex min-h-screen bg-white">
                   <AdminSidebar
                     role={currentRole}
                     onLogout={async () => {
@@ -319,12 +282,7 @@ function App() {
                       window.location.href = "/admin";
                     }}
                   />
-                  <div
-                    style={{
-                      ...styles.adminContent,
-                      marginLeft: isMobile ? 0 : styles.adminContent.marginLeft,
-                    }}
-                  >
+                  <div className={`flex-1 p-10 bg-white ${isMobile ? "ml-0" : "ml-[280px]"}`}>
                     <AdminSettings />
                   </div>
                 </div>
@@ -334,8 +292,8 @@ function App() {
           <Route
             path="/admin/attendance"
             element={
-              <ProtectedRoute allowedRoles={STAFF_ROLES}>
-                <div style={styles.adminLayout}>
+              <ProtectedRoute session={session} allowedRoles={STAFF_ROLES}>
+                <div className="flex min-h-screen bg-white">
                   <AdminSidebar
                     role={currentRole}
                     onLogout={async () => {
@@ -344,12 +302,7 @@ function App() {
                       window.location.href = "/admin";
                     }}
                   />
-                  <div
-                    style={{
-                      ...styles.adminContent,
-                      marginLeft: isMobile ? 0 : styles.adminContent.marginLeft,
-                    }}
-                  >
+                  <div className={`flex-1 p-10 bg-white ${isMobile ? "ml-0" : "ml-[280px]"}`}>
                     <AttendanceTable />
                   </div>
                 </div>
@@ -359,8 +312,8 @@ function App() {
           <Route
             path="/admin/department-rates"
             element={
-              <ProtectedRoute allowedRoles={[ADMIN_ROLE]}>
-                <div style={styles.adminLayout}>
+              <ProtectedRoute session={session} allowedRoles={[ADMIN_ROLE]}>
+                <div className="flex min-h-screen bg-white">
                   <AdminSidebar
                     role={currentRole}
                     onLogout={async () => {
@@ -369,12 +322,7 @@ function App() {
                       window.location.href = "/admin";
                     }}
                   />
-                  <div
-                    style={{
-                      ...styles.adminContent,
-                      marginLeft: isMobile ? 0 : styles.adminContent.marginLeft,
-                    }}
-                  >
+                  <div className={`flex-1 p-10 bg-white ${isMobile ? "ml-0" : "ml-[280px]"}`}>
                     <DepartmentRates />
                   </div>
                 </div>
@@ -384,8 +332,8 @@ function App() {
           <Route
             path="/admin/persons"
             element={
-              <ProtectedRoute allowedRoles={[ADMIN_ROLE]}>
-                <div style={styles.adminLayout}>
+              <ProtectedRoute session={session} allowedRoles={[ADMIN_ROLE]}>
+                <div className="flex min-h-screen bg-white">
                   <AdminSidebar
                     role={currentRole}
                     onLogout={async () => {
@@ -394,12 +342,7 @@ function App() {
                       window.location.href = "/admin";
                     }}
                   />
-                  <div
-                    style={{
-                      ...styles.adminContent,
-                      marginLeft: isMobile ? 0 : styles.adminContent.marginLeft,
-                    }}
-                  >
+                  <div className={`flex-1 p-10 bg-white ${isMobile ? "ml-0" : "ml-[280px]"}`}>
                     <PersonsTable />
                   </div>
                 </div>
@@ -409,8 +352,8 @@ function App() {
           <Route
             path="/admin/payroll"
             element={
-              <ProtectedRoute allowedRoles={[ADMIN_ROLE]}>
-                <div style={styles.adminLayout}>
+              <ProtectedRoute session={session} allowedRoles={[ADMIN_ROLE]}>
+                <div className="flex min-h-screen bg-white">
                   <AdminSidebar
                     role={currentRole}
                     onLogout={async () => {
@@ -419,12 +362,7 @@ function App() {
                       window.location.href = "/admin";
                     }}
                   />
-                  <div
-                    style={{
-                      ...styles.adminContent,
-                      marginLeft: isMobile ? 0 : styles.adminContent.marginLeft,
-                    }}
-                  >
+                  <div className={`flex-1 p-10 bg-white ${isMobile ? "ml-0" : "ml-[280px]"}`}>
                     <PayrollPage />
                   </div>
                 </div>
@@ -434,8 +372,8 @@ function App() {
           <Route
             path="/admin/released-history"
             element={
-              <ProtectedRoute allowedRoles={[ADMIN_ROLE]}>
-                <div style={styles.adminLayout}>
+              <ProtectedRoute session={session} allowedRoles={[ADMIN_ROLE]}>
+                <div className="flex min-h-screen bg-white">
                   <AdminSidebar
                     role={currentRole}
                     onLogout={async () => {
@@ -444,12 +382,7 @@ function App() {
                       window.location.href = "/admin";
                     }}
                   />
-                  <div
-                    style={{
-                      ...styles.adminContent,
-                      marginLeft: isMobile ? 0 : styles.adminContent.marginLeft,
-                    }}
-                  >
+                  <div className={`flex-1 p-10 bg-white ${isMobile ? "ml-0" : "ml-[280px]"}`}>
                     <ReleasedHistoryPayroll />
                   </div>
                 </div>
@@ -459,8 +392,8 @@ function App() {
           <Route
             path="/admin/ReleasedPayrollLogs"
             element={
-              <ProtectedRoute allowedRoles={[ADMIN_ROLE]}>
-                <div style={styles.adminLayout}>
+              <ProtectedRoute session={session} allowedRoles={[ADMIN_ROLE]}>
+                <div className="flex min-h-screen bg-white">
                   <AdminSidebar
                     role={currentRole}
                     onLogout={async () => {
@@ -469,12 +402,7 @@ function App() {
                       window.location.href = "/admin";
                     }}
                   />
-                  <div
-                    style={{
-                      ...styles.adminContent,
-                      marginLeft: isMobile ? 0 : styles.adminContent.marginLeft,
-                    }}
-                  >
+                  <div className={`flex-1 p-10 bg-white ${isMobile ? "ml-0" : "ml-[280px]"}`}>
                     <ReleasedPayrollLogs />
                   </div>
                 </div>
@@ -491,167 +419,5 @@ function App() {
     </div>
   );
 }
-
-// Light theme styles with green accent
-const styles = {
-  headerTitle: {
-    color: "#000000",
-    fontSize: "1.45rem",
-    fontWeight: "bold",
-    margin: 0,
-    letterSpacing: "0.01em",
-  },
-  headerSubtitle: {
-    color: "#6b7280",
-    fontSize: "1.10rem",
-    fontWeight: "bold",
-  },
-  modalOverlay: {
-    position: "fixed",
-    top: 0,
-    left: 0,
-    width: "100vw",
-    height: "100vh",
-    background: "rgba(0, 0, 0, 0.5)",
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    zIndex: 1000,
-    backdropFilter: "blur(4px)",
-  },
-  modalContent: {
-    background: "#ffffff",
-    padding: "32px",
-    borderRadius: "28px",
-    minWidth: "340px",
-    maxWidth: "500px",
-    width: "90%",
-    boxShadow: "0 20px 40px rgba(0, 0, 0, 0.2)",
-    border: "1px solid #e5e7eb",
-    position: "relative",
-  },
-  modalClose: {
-    position: "absolute",
-    top: "12px",
-    right: "16px",
-    background: "transparent",
-    border: "none",
-    color: "#6b7280",
-    fontSize: "1.8rem",
-    cursor: "pointer",
-    lineHeight: 1,
-    transition: "color 0.2s",
-  },
-  adminLayout: {
-    display: "flex",
-    minHeight: "100vh",
-    background: "#ffffff",
-  },
-  adminContent: {
-    marginLeft: "280px", // matches sidebar width
-    flex: 1,
-    padding: "40px",
-    background: "#ffffff",
-  },
-  logoIcon: {
-    marginTop: 20,
-    borderRadius: 999,
-    background: "#ffffff",
-  },
-  headerBar: {
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "space-between",
-    width: "100%",
-    maxWidth: 900,
-    margin: "0 auto",
-    padding: "8px 0",
-  },
-  adminButton: {
-    padding: "8px 14px",
-    borderRadius: 999,
-    border: "1px solid #237227",
-    background: "#237227",
-    color: "#ffffff",
-    cursor: "pointer",
-    fontSize: 14,
-    fontWeight: 700,
-    position: "absolute",
-    right: 16,
-    top: "50%",
-    transform: "translateY(-50%)",
-    zIndex: 10,
-  },
-  staffButton: {
-    padding: "8px 14px",
-    borderRadius: 999,
-    border: "1px solid #0f172a",
-    background: "#0f172a",
-    color: "#ffffff",
-    cursor: "pointer",
-    fontSize: 14,
-    fontWeight: 700,
-    position: "relative",
-    zIndex: 10,
-  },
-  headerContainer: {
-    width: "100%",
-    background: "#f9fafc",
-    borderBottom: "1px solid #eef2f6",
-    padding: "30px 0",
-    boxShadow: "0 6px 18px rgba(0,0,0,0.03)",
-    position: "sticky",
-    top: 0,
-    zIndex: 100,
-  },
-  staffGateCard: {
-    marginTop: 24,
-    padding: "40px 28px",
-    borderRadius: 24,
-    background: "linear-gradient(180deg, #0f172a 0%, #111827 100%)",
-    color: "#e5e7eb",
-    textAlign: "center",
-    border: "1px solid rgba(255,255,255,0.08)",
-    boxShadow: "0 24px 60px rgba(15,23,42,0.25)",
-  },
-  staffGatePill: {
-    display: "inline-flex",
-    alignItems: "center",
-    justifyContent: "center",
-    padding: "6px 12px",
-    borderRadius: 999,
-    background: "rgba(35,114,39,0.16)",
-    color: "#86efac",
-    fontSize: 12,
-    fontWeight: 700,
-    letterSpacing: 0.4,
-    textTransform: "uppercase",
-    marginBottom: 14,
-  },
-  staffGateTitle: {
-    margin: 0,
-    fontSize: 26,
-    lineHeight: 1.2,
-    color: "#ffffff",
-  },
-  staffGateText: {
-    maxWidth: 560,
-    margin: "14px auto 24px",
-    fontSize: 15,
-    lineHeight: 1.7,
-    color: "#cbd5e1",
-  },
-  staffGateButton: {
-    padding: "12px 22px",
-    borderRadius: 999,
-    border: "1px solid #237227",
-    background: "#237227",
-    color: "#ffffff",
-    cursor: "pointer",
-    fontSize: 14,
-    fontWeight: 700,
-    boxShadow: "0 12px 30px rgba(35,114,39,0.25)",
-  },
-};
 
 export default App;

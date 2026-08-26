@@ -3,8 +3,7 @@
 
 import React, { useEffect, useState } from "react";
 import Swal from "sweetalert2";
-import { FiCalendar, FiTrash2, FiClock, FiX } from "react-icons/fi";
-import Icon from "../components/Icon";
+import { FiCalendar, FiTrash2, FiX } from "react-icons/fi";
 import { supabase } from "../supabaseClient";
 
 // Global HolidayManager for all departments
@@ -14,6 +13,7 @@ export default function HolidayManagerGlobal({
 }) {
   const [regularHolidays, setRegularHolidays] = useState([]);
   const [specialHolidays, setSpecialHolidays] = useState([]);
+  
   // Set default month to current month (YYYY-MM)
   const getDefaultMonth = () => {
     const now = new Date();
@@ -47,21 +47,58 @@ export default function HolidayManagerGlobal({
     fetchAllHolidays();
   }, [month, saving]);
 
+  const showToast = (title, icon = "success") => {
+    Swal.fire({
+      toast: true,
+      position: "top-end",
+      icon,
+      title,
+      showConfirmButton: false,
+      timer: 2500,
+      timerProgressBar: true,
+      iconColor: icon === "success" ? "#237227" : undefined,
+      customClass: {
+        popup: "!rounded-2xl !shadow-[0_12px_30px_rgba(0,0,0,0.12)] !border !border-gray-200 !px-4 !py-3 !bg-white font-sans",
+        title: "!text-sm !font-semibold !text-gray-800 !m-0 !leading-tight",
+        timerProgressBar: "!bg-[#237227]",
+      },
+    });
+  };
+
   // Delete a saved holiday from DB
   const handleDeleteSavedHoliday = async (holiday) => {
-    if (
-      !window.confirm(
-        `Delete holiday on ${holiday.date} (${holiday.type}) for all departments?`,
-      )
-    )
-      return;
+    const confirm = await Swal.fire({
+      title: "Delete Holiday?",
+      html: `<p style="color:#6b7280;font-size:0.92rem;margin:0">Are you sure you want to delete the holiday on <strong style="color:#111827">${holiday.date}</strong> (${holiday.type})?</p>`,
+      icon: "warning",
+      showCancelButton: true,
+      confirmButtonText: "Delete",
+      cancelButtonText: "Cancel",
+      customClass: {
+        popup: "!rounded-3xl !shadow-[0_24px_60px_rgba(0,0,0,0.12)] !px-8 !py-8 !max-w-[380px]",
+        title: "!text-gray-800 !text-[1.4rem] !font-bold !mt-3 !mb-1",
+        htmlContainer: "!mt-1 !mb-4",
+        actions: "!flex !items-center !justify-center !gap-3 !mt-4 !w-full",
+        confirmButton:
+          "!bg-[#dc2626] !text-white !font-semibold !rounded-lg !px-6 !py-2.5 !text-sm !shadow-none !border-none cursor-pointer !m-0 !min-w-[100px]",
+        cancelButton:
+          "!bg-white !border !border-gray-300 !text-gray-700 !font-semibold !rounded-lg !px-6 !py-2.5 !text-sm !shadow-none cursor-pointer !m-0 !min-w-[100px]",
+      },
+      buttonsStyling: false,
+    });
+    if (!confirm.isConfirmed) return;
+
     const { error } = await supabase
       .from("holidays")
       .delete()
       .is("department", null)
       .eq("date", holiday.date)
       .eq("type", holiday.type);
-    if (error) Swal.fire("Error", error.message, "error");
+    if (error) {
+      showToast(error.message || "Delete failed", "error");
+    } else {
+      showToast("Holiday deleted successfully!", "success");
+    }
     setSaving((s) => !s); // trigger refresh
   };
 
@@ -92,7 +129,7 @@ export default function HolidayManagerGlobal({
 
   const handleSave = async () => {
     if (!month) {
-      Swal.fire("Please select a month.", "", "warning");
+      showToast("Please select a month before saving holidays.", "warning");
       return;
     }
     setSaving(true);
@@ -118,165 +155,162 @@ export default function HolidayManagerGlobal({
     }
     if (inserts.length) {
       const { error } = await supabase.from("holidays").insert(inserts);
-      if (error) Swal.fire("Error saving holidays", error.message, "error");
-      else Swal.fire("Global holidays saved!", "", "success");
+      if (error) {
+        showToast(error.message || "Failed to save holidays", "error");
+      } else {
+        showToast("Global holidays saved successfully!", "success");
+        setRegularHolidays([]);
+        setSpecialHolidays([]);
+      }
     } else {
-      Swal.fire("No holidays to save.", "", "info");
+      showToast("Please add at least one holiday date.", "info");
     }
     setSaving(false);
   };
 
   return (
-    <div style={{}}>
+    <div className="holiday-manager-root max-w-[860px] mx-auto bg-[#f8fafc] rounded-3xl p-8 sm:p-10 border border-gray-200 font-sans shadow-none">
+      <style>{`
+        .holiday-manager-root button,
+        .holiday-manager-root button:hover,
+        .holiday-manager-root button:hover:not(:disabled),
+        .holiday-manager-root button:focus,
+        .holiday-manager-root button:active,
+        .holiday-manager-root input,
+        .holiday-manager-root input:hover,
+        .holiday-manager-root input:focus,
+        .holiday-manager-root input:active {
+          transform: none !important;
+          outline: none !important;
+          box-shadow: none !important;
+        }
+        .holiday-manager-root input:focus {
+          border-color: #237227 !important;
+          outline: none !important;
+          box-shadow: 0 0 0 1px #237227 !important;
+        }
+      `}</style>
+
+      {/* Title with green underline */}
+      <div className="text-center mb-6">
+        <h2 className="text-[2.2rem] font-bold text-gray-800 m-0">Manage Holidays</h2>
+        <div className="h-1 w-16 bg-[#237227] mx-auto mt-2 mb-6 rounded-sm" />
+      </div>
 
       {/* Month Selector */}
-      <div style={holidayStyles.monthRow}>
-        <label style={holidayStyles.monthLabel}>
-          <span style={{ marginRight: 10, fontWeight: 500 }}>Month:</span>
+      <div className="flex justify-center items-center gap-3 mb-7">
+        <label className="flex items-center gap-2.5 text-sm font-semibold text-gray-700">
+          <span>Month:</span>
           <input
             type="month"
             value={month}
             onChange={(e) => setMonth(e.target.value)}
-            style={holidayStyles.monthInput}
+            className="py-2 px-3.5 text-sm rounded-lg border border-gray-300 bg-white text-gray-800 outline-none focus:outline-none focus:ring-0 focus:border-[#237227] cursor-pointer"
           />
         </label>
       </div>
 
       {/* Saved Holidays Card */}
       {month && allHolidays.length > 0 && (
-        <div style={holidayStyles.card}>
-          <div style={holidayStyles.cardHeader}>
-            <span style={holidayStyles.cardIcon}>
-              <Icon as={FiCalendar} size={22} ariaLabel="Holidays" />
-            </span>
-            <span style={holidayStyles.cardTitle}>
-              All Global Holidays for {month} (Saved)
-            </span>
+        <div className="bg-white rounded-2xl p-6 mb-6 border border-gray-200 shadow-none">
+          <div className="flex items-center gap-2 mb-4 text-sm font-bold text-gray-800">
+            <FiCalendar className="text-lg text-gray-700" />
+            <span>All Global Holidays for {month} (Saved)</span>
           </div>
-          <ul style={holidayStyles.holidayList}>
+          <div className="flex flex-col gap-2.5">
             {allHolidays.map((h, idx) => (
-              <li
+              <div
                 key={h.id || idx}
-                style={{
-                  ...holidayStyles.holidayListItem,
-                  color: h.type === "regular" ? "#237227" : "#f59e42",
-                }}
+                className="bg-gray-100/80 rounded-lg py-2.5 px-4 flex items-center justify-between"
               >
-                <span style={holidayStyles.holidayDate}>{h.date}</span>
-                <span style={holidayStyles.holidayType}>
-                  {h.type === "regular" ? "Regular Holiday" : "Special Holiday"}
-                </span>
-                <button
-                  onClick={() => handleDeleteSavedHoliday(h)}
-                  style={holidayStyles.deleteButton}
-                  title="Delete holiday"
-                >
-                  <Icon
-                    as={FiTrash2}
-                    ariaLabel="Delete holiday"
-                    color="#ffffff"
-                    style={{ marginRight: 8 }}
-                  />
-                </button>
-              </li>
+                <span className="font-semibold text-gray-800 text-sm">{h.date}</span>
+                <div className="flex items-center gap-3">
+                  <span
+                    className={`text-sm font-semibold ${
+                      h.type === "regular" ? "text-[#237227]" : "text-[#f59e42]"
+                    }`}
+                  >
+                    {h.type === "regular" ? "Regular Holiday" : "Special Holiday"}
+                  </span>
+                  <button
+                    onClick={() => handleDeleteSavedHoliday(h)}
+                    className="p-1.5 rounded-lg bg-[#e11d48] text-white hover:bg-[#e11d48] cursor-pointer border-none flex items-center justify-center"
+                    title="Delete holiday"
+                  >
+                    <FiTrash2 size={15} />
+                  </button>
+                </div>
+              </div>
             ))}
-          </ul>
-        </div>
-      )}
-
-      {/* Pending Holidays Card */}
-      {(regularHolidays.length > 0 || specialHolidays.length > 0) && (
-        <div style={holidayStyles.cardPending}>
-          <div style={holidayStyles.cardHeaderPending}>
-            <span style={holidayStyles.cardIconPending}>
-              <Icon as={FiClock} size={20} ariaLabel="Pending" />
-            </span>
-            <span style={holidayStyles.cardTitlePending}>
-              Pending Holidays for {month} (To Save)
-            </span>
           </div>
-          <ul style={holidayStyles.holidayListPending}>
-            {regularHolidays.filter(Boolean).map((date, idx) => (
-              <li key={"reg-" + idx} style={{ color: "#237227" }}>
-                {date} (Regular Holiday)
-              </li>
-            ))}
-            {specialHolidays.filter(Boolean).map((date, idx) => (
-              <li key={"spec-" + idx} style={{ color: "#f59e42" }}>
-                {date} (Special Holiday)
-              </li>
-            ))}
-          </ul>
         </div>
       )}
 
-      {/* Add Holidays Cards */}
-      <div style={holidayStyles.cardsRow}>
+      {/* Add Holidays Cards Row */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
         {/* Regular Holidays Card */}
-        <div style={holidayStyles.addCard}>
-          <div style={holidayStyles.addCardHeader}>
-            <span style={holidayStyles.addCardTitle}>
-              Regular Holidays{" "}
-              <span style={{ color: "#237227", fontWeight: 600 }}>
-                ({regularRate}%)
-              </span>
-            </span>
-          </div>
-          {regularHolidays.map((date, idx) => (
-            <div key={idx} style={holidayStyles.addHolidayRow}>
-              <input
-                type="date"
-                value={date}
-                onChange={(e) => updateHoliday("regular", idx, e.target.value)}
-                style={holidayStyles.addHolidayInput}
-              />
-              <button
-                onClick={() => removeHoliday("regular", idx)}
-                style={holidayStyles.removeButton}
-                title="Remove date"
-              >
-                <Icon as={FiX} ariaLabel="Remove date" />
-              </button>
+        <div className="bg-white rounded-2xl p-6 border border-gray-200 flex flex-col justify-between shadow-none">
+          <div>
+            <div className="mb-4">
+              <h3 className="text-base font-bold text-gray-800 m-0">
+                Regular Holidays <span className="text-[#237227] font-bold">({regularRate}%)</span>
+              </h3>
             </div>
-          ))}
+            {regularHolidays.map((date, idx) => (
+              <div key={idx} className="flex items-center gap-2 mb-3">
+                <input
+                  type="date"
+                  value={date}
+                  onChange={(e) => updateHoliday("regular", idx, e.target.value)}
+                  className="flex-1 py-2 px-3 text-sm rounded-lg border border-gray-300 bg-white text-gray-800 outline-none focus:outline-none focus:ring-0 focus:border-[#237227] cursor-pointer"
+                />
+                <button
+                  onClick={() => removeHoliday("regular", idx)}
+                  className="p-2 bg-rose-50 text-rose-600 border border-rose-200 rounded-lg hover:bg-rose-50 cursor-pointer flex items-center justify-center"
+                  title="Remove date"
+                >
+                  <FiX size={16} />
+                </button>
+              </div>
+            ))}
+          </div>
           <button
             onClick={() => addHoliday("regular")}
-            style={holidayStyles.addButton}
+            className="w-full py-2.5 mt-2 rounded-lg bg-[#237227] text-white font-semibold text-sm cursor-pointer border-none outline-none hover:bg-[#237227]"
           >
             + Add Regular Holiday
           </button>
         </div>
 
         {/* Special Holidays Card */}
-        <div style={holidayStyles.addCard}>
-          <div style={holidayStyles.addCardHeader}>
-            <span style={holidayStyles.addCardTitle}>
-              Special Holidays{" "}
-              <span style={{ color: "#f59e42", fontWeight: 600 }}>
-                ({specialRate}%)
-              </span>
-            </span>
-          </div>
-          {specialHolidays.map((date, idx) => (
-            <div key={idx} style={holidayStyles.addHolidayRow}>
-              <input
-                type="date"
-                value={date}
-                onChange={(e) => updateHoliday("special", idx, e.target.value)}
-                style={holidayStyles.addHolidayInput}
-              />
-              <button
-                onClick={() => removeHoliday("special", idx)}
-                style={holidayStyles.removeButton}
-                title="Remove date"
-              >
-                <Icon as={FiX} ariaLabel="Remove date" />
-              </button>
+        <div className="bg-white rounded-2xl p-6 border border-gray-200 flex flex-col justify-between shadow-none">
+          <div>
+            <div className="mb-4">
+              <h3 className="text-base font-bold text-gray-800 m-0">
+                Special Holidays <span className="text-[#f59e42] font-bold">({specialRate}%)</span>
+              </h3>
             </div>
-          ))}
+            {specialHolidays.map((date, idx) => (
+              <div key={idx} className="flex items-center gap-2 mb-3">
+                <input
+                  type="date"
+                  value={date}
+                  onChange={(e) => updateHoliday("special", idx, e.target.value)}
+                  className="flex-1 py-2 px-3 text-sm rounded-lg border border-gray-300 bg-white text-gray-800 outline-none focus:outline-none focus:ring-0 focus:border-[#237227] cursor-pointer"
+                />
+                <button
+                  onClick={() => removeHoliday("special", idx)}
+                  className="p-2 bg-rose-50 text-rose-600 border border-rose-200 rounded-lg hover:bg-rose-50 cursor-pointer flex items-center justify-center"
+                  title="Remove date"
+                >
+                  <FiX size={16} />
+                </button>
+              </div>
+            ))}
+          </div>
           <button
             onClick={() => addHoliday("special")}
-            style={holidayStyles.addButton}
+            className="w-full py-2.5 mt-2 rounded-lg bg-[#237227] text-white font-semibold text-sm cursor-pointer border-none outline-none hover:bg-[#237227]"
           >
             + Add Special Holiday
           </button>
@@ -284,11 +318,11 @@ export default function HolidayManagerGlobal({
       </div>
 
       {/* Save Button */}
-      <div style={holidayStyles.saveRow}>
+      <div className="flex justify-center">
         <button
           onClick={handleSave}
-          style={holidayStyles.saveButton}
           disabled={saving}
+          className="px-10 py-3 text-sm font-semibold rounded-lg border-none cursor-pointer bg-[#237227] text-white inline-flex items-center justify-center min-w-[180px] disabled:opacity-70 disabled:cursor-not-allowed outline-none focus:outline-none hover:bg-[#237227]"
         >
           {saving ? "Saving..." : "Save Holidays"}
         </button>
@@ -296,233 +330,3 @@ export default function HolidayManagerGlobal({
     </div>
   );
 }
-
-// --- Styles for enhanced UI ---
-const holidayStyles = {
-  container: {
-    background: "#f8fafc",
-    borderRadius: "24px",
-    padding: "32px 24px",
-    margin: "0 auto",
-    maxWidth: "900px",
-    boxShadow: "0 6px 24px rgba(16,185,129,0.08)",
-    border: "1px solid #e5e7eb",
-  },
-  sectionHeader: {
-    textAlign: "center",
-    marginBottom: "24px",
-  },
-  sectionTitle: {
-    fontSize: "2rem",
-    fontWeight: 700,
-    color: "#1f2937",
-    margin: 0,
-  },
-  monthRow: {
-    display: "flex",
-    justifyContent: "center",
-    alignItems: "center",
-    marginBottom: 24,
-  },
-  monthLabel: {
-    fontSize: "1.1rem",
-    color: "#374151",
-    fontWeight: 500,
-    display: "flex",
-    alignItems: "center",
-  },
-  monthInput: {
-    marginLeft: 8,
-    padding: "8px 14px",
-    borderRadius: "10px",
-    border: "1px solid #d1d5db",
-    fontSize: "1rem",
-    background: "#fff",
-    color: "#1f2937",
-    outline: "none",
-    transition: "border-color 0.2s",
-  },
-  card: {
-    background: "#fff",
-    borderRadius: "18px",
-    boxShadow: "0 2px 8px rgba(16,185,129,0.07)",
-    padding: "20px 24px",
-    marginBottom: 24,
-    border: "1px solid #e5e7eb",
-  },
-  cardHeader: {
-    display: "flex",
-    alignItems: "center",
-    gap: "10px",
-    marginBottom: 12,
-  },
-  cardIcon: {
-    fontSize: "1.5rem",
-  },
-  cardTitle: {
-    fontWeight: 600,
-    fontSize: "1.15rem",
-    color: "#1f2937",
-  },
-  holidayList: {
-    listStyle: "none",
-    padding: 0,
-    margin: 0,
-  },
-  holidayListItem: {
-    display: "flex",
-    alignItems: "center",
-    background: "#f3f4f6",
-    borderRadius: "8px",
-    padding: "8px 14px",
-    marginBottom: 8,
-    fontWeight: 500,
-    fontSize: "1rem",
-    boxShadow: "0 1px 2px rgba(16,185,129,0.04)",
-  },
-  holidayDate: {
-    flex: 1,
-    fontWeight: 600,
-    letterSpacing: "0.5px",
-  },
-  holidayType: {
-    marginLeft: 12,
-    fontSize: "0.98rem",
-    fontWeight: 500,
-    opacity: 0.85,
-  },
-  deleteButton: {
-    marginLeft: 16,
-    background: "#e11d48",
-    color: "#fff",
-    border: "none",
-    borderRadius: "6px",
-    padding: "4px 10px",
-    cursor: "pointer",
-    fontSize: "1.1rem",
-    transition: "background 0.2s",
-  },
-  cardPending: {
-    background: "#fef9c3",
-    borderRadius: "14px",
-    boxShadow: "0 1px 4px rgba(251,191,36,0.08)",
-    padding: "16px 20px",
-    marginBottom: 24,
-    border: "1px solid #fde68a",
-  },
-  cardHeaderPending: {
-    display: "flex",
-    alignItems: "center",
-    gap: "10px",
-    marginBottom: 10,
-  },
-  cardIconPending: {
-    fontSize: "1.3rem",
-  },
-  cardTitlePending: {
-    fontWeight: 600,
-    fontSize: "1.05rem",
-    color: "#b45309",
-  },
-  holidayListPending: {
-    listStyle: "none",
-    padding: 0,
-    margin: 0,
-  },
-   titleUnderline: {
-    height: "4px",
-    width: "100px",
-    background: "#237227", // solid green
-    margin: "8px auto 0",
-    borderRadius: "2px",
-  },
-  cardsRow: {
-    display: "flex",
-    gap: "24px",
-    marginBottom: 32,
-    flexWrap: "wrap",
-    justifyContent: "center",
-  },
-  addCard: {
-    background: "#ffffff",
-    borderRadius: "16px",
-    padding: "32px 24px",
-    border: "1px solid #f3f4f6",
-    boxShadow: "0 4px 20px rgba(0, 0, 0, 0.04)",
-    flex: "1 1 270px",
-    display: "flex",
-    flexDirection: "column",
-    alignItems: "stretch",
-  },
-  addCardHeader: {
-    display: "flex",
-    alignItems: "center",
-    gap: "10px",
-    marginBottom: 20,
-  },
-  addCardTitle: {
-    fontWeight: 700,
-    fontSize: "1.3rem",
-    color: "#1f2937",
-    letterSpacing: "-0.01em",
-  },
-  addHolidayRow: {
-    display: "flex",
-    alignItems: "center",
-    marginBottom: 12,
-  },
-  addHolidayInput: {
-    flex: 1,
-    padding: "14px 16px",
-    fontSize: "0.95rem",
-    borderRadius: "14px",
-    border: "1px solid #e5e7eb",
-    background: "#ffffff",
-    color: "#1f2937",
-    outline: "none",
-    transition: "border-color 0.2s, box-shadow 0.2s",
-  },
-  removeButton: {
-    marginLeft: 8,
-    background: "#fef2f2",
-    color: "#e11d48",
-    border: "1px solid #fecdd3",
-    borderRadius: "8px",
-    padding: "12px 14px",
-    cursor: "pointer",
-    fontSize: "1.1rem",
-    transition: "all 0.2s",
-  },
-  addButton: {
-    marginTop: 12,
-    background: "#f3f4f6",
-    color: "#374151",
-    border: "none",
-    borderRadius: "8px",
-    padding: "12px 0",
-    fontWeight: 600,
-    fontSize: "0.95rem",
-    cursor: "pointer",
-    transition: "background 0.2s",
-  },
-  saveRow: {
-    display: "flex",
-    justifyContent: "center",
-    marginTop: 20,
-  },
-  saveButton: {
-    background: "#237227",
-    color: "#ffffff",
-    border: "none",
-    borderRadius: "8px",
-    padding: "14px 36px",
-    fontWeight: 600,
-    fontSize: "1rem",
-    cursor: "pointer",
-    boxShadow: "0 4px 12px rgba(35, 114, 39, 0.15)",
-    transition: "background 0.2s",
-    display: "inline-flex",
-    alignItems: "center",
-    justifyContent: "center",
-  },
-};

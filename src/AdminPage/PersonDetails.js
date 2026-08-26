@@ -1,3 +1,4 @@
+
 import { useEffect, useState, useRef, useCallback } from "react";
 import { v4 as uuidv4 } from "uuid";
 import Swal from "sweetalert2";
@@ -13,29 +14,11 @@ import { recordAttendanceForPerson } from "../AdminPage/attendanceUtils";
 // Face recognition threshold – adjust based on your model
 const FACE_MATCH_THRESHOLD = 0.35;
 
-
 export default function PersonDetails({
   scanPayload,
   onComplete,
   hidePersonTable = false,
 }) {
-  // Ensure SweetAlert2 renders above any modals by increasing z-index
-  useEffect(() => {
-    const styleId = "swal2-zindex-fix";
-    if (document.getElementById(styleId)) return;
-    const s = document.createElement("style");
-    s.id = styleId;
-    s.textContent = `
-      .swal2-container, .swal2-backdrop, .swal2-popup {
-        z-index: 100000 !important;
-      }
-    `;
-    document.head.appendChild(s);
-    return () => {
-      const el = document.getElementById(styleId);
-      if (el) el.remove();
-    };
-  }, []);
   const rawDescriptor = scanPayload?.descriptor || null;
   const descriptor = rawDescriptor
     ? normalizeDescriptor(toFloat32Array(rawDescriptor))
@@ -368,12 +351,18 @@ export default function PersonDetails({
 
         if (duplicateFace) {
           await Swal.fire({
+            toast: true,
+            position: "top-end",
             icon: "error",
-            title: "Duplicate Face",
-            text: `This face already belongs to ${
-              duplicateFace.name || "another person"
-            } (ID: ${duplicateFace.id}). Registration denied.`,
-            confirmButtonText: "OK",
+            title: `Duplicate Face: ${duplicateFace.name || "another person"} (ID: ${duplicateFace.id}). Registration denied.`,
+            showConfirmButton: false,
+            timer: 3500,
+            timerProgressBar: true,
+            customClass: {
+              popup: "!rounded-2xl !shadow-[0_12px_30px_rgba(0,0,0,0.12)] !border !border-gray-200 !px-4 !py-3 !bg-white font-sans",
+              title: "!text-sm !font-semibold !text-gray-800 !m-0 !leading-tight",
+              timerProgressBar: "!bg-red-500",
+            },
           });
           setSaving(false);
           return;
@@ -392,10 +381,18 @@ export default function PersonDetails({
 
         if (duplicateName) {
           await Swal.fire({
+            toast: true,
+            position: "top-end",
             icon: "error",
-            title: "Duplicate Name",
-            text: `The name "${form.name}" is already used by ${duplicateName.name} (ID: ${duplicateName.id}). Please use a different name.`,
-            confirmButtonText: "OK",
+            title: `Duplicate Name: "${form.name}" already used by ${duplicateName.name}.`,
+            showConfirmButton: false,
+            timer: 3500,
+            timerProgressBar: true,
+            customClass: {
+              popup: "!rounded-2xl !shadow-[0_12px_30px_rgba(0,0,0,0.12)] !border !border-gray-200 !px-4 !py-3 !bg-white font-sans",
+              title: "!text-sm !font-semibold !text-gray-800 !m-0 !leading-tight",
+              timerProgressBar: "!bg-red-500",
+            },
           });
           setSaving(false);
           return;
@@ -483,35 +480,56 @@ export default function PersonDetails({
 
         if (attendanceResult.inserted) {
           await Swal.fire({
+            toast: true,
+            position: "top-end",
             icon: attendanceResult.status === "late" ? "warning" : "success",
-            title: "Face linked and attendance recorded!",
-            text:
-              attendanceResult.status === "late"
-                ? "The face was linked to the existing person and this same scan was logged as late attendance."
-                : "The face was linked to the existing person and this same scan was logged immediately.",
+            title: "Face linked & attendance recorded!",
             showConfirmButton: false,
-            timer: 2200,
+            timer: 2500,
+            timerProgressBar: true,
+            iconColor: attendanceResult.status === "late" ? "#f59e0b" : "#237227",
+            customClass: {
+              popup: "!rounded-2xl !shadow-[0_12px_30px_rgba(0,0,0,0.12)] !border !border-gray-200 !px-4 !py-3 !bg-white font-sans",
+              title: "!text-sm !font-semibold !text-gray-800 !m-0 !leading-tight",
+              timerProgressBar: attendanceResult.status === "late" ? "!bg-[#f59e0b]" : "!bg-[#237227]",
+            },
           });
         } else {
           let blockedMessage = attendanceResult.message;
           if (attendanceResult.event === "already-timed-in") {
             blockedMessage =
-              "The face was linked to the selected person, but attendance was not added because this person is already timed in for the current work window.";
+              "Face linked to person, but already timed in for current work window.";
           }
           await Swal.fire({
+            toast: true,
+            position: "top-end",
             icon: "info",
-            title: "Face linked successfully!",
-            text: blockedMessage,
-            showConfirmButton: true,
+            title: blockedMessage || "Face linked successfully!",
+            showConfirmButton: false,
+            timer: 3000,
+            timerProgressBar: true,
+            customClass: {
+              popup: "!rounded-2xl !shadow-[0_12px_30px_rgba(0,0,0,0.12)] !border !border-gray-200 !px-4 !py-3 !bg-white font-sans",
+              title: "!text-sm !font-semibold !text-gray-800 !m-0 !leading-tight",
+              timerProgressBar: "!bg-blue-500",
+            },
           });
         }
       } else {
         await Swal.fire({
+          toast: true,
+          position: "top-end",
           icon: "success",
           title: "Person registered successfully!",
-          text: "Registration completed.",
           showConfirmButton: false,
-          timer: 1800,
+          timer: 2500,
+          timerProgressBar: true,
+          iconColor: "#237227",
+          customClass: {
+            popup: "!rounded-2xl !shadow-[0_12px_30px_rgba(0,0,0,0.12)] !border !border-gray-200 !px-4 !py-3 !bg-white font-sans",
+            title: "!text-sm !font-semibold !text-gray-800 !m-0 !leading-tight",
+            timerProgressBar: "!bg-[#237227]",
+          },
         });
       }
 
@@ -526,74 +544,64 @@ export default function PersonDetails({
   }
 
   return (
-    <div style={{ marginTop: "24px", width: "100%", maxWidth: "100%" }}>
-      <h2>Person Details Registration</h2>
+    <div className="person-details-container mt-6 w-full max-w-full">
+      <style>{`
+        .person-details-container button,
+        .person-details-container button:hover,
+        .person-details-container button:focus,
+        .person-details-container button:active,
+        .person-details-container * {
+          transform: none !important;
+        }
+        .person-details-container button:hover {
+          box-shadow: none !important;
+        }
+        .person-details-container input:focus,
+        .person-details-container select:focus {
+          outline: none !important;
+          box-shadow: none !important;
+          border-color: #237227 !important;
+        }
+      `}</style>
+      <h2 className="text-xl font-bold mb-4">Person Details Registration</h2>
       {isRegistrationMode &&
         (matchedCandidate ? (
-          <div
-            style={{
-              marginBottom: "16px",
-              padding: "12px 16px",
-              borderRadius: "6px",
-              background: "#1e3a8a",
-              border: "1px solid #1e40af",
-              color: "#e6f0ff",
-              display: "flex",
-              justifyContent: "space-between",
-              alignItems: "center",
-            }}
-          >
+          <div className="mb-4 py-3 px-4 rounded-md bg-blue-900 border border-blue-800 text-blue-100 flex justify-between items-center">
             <div>
               Face appears to match{" "}
-              <strong>{matchedCandidate.name || matchedCandidate.id}</strong>{" "}
+              <strong className="font-bold">{matchedCandidate.name || matchedCandidate.id}</strong>{" "}
               (distance {matchedCandidate.dist.toFixed(3)}). You can confirm or
               choose another person.
             </div>
-            <div style={{ marginLeft: "12px" }}>
+            <div className="ml-3 shrink-0">
               <button
                 type="button"
                 onClick={handleRejectMatch}
-                style={{
-                  padding: "6px 10px",
-                  background: "#f97316",
-                  color: "#fff",
-                  border: "none",
-                  borderRadius: 4,
-                  cursor: "pointer",
-                }}
+                className="py-1.5 px-2.5 bg-orange-500 hover:bg-orange-600 text-white border-none rounded-lg cursor-pointer transition-colors shadow-none hover:shadow-none !transform-none focus:outline-none focus:ring-0"
               >
                 Not my face
               </button>
             </div>
           </div>
         ) : (
-          <div
-            style={{
-              marginBottom: "16px",
-              padding: "12px 16px",
-              borderRadius: "6px",
-              background: "#1f3b2f",
-              border: "1px solid #2f855a",
-              color: "#e6fffa",
-            }}
-          >
+          <div className="mb-4 py-3 px-4 rounded-md bg-[#1f3b2f] border border-[#2f855a] text-[#e6fffa]">
             Face not enrolled yet. Complete registration first, or select an
             existing person without a saved face to link this scan before
             attendance can be logged.
           </div>
         ))}
 
-      {!hidePersonTable && loading && <p>Loading persons...</p>}
+      {!hidePersonTable && loading && <p className="text-gray-500">Loading persons...</p>}
       {!hidePersonTable && error && (
-        <div style={{ marginBottom: 12 }}>
-          <p style={{ color: "red", margin: 0 }}>{error}</p>
-          <div style={{ marginTop: 8 }}>
+        <div className="mb-3">
+          <p className="text-red-500 m-0">{error}</p>
+          <div className="mt-2">
             <button
               onClick={() => {
                 setError(null);
                 loadPersons({ force: true });
               }}
-              style={{ padding: "6px 10px" }}
+              className="py-1.5 px-2.5 bg-gray-200 hover:bg-gray-300 text-gray-800 rounded-lg transition-colors shadow-none hover:shadow-none !transform-none focus:outline-none focus:ring-0"
             >
               Retry
             </button>
@@ -601,79 +609,18 @@ export default function PersonDetails({
         </div>
       )}
 
-      <div
-        style={{
-          display: "flex",
-          gap: "24px",
-          alignItems: "flex-start",
-          width: "100%",
-        }}
-      >
+      <div className={`flex gap-6 items-start w-full ${hidePersonTable ? 'flex-col' : 'flex-col md:flex-row'}`}>
         {!hidePersonTable && (
-          <div style={{ flex: 1, maxHeight: "360px", overflowY: "auto" }}>
-            <table
-              style={{
-                width: "100%",
-                borderCollapse: "collapse",
-                fontSize: "14px",
-              }}
-            >
+          <div className="flex-1 max-h-[360px] overflow-y-auto w-full md:w-auto">
+            <table className="w-full border-collapse text-sm text-left">
               <thead>
                 <tr>
-                  <th
-                    style={{
-                      borderBottom: "1px solid #444",
-                      padding: "8px",
-                      textAlign: "left",
-                    }}
-                  >
-                    ID
-                  </th>
-                  <th
-                    style={{
-                      borderBottom: "1px solid #444",
-                      padding: "8px",
-                      textAlign: "left",
-                    }}
-                  >
-                    Name
-                  </th>
-                  <th
-                    style={{
-                      borderBottom: "1px solid #444",
-                      padding: "8px",
-                      textAlign: "left",
-                    }}
-                  >
-                    Department
-                  </th>
-                  <th
-                    style={{
-                      borderBottom: "1px solid #444",
-                      padding: "8px",
-                      textAlign: "left",
-                    }}
-                  >
-                    Phone
-                  </th>
-                  <th
-                    style={{
-                      borderBottom: "1px solid #444",
-                      padding: "8px",
-                      textAlign: "left",
-                    }}
-                  >
-                    Address
-                  </th>
-                  <th
-                    style={{
-                      borderBottom: "1px solid #444",
-                      padding: "8px",
-                      textAlign: "left",
-                    }}
-                  >
-                    Gender
-                  </th>
+                  <th className="border-b border-gray-600 p-2 font-semibold">ID</th>
+                  <th className="border-b border-gray-600 p-2 font-semibold">Name</th>
+                  <th className="border-b border-gray-600 p-2 font-semibold">Department</th>
+                  <th className="border-b border-gray-600 p-2 font-semibold">Phone</th>
+                  <th className="border-b border-gray-600 p-2 font-semibold">Address</th>
+                  <th className="border-b border-gray-600 p-2 font-semibold">Gender</th>
                 </tr>
               </thead>
               <tbody>
@@ -681,47 +628,19 @@ export default function PersonDetails({
                   <tr
                     key={p.id}
                     onClick={() => onSelect(p)}
-                    style={{
-                      cursor: "pointer",
-                      backgroundColor:
-                        selectedId === p.id ? "#333" : "transparent",
-                    }}
+                    className={`cursor-pointer transition-colors ${selectedId === p.id ? 'bg-gray-700' : 'hover:bg-gray-800/50'}`}
                   >
-                    <td
-                      style={{ borderBottom: "1px solid #333", padding: "6px" }}
-                    >
-                      {p.id}
-                    </td>
-                    <td
-                      style={{ borderBottom: "1px solid #333", padding: "6px" }}
-                    >
-                      {p.name || ""}
-                    </td>
-                    <td
-                      style={{ borderBottom: "1px solid #333", padding: "6px" }}
-                    >
-                      {p.department || ""}
-                    </td>
-                    <td
-                      style={{ borderBottom: "1px solid #333", padding: "6px" }}
-                    >
-                      {p.phone_number || ""}
-                    </td>
-                    <td
-                      style={{ borderBottom: "1px solid #333", padding: "6px" }}
-                    >
-                      {p.address || ""}
-                    </td>
-                    <td
-                      style={{ borderBottom: "1px solid #333", padding: "6px" }}
-                    >
-                      {p.sex || ""}
-                    </td>
+                    <td className="border-b border-gray-700 p-1.5">{p.id}</td>
+                    <td className="border-b border-gray-700 p-1.5">{p.name || ""}</td>
+                    <td className="border-b border-gray-700 p-1.5">{p.department || ""}</td>
+                    <td className="border-b border-gray-700 p-1.5">{p.phone_number || ""}</td>
+                    <td className="border-b border-gray-700 p-1.5">{p.address || ""}</td>
+                    <td className="border-b border-gray-700 p-1.5">{p.sex || ""}</td>
                   </tr>
                 ))}
                 {!persons.length && !loading && (
                   <tr>
-                    <td colSpan={6} style={{ padding: "8px" }}>
+                    <td colSpan={6} className="p-2 text-gray-500 text-center">
                       No persons yet. They will appear after the first scan or
                       you can add one manually.
                     </td>
@@ -734,12 +653,9 @@ export default function PersonDetails({
 
         <form
           onSubmit={onSave}
-          style={{
-            flexBasis: hidePersonTable ? "100%" : "280px",
-            flex: hidePersonTable ? 1 : undefined,
-          }}
+          className={`${hidePersonTable ? 'w-full' : 'md:basis-[280px] w-full shrink-0'}`}
         >
-          <h3>
+          <h3 className="text-lg font-semibold mb-3">
             {isLinkingExistingPerson
               ? "Link Face To Existing Person"
               : selectedId
@@ -747,15 +663,7 @@ export default function PersonDetails({
               : "Add Person"}
           </h3>
           {isRegistrationMode && !selectedId && (
-            <p
-              style={{
-                marginTop: 0,
-                marginBottom: "12px",
-                color: "#cbd5e1",
-                fontSize: "13px",
-                lineHeight: 1.4,
-              }}
-            >
+            <p className="mt-0 mb-3 text-slate-300 text-[13px] leading-[1.4]">
               This face is not enrolled yet. Save a new profile or select an
               existing person without a saved face, and the current scan will be
               used right away unless the work-hours rules block attendance for
@@ -763,15 +671,7 @@ export default function PersonDetails({
             </p>
           )}
           {isLinkingExistingPerson && !selectedPersonHasFace && (
-            <p
-              style={{
-                marginTop: 0,
-                marginBottom: "12px",
-                color: "#cbd5e1",
-                fontSize: "13px",
-                lineHeight: 1.4,
-              }}
-            >
+            <p className="mt-0 mb-3 text-slate-300 text-[13px] leading-[1.4]">
               You are linking this scanned face to the selected existing person
               record.
             </p>
@@ -779,121 +679,101 @@ export default function PersonDetails({
 
           {/* Person ID - only show when editing, read-only */}
           {selectedId && (
-            <div style={{ marginBottom: "8px", textAlign: "left" }}>
-              <label>
-                Person ID
-                <input
-                  name="id"
-                  value={form.id}
-                  readOnly
-                  style={{
-                    width: "100%",
-                    padding: "6px",
-                    marginTop: "4px",
-                    backgroundColor: "#444",
-                    color: "#ccc",
-                  }}
-                />
-              </label>
+            <div className="mb-2 text-left flex flex-col">
+              <label className="text-sm text-gray-200">Person ID</label>
+              <input
+                name="id"
+                value={form.id}
+                readOnly
+                className="w-full p-1.5 mt-1 bg-gray-700 border border-gray-600 text-gray-300 rounded cursor-not-allowed focus:outline-none"
+              />
             </div>
           )}
 
           {/* Name field */}
-          <div style={{ marginBottom: "8px", textAlign: "left" }}>
-            <label>
-              Name
-              <input
-                name="name"
-                value={form.name}
-                onChange={onChange}
-                style={{ width: "100%", padding: "6px", marginTop: "4px" }}
-              />
-            </label>
+          <div className="mb-2 text-left flex flex-col">
+            <label className="text-sm text-gray-200">Name</label>
+            <input
+              name="name"
+              value={form.name}
+              onChange={onChange}
+              className="w-full p-1.5 mt-1 bg-gray-800 border border-gray-600 text-white rounded focus:outline-none focus:border-[#237227] focus:ring-0 transition-colors"
+            />
           </div>
 
           {/* Phone number field */}
-          <div style={{ marginBottom: "8px", textAlign: "left" }}>
-            <label>
-              Phone Number
-              <input
-                name="phone_number"
-                value={form.phone_number}
-                onChange={onChange}
-                style={{ width: "100%", padding: "6px", marginTop: "4px" }}
-              />
-            </label>
+          <div className="mb-2 text-left flex flex-col">
+            <label className="text-sm text-gray-200">Phone Number</label>
+            <input
+              name="phone_number"
+              value={form.phone_number}
+              onChange={onChange}
+              className="w-full p-1.5 mt-1 bg-gray-800 border border-gray-600 text-white rounded focus:outline-none focus:border-[#237227] focus:ring-0 transition-colors"
+            />
           </div>
 
           {/* Email field */}
-          <div style={{ marginBottom: "8px", textAlign: "left" }}>
-            <label>
-              Email
-              <input
-                name="email"
-                type="email"
-                value={form.email}
-                onChange={onChange}
-                style={{ width: "100%", padding: "6px", marginTop: "4px" }}
-              />
-            </label>
+          <div className="mb-2 text-left flex flex-col">
+            <label className="text-sm text-gray-200">Email</label>
+            <input
+              name="email"
+              type="email"
+              value={form.email}
+              onChange={onChange}
+              className="w-full p-1.5 mt-1 bg-gray-800 border border-gray-600 text-white rounded focus:outline-none focus:border-[#237227] focus:ring-0 transition-colors"
+            />
           </div>
 
           {/* Address field */}
-          <div style={{ marginBottom: "8px", textAlign: "left" }}>
-            <label>
-              Address
-              <input
-                name="address"
-                value={form.address}
-                onChange={onChange}
-                style={{ width: "100%", padding: "6px", marginTop: "4px" }}
-              />
-            </label>
+          <div className="mb-2 text-left flex flex-col">
+            <label className="text-sm text-gray-200">Address</label>
+            <input
+              name="address"
+              value={form.address}
+              onChange={onChange}
+              className="w-full p-1.5 mt-1 bg-gray-800 border border-gray-600 text-white rounded focus:outline-none focus:border-[#237227] focus:ring-0 transition-colors"
+            />
           </div>
 
           {/* Sex field */}
-          <div style={{ marginBottom: "8px", textAlign: "left" }}>
-            <label>
-              Sex
-              <select
-                name="sex"
-                value={form.sex}
-                onChange={onChange}
-                style={{ width: "100%", padding: "6px", marginTop: "4px" }}
-              >
-                <option value="">Select sex</option>
-                <option value="Male">Male</option>
-                <option value="Female">Female</option>
-                <option value="Other">Other</option>
-              </select>
-            </label>
+          <div className="mb-2 text-left flex flex-col">
+            <label className="text-sm text-gray-200">Sex</label>
+            <select
+              name="sex"
+              value={form.sex}
+              onChange={onChange}
+              className="w-full p-1.5 mt-1 bg-gray-800 border border-gray-600 text-white rounded focus:outline-none focus:border-[#237227] focus:ring-0 transition-colors"
+            >
+              <option value="">Select sex</option>
+              <option value="Male">Male</option>
+              <option value="Female">Female</option>
+              <option value="Other">Other</option>
+            </select>
           </div>
 
           {/* Department dropdown */}
-          <div style={{ marginBottom: "12px", textAlign: "left" }}>
-            <label>
-              Department
-              <select
-                value={customDepartment ? "" : form.department}
-                onChange={handleDepartmentChange}
-                style={{ width: "100%", padding: "6px", marginTop: "4px" }}
-              >
-                <option value="">Select department</option>
-                {departmentList.map((dept) => (
-                  <option key={dept} value={dept}>
-                    {dept}
-                  </option>
-                ))}
-              </select>
-            </label>
+          <div className="mb-3 text-left flex flex-col">
+            <label className="text-sm text-gray-200">Department</label>
+            <select
+              value={customDepartment ? "" : form.department}
+              onChange={handleDepartmentChange}
+              className="w-full p-1.5 mt-1 bg-gray-800 border border-gray-600 text-white rounded focus:outline-none focus:border-[#237227] focus:ring-0 transition-colors"
+            >
+              <option value="">Select department</option>
+              {departmentList.map((dept) => (
+                <option key={dept} value={dept}>
+                  {dept}
+                </option>
+              ))}
+            </select>
             {customDepartment && (
-              <div style={{ marginTop: "4px" }}>
+              <div className="mt-1">
                 <input
                   type="text"
                   placeholder="Enter department"
                   value={customDeptValue}
                   onChange={handleCustomDeptChange}
-                  style={{ width: "100%", padding: "6px", marginTop: "4px" }}
+                  className="w-full p-1.5 mt-1 bg-gray-800 border border-gray-600 text-white rounded focus:outline-none focus:border-[#237227] focus:ring-0 transition-colors"
                 />
               </div>
             )}
@@ -902,7 +782,7 @@ export default function PersonDetails({
           <button
             type="submit"
             disabled={saving}
-            style={{ padding: "8px 16px" }}
+            className="w-full py-2.5 px-4 bg-[#237227] hover:bg-[#1e5f21] disabled:opacity-50 disabled:cursor-not-allowed text-white font-semibold rounded-lg transition-colors focus:outline-none focus:ring-0 shadow-none hover:shadow-none !transform-none hover:!transform-none"
           >
             {saving ? "Saving..." : "Save"}
           </button>

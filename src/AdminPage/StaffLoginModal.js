@@ -111,6 +111,7 @@ export default function StaffLoginModal({ open, onClose, onStaffLoggedIn }) {
               onChange={(e) => setEmail(e.target.value)}
               placeholder="attendances@gmail.com"
               required
+              className="focus:!outline-none focus:!ring-0 focus:!shadow-none focus:!border-none !shadow-none !border-none !outline-none"
               style={styles.input}
             />
           </div>
@@ -126,13 +127,14 @@ export default function StaffLoginModal({ open, onClose, onStaffLoggedIn }) {
               onChange={(e) => setPassword(e.target.value)}
               placeholder="Enter attendance password"
               required
+              className="focus:!outline-none focus:!ring-0 focus:!shadow-none focus:!border-none !shadow-none !border-none !outline-none"
               style={styles.input}
             />
 
             <button
               type="button"
               onClick={() => setShowPassword(!showPassword)}
-              style={styles.eyeButton}
+              className="bg-transparent hover:!bg-transparent border-none cursor-pointer text-gray-500 hover:text-gray-700 text-base flex items-center justify-center p-1 leading-none transition-colors !shadow-none hover:!shadow-none !transform-none hover:!transform-none focus:outline-none focus:!outline-none focus:!ring-0 focus:!shadow-none"
               aria-label={showPassword ? "Hide password" : "Show password"}
             >
               {showPassword ? <FaEyeSlash /> : <FaEye />}

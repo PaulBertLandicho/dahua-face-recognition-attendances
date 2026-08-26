@@ -55,27 +55,29 @@ export default function AdminLogin() {
   };
 
   return (
-    <div style={styles.container}>
-      <div style={styles.card}>
-        <div style={styles.headerCentered}>
-          <div style={styles.icon} aria-hidden>
+    <div className="min-h-screen flex flex-col items-center justify-start p-0 bg-gray-50">
+      <div className="max-w-[420px] w-[90%] bg-white rounded-2xl px-8 py-10 shadow-[0_10px_25px_rgba(0,0,0,0.05)] border border-gray-100 mt-[10vh] mb-[100px]">
+        <div className="text-center mb-6 flex items-center justify-center flex-col gap-3">
+          <div className="flex justify-center mb-1" aria-hidden>
             <img
               src="/image/login-logo.png"
               alt="Multifactors Sales Logo"
-              style={styles.logoImage}
+              className="w-[140px] h-[140px] object-contain"
             />
           </div>
-          <h2 style={styles.welcomeTitle}>Welcome back</h2>
-          <div style={styles.headerSub}>
+          <h2 className="m-0 text-3xl font-bold text-gray-900">
+            Welcome back
+          </h2>
+          <div className="text-gray-500 text-[13px] mt-0.5">
             Sign in to access the admin dashboard
           </div>
         </div>
 
-        <form onSubmit={handleLogin} style={styles.form}>
-          <div style={styles.inputGroup}>
-            <label style={styles.label}>Email</label>
-            <div style={styles.inputWrapper}>
-              <span style={styles.leftIcon}>
+        <form onSubmit={handleLogin} className="flex flex-col gap-[14px]">
+          <div className="flex flex-col">
+            <label className="text-sm mb-1.5 text-gray-700">Email</label>
+            <div className="relative flex items-center bg-[#fbf6f8] rounded-xl px-3 py-2.5 border border-transparent focus-within:border-gray-200 transition-colors">
+              <span className="text-gray-400 mr-2 text-base flex items-center">
                 <FaEnvelope />
               </span>
               <input
@@ -84,16 +86,16 @@ export default function AdminLogin() {
                 placeholder="you@company.com"
                 onChange={(e) => setEmail(e.target.value)}
                 required
-                style={styles.input}
+                className="flex-1 py-2.5 px-2 rounded-lg border-none bg-transparent outline-none text-[15px] text-gray-900 focus:outline-none focus:ring-0 focus:!ring-0 focus:!border-none focus:!shadow-none !shadow-none !border-none !outline-none"
                 aria-label="Email"
               />
             </div>
           </div>
 
-          <div style={styles.inputGroup}>
-            <label style={styles.label}>Password</label>
-            <div style={styles.inputWrapper}>
-              <span style={styles.leftIcon}>
+          <div className="flex flex-col">
+            <label className="text-sm mb-1.5 text-gray-700">Password</label>
+            <div className="relative flex items-center bg-[#fbf6f8] rounded-xl px-3 py-2.5 border border-transparent focus-within:border-gray-200 transition-colors">
+              <span className="text-gray-400 mr-2 text-base flex items-center">
                 <FaLock />
               </span>
               <input
@@ -102,14 +104,14 @@ export default function AdminLogin() {
                 placeholder="Enter your password"
                 onChange={(e) => setPassword(e.target.value)}
                 required
-                style={styles.input}
+                className="flex-1 py-2.5 px-2 rounded-lg border-none bg-transparent outline-none text-[15px] text-gray-900 focus:outline-none focus:ring-0 focus:!ring-0 focus:!border-none focus:!shadow-none !shadow-none !border-none !outline-none"
                 aria-label="Password"
               />
 
               <button
                 type="button"
                 onClick={() => setShowPassword(!showPassword)}
-                style={styles.eyeButton}
+                className="bg-transparent hover:!bg-transparent border-none cursor-pointer text-gray-500 hover:text-gray-700 text-base flex items-center justify-center p-1 leading-none transition-colors !shadow-none hover:!shadow-none !transform-none hover:!transform-none focus:outline-none focus:!outline-none focus:!ring-0 focus:!shadow-none"
                 aria-label={showPassword ? "Hide password" : "Show password"}
               >
                 {showPassword ? <FaEyeSlash /> : <FaEye />}
@@ -117,13 +119,13 @@ export default function AdminLogin() {
             </div>
           </div>
 
-          <div style={styles.rowBetween}>
-            <label style={styles.rememberLabel}>
+          <div className="flex justify-between items-center mt-1">
+            <label className="inline-flex items-center text-gray-700 text-sm cursor-pointer">
               <input
                 type="checkbox"
                 checked={remember}
                 onChange={(e) => setRemember(e.target.checked)}
-                style={styles.checkbox}
+                className="mr-2 cursor-pointer rounded border-gray-300 text-[#237227] accent-[#237227] focus:ring-0 focus:!ring-0 focus:!ring-offset-0 focus:!outline-none focus:!shadow-none focus:!border-gray-300 !shadow-none !outline-none"
               />
               Remember me
             </label>
@@ -132,27 +134,26 @@ export default function AdminLogin() {
               onClick={() => {
                 // placeholder: implement forgot password flow
               }}
-              style={styles.forgotLinkButton}
+              className="bg-transparent hover:!bg-transparent border-none text-[#237227] hover:text-[#1a541c] text-sm cursor-pointer p-0 !shadow-none hover:!shadow-none !transform-none hover:!transform-none hover:!translate-y-0 hover:underline focus:outline-none"
             >
               Forgot password?
             </button>
           </div>
 
-          {error && <div style={styles.error}>{error}</div>}
+          {error && <div className="text-red-600 text-center text-sm">{error}</div>}
 
           <button
             type="submit"
             disabled={loading}
-            style={{
-              ...styles.button,
-              ...(loading ? styles.buttonDisabled : {}),
-            }}
+            className={`flex items-center justify-center p-3 rounded-lg border-none bg-[#237227] hover:bg-[#1a541c] text-white cursor-pointer font-bold text-base w-full shadow-lg transition-all mt-2 ${
+              loading ? "opacity-60 cursor-not-allowed" : ""
+            }`}
           >
             {loading ? (
               "Logging in..."
             ) : (
               <>
-                <FaSignInAlt style={styles.signInIcon} /> Sign in
+                <FaSignInAlt className="mr-2 align-middle" /> Sign in
               </>
             )}
           </button>
@@ -160,197 +161,9 @@ export default function AdminLogin() {
       </div>
 
       {/* Footer */}
-      <div style={styles.footer}>
-        © 2026 Multifactors Sales Corporation. All rights reserved.
+      <div className="sticky bottom-0 left-0 mt-auto py-6 px-8 text-left text-[#0000000] text-md bg-gray-50 w-full border-t border-gray-200 box-border z-10">
+        © 2026 Multifactors Sales. All rights reserved.
       </div>
     </div>
   );
 }
-
-/* STYLES MUST BE OUTSIDE THE COMPONENT */
-const styles = {
-  container: {
-    minHeight: "100vh",
-    display: "flex",
-    flexDirection: "column",
-    alignItems: "center",
-    justifyContent: "flex-start",
-    padding: 0,
-    background: "#f9fafb",
-  },
-  card: {
-    maxWidth: "420px",
-    width: "90%",
-    background: "#ffffff",
-    borderRadius: "16px",
-    padding: "40px 32px",
-    boxShadow: "0 10px 25px rgba(0, 0, 0, 0.05)",
-    border: "1px solid #f3f4f6",
-    marginTop: "10vh",
-    marginBottom: "100px",
-  },
-  headerCentered: {
-    textAlign: "center",
-    marginBottom: "24px",
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    flexDirection: "column",
-    gap: 12,
-  },
-  icon: {
-    display: "flex",
-    justifyContent: "center",
-    marginBottom: "4px",
-  },
-  logoImage: {
-    width: 140,
-    height: 140,
-    objectFit: "contain",
-  },
-  welcomeTitle: {
-    margin: 0,
-    fontSize: "1.45rem",
-    fontWeight: 700,
-    color: "#111827",
-  },
-  headerSub: {
-    color: "#6b7280",
-    fontSize: "13px",
-    marginTop: "2px",
-  },
-  underline: {
-    width: "56px",
-    height: "4px",
-    background: "#237227",
-    margin: "8px auto",
-    borderRadius: "6px",
-  },
-  form: {
-    display: "flex",
-    flexDirection: "column",
-    gap: "14px",
-  },
-  inputWrapper: {
-    position: "relative",
-    display: "flex",
-    alignItems: "center",
-    background: "#fbf6f8",
-    borderRadius: "12px",
-    padding: "10px 12px",
-    border: "1px solid transparent",
-  },
-  leftIcon: {
-    color: "#9ca3af",
-    marginRight: "8px",
-    fontSize: "16px",
-    display: "flex",
-    alignItems: "center",
-  },
-  inputGroup: {
-    display: "flex",
-    flexDirection: "column",
-  },
-  label: {
-    fontSize: "14px",
-    marginBottom: "6px",
-    color: "#374151",
-  },
-  input: {
-    flex: 1,
-    padding: "10px 8px 10px 8px",
-    paddingRight: "40px",
-    borderRadius: "8px",
-    border: "none",
-    background: "transparent",
-    outline: "none",
-    fontSize: "15px",
-    color: "#111827",
-  },
-  button: {
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    padding: "12px",
-    borderRadius: "8px",
-    border: "none",
-    background: "#237227",
-    color: "#fff",
-    cursor: "pointer",
-    fontWeight: 700,
-    fontSize: "16px",
-    width: "100%",
-    boxShadow: "0 4px 12px rgba(35, 114, 39, 0.2)",
-    transition: "background 0.2s",
-  },
-  buttonDisabled: {
-    opacity: 0.6,
-    cursor: "not-allowed",
-  },
-  error: {
-    color: "#dc2626",
-    textAlign: "center",
-    fontSize: "14px",
-  },
-  rowBetween: {
-    display: "flex",
-    justifyContent: "space-between",
-    alignItems: "center",
-  },
-  forgotLink: {
-    color: "#237227",
-    fontSize: "13px",
-    textDecoration: "none",
-  },
-  forgotLinkButton: {
-    background: "transparent",
-    border: "none",
-    color: "#237227",
-    fontSize: "13px",
-    cursor: "pointer",
-    padding: 0,
-  },
-  checkbox: {
-    marginRight: "8px",
-  },
-  rememberLabel: {
-    display: "inline-flex",
-    alignItems: "center",
-    color: "#374151",
-    fontSize: "14px",
-  },
-  eyeButton: {
-    background: "transparent",
-    border: "none",
-    cursor: "pointer",
-    color: "#6b7280",
-    fontSize: "16px",
-    display: "flex",
-    alignItems: "center",
-    position: "absolute",
-    right: "25px",
-    top: "50%",
-    transform: "translateY(-50%)",
-    padding: 0,
-    lineHeight: 1,
-  },
-  signInIcon: {
-    marginRight: 8,
-    verticalAlign: "middle",
-  },
-  footer: {
-    position: "sticky",
-    bottom: 0,
-    left: 0,
-    marginTop: "auto",
-    padding: "24px 32px",
-    textAlign: "left",
-    color: "#6b7280",
-    fontSize: "13px",
-    background: "#f9fafb",
-    width: "100%",
-    borderTop: "1px solid #e5e7eb",
-    boxSizing: "border-box",
-    zIndex: 10,
-  },
-};

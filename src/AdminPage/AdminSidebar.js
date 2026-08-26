@@ -89,14 +89,27 @@ export default function AdminSidebar({ onLogout }) {
       {/* Sidebar */}
       <div
         className={[
-          "flex flex-col fixed left-0 top-0 min-h-screen bg-white border-r border-gray-200 pt-5 font-sans",
+          "admin-sidebar flex flex-col fixed left-0 top-0 min-h-screen bg-white border-r border-gray-200 pt-5 font-sans",
           isMobile
             ? isMobileOpen
-              ? "w-[260px] z-[120] shadow-[0_6px_40px_rgba(0,0,0,0.4)]"
+              ? "w-[260px] z-[120] shadow-md"
               : "hidden"
-            : "w-[295px] z-[100] shadow-[10px_0_50px_rgba(0,0,0,0.07)]",
+            : "w-[295px] z-[100] shadow-md",
         ].join(" ")}
       >
+        <style>{`
+          .admin-sidebar button,
+          .admin-sidebar button:focus,
+          .admin-sidebar button:focus-visible,
+          .admin-sidebar button:hover,
+          .admin-sidebar button:active {
+            transform: none !important;
+            outline: none !important;
+            box-shadow: none !important;
+            -webkit-tap-highlight-color: transparent !important;
+          }
+        `}</style>
+
         {/* Logo */}
         <div className="flex items-center gap-3 px-6 pb-5 mb-6 border-b border-[#9E9E9E]">
           <img
@@ -116,10 +129,10 @@ export default function AdminSidebar({ onLogout }) {
                 key={item.path}
                 onClick={() => navigate(item.path)}
                 className={[
-                  "flex items-center gap-3.5 rounded-lg px-5 py-3.5 text-base font-medium cursor-pointer transition-all duration-200 text-left w-full border-none",
+                  "flex items-center gap-3.5 rounded-lg px-5 py-3.5 text-base font-medium cursor-pointer transition-colors text-left w-full border-none outline-none focus:outline-none focus:ring-0 focus-visible:outline-none focus-visible:ring-0 shadow-none",
                   isActive
-                    ? "bg-[#237227] text-white shadow-[0_4px_14px_rgba(40,56,51,0.4)]"
-                    : "bg-transparent text-gray-600 hover:bg-[#e6f7f0] hover:text-[#237227]",
+                    ? "bg-[#237227] text-white shadow-none"
+                    : "bg-transparent hover:!bg-transparent text-gray-600 hover:text-gray-600",
                 ].join(" ")}
               >
                 {/* ✅ ICON */}
@@ -140,7 +153,7 @@ export default function AdminSidebar({ onLogout }) {
         {/* Logout */}
         <button
           onClick={onLogout}
-          className="flex items-center justify-center gap-3 bg-[#666666] text-white border-none rounded-[14px] mx-4 mb-16 py-4 text-[1.1rem] font-semibold cursor-pointer transition-all duration-200 hover:bg-[#df4343] hover:shadow-lg"
+          className="flex items-center justify-center gap-3 bg-[#666666] hover:bg-[#666666] text-white border-none rounded-[14px] mx-4 mb-16 py-4 text-[1.1rem] font-semibold cursor-pointer transition-all duration-200 outline-none focus:outline-none shadow-none hover:shadow-none"
         >
           <FiLogOut className="text-[1.4rem]" />
           <span>Logout</span>

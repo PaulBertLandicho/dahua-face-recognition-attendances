@@ -1,27 +1,24 @@
 import { useEffect, useState, useCallback, useRef } from "react";
-// import { supabase } from '../supabaseClient';
 import { useLoading } from "../LoadingContext";
 import { supabase } from "../supabaseClient";
-import { determineExpectedEvent, determineAttendanceStatus, getAttendanceStatus, toMinutes } from "./attendanceUtils";
+import { getAttendanceStatus } from "./attendanceUtils";
 import * as XLSX from "xlsx";
 import Swal from "sweetalert2";
 import { syncDahuaAttendance, deleteDahuaAttendance } from "../utils/dahuaApi";
-import { MdFilterList } from "react-icons/md";
 import {
+  FiSearch,
   FiDownload,
   FiArchive,
   FiRotateCcw,
-  FiPlus,
   FiX,
   FiRefreshCw,
 } from "react-icons/fi";
 
 export default function AttendanceTable() {
-  // Search, filter, and sort state
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("");
   const [departmentFilter, setDepartmentFilter] = useState("");
-  const [sortKey] = useState("device_time");
+  const sortKey = "device_time";
   const [sortOrder, setSortOrder] = useState("desc");
   const [selectedDate, setSelectedDate] = useState("");
   const [showArchived, setShowArchived] = useState(false);
@@ -38,10 +35,6 @@ export default function AttendanceTable() {
     setCurrentPage(1);
   }, [search, statusFilter, departmentFilter, selectedDate, showArchived, sortOrder]);
 
-  // Removed unused form and setForm state
-  // const [showForm, setShowForm] = useState(false); // Removed as unused
-
-  // Helper to format ISO date/time as "April 07, 2026 10:15:30"
   const formatDateTime = (value) => {
     if (!value) return "";
     const date = new Date(value);
@@ -56,368 +49,32 @@ export default function AttendanceTable() {
       minute: "2-digit",
       second: "2-digit",
     });
-    // Insert a dash between date and time for clearer separation
     return `${datePart} - ${timePart}`;
   };
 
+  const showToast = (title, icon = "success") => {
+    Swal.fire({
+      toast: true,
+      position: "top-end",
+      icon,
+      title,
+      showConfirmButton: false,
+      timer: 2500,
+      timerProgressBar: true,
+      iconColor: icon === "success" ? "#237227" : undefined,
+      customClass: {
+        popup: "!rounded-2xl !shadow-[0_12px_30px_rgba(0,0,0,0.12)] !border !border-gray-200 !px-4 !py-3 !bg-white font-sans",
+        title: "!text-sm !font-semibold !text-gray-800 !m-0 !leading-tight",
+        timerProgressBar: "!bg-[#237227]",
+      },
+    });
+  };
+
   const Icons = {
-    filter: <MdFilterList />,
     download: <FiDownload />,
     archive: <FiArchive />,
     restore: <FiRotateCcw />,
-    add: <FiPlus />,
     close: <FiX />,
-  };
-
-  // ─── Design System ────────────────────────────────────────────────────────
-  // Primary palette: Natural theme centered around Multifactors green (#237227)
-  const C = {
-    primary:      "#237227",  // The requested primary color
-    primaryHover: "#1d5e20",  // Slightly darker for hover states
-    primaryLight: "#e9f2ea",  // Very light natural green for backgrounds/badges
-    
-    background:   "#f6f8f6",  // Soft, natural off-white with a hint of earthy green
-    surface:      "#ffffff",  // Pure white for cards/tables
-    
-    textMain:     "#2c382d",  // Deep slate-green instead of harsh black
-    textMuted:    "#677368",  // Muted natural grayish-green
-    
-    border:       "#dce3dd",  // Soft natural border color
-    borderLight:  "#edf2ee",
-    
-    danger:       "#d9534f",
-    warning:      "#f59e0b",
-    success:      "#059669",
-    info:         "#2563eb",
-  };
-
-  const styles = {
-    // ── Page wrapper
-    container: {
-      margin: "0 auto",
-      padding: "36px 28px",
-      maxWidth: "100%",
-      fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif',
-      backgroundColor: "#ffffff",
-      minHeight: "100vh",
-      color: C.textMain,
-    },
-
-    // ── Page header
-    header: {
-      marginBottom: "24px",
-      display: "flex",
-      flexDirection: "column",
-      alignItems: "flex-start",
-      gap: "6px",
-    },
-    headerBadge: {
-      display: "inline-flex",
-      alignItems: "center",
-      gap: "6px",
-      padding: "4px 12px",
-      borderRadius: "999px",
-      background: C.primaryLight,
-      color: C.primaryHover,
-      fontSize: "0.78rem",
-      fontWeight: 600,
-      letterSpacing: "0.06em",
-      textTransform: "uppercase",
-      marginBottom: "4px",
-    },
-    title: {
-      fontSize: "2.5rem",
-      fontWeight: 800,
-      margin: 0,
-      letterSpacing: "-0.02em",
-    },
-    titleBlack: {
-      color: "#2c382d",
-    },
-    titlePrimary: {
-      color: C.primary,
-    },
-    titleSub: {
-      fontSize: "0.95rem",
-      color: C.textMuted,
-      margin: 0,
-    },
-
-    // ── Filter / toolbar card
-    filterBar: {
-      display: "flex",
-      flexWrap: "nowrap",
-      justifyContent: "space-between",
-      alignItems: "center",
-      gap: "14px",
-      marginBottom: "20px",
-      padding: "12px 16px",
-      backgroundColor: C.surface,
-      borderRadius: "12px",
-      boxShadow: "0 1px 4px rgba(0, 0, 0, 0.04)",
-      border: `1px solid ${C.borderLight}`,
-      overflowX: "auto",
-    },
-    filterGroup: {
-      display: "flex",
-      flexWrap: "nowrap",
-      gap: "10px",
-      alignItems: "center",
-    },
-    filterInput: {
-      padding: "8px 14px 8px 34px",
-      fontSize: "0.85rem",
-      borderRadius: "6px",
-      border: `1px solid ${C.border}`,
-      backgroundColor: C.surface,
-      color: C.textMain,
-      outline: "none",
-      transition: "border-color 0.2s, box-shadow 0.2s",
-      backgroundImage: `url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="%23677368" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>')`,
-      backgroundRepeat: "no-repeat",
-      backgroundPosition: "10px center",
-      backgroundSize: "14px",
-      minWidth: "180px",
-    },
-    filterSelect: {
-      padding: "8px 12px",
-      fontSize: "0.85rem",
-      borderRadius: "6px",
-      border: `1px solid ${C.border}`,
-      backgroundColor: C.surface,
-      color: C.textMain,
-      outline: "none",
-      cursor: "pointer",
-      minWidth: "130px",
-      transition: "border-color 0.2s",
-    },
-    sortToggle: {
-      padding: "8px 16px",
-      borderRadius: "6px",
-      background: C.primary,
-      border: "none",
-      color: C.surface,
-      fontSize: "0.85rem",
-      cursor: "pointer",
-      fontWeight: 600,
-      minWidth: "60px",
-      textAlign: "center",
-      transition: "all 0.2s",
-    },
-    actionButtons: {
-      display: "flex",
-      gap: "10px",
-      flexWrap: "nowrap",
-      alignItems: "center",
-    },
-
-    // ── Buttons
-    button: {
-      display: "inline-flex",
-      alignItems: "center",
-      gap: "6px",
-      padding: "8px 16px",
-      borderRadius: "6px",
-      fontSize: "0.85rem",
-      fontWeight: 600,
-      border: "none",
-      cursor: "pointer",
-      transition: "opacity 0.18s, transform 0.12s",
-      letterSpacing: "0.01em",
-      whiteSpace: "nowrap",
-    },
-    buttonPrimary: {
-      background: C.primary,
-      color: C.surface,
-      boxShadow: `0 1px 4px rgba(35, 114, 39, 0.2)`,
-    },
-    buttonSecondary: {
-      background: C.surface,
-      color: C.primary,
-      border: `1px solid ${C.primary}`,
-      boxShadow: "0 1px 2px rgba(0,0,0,0.03)",
-    },
-    buttonWarning: {
-      background: C.warning,
-      color: C.surface,
-      boxShadow: `0 1px 4px rgba(245,158,11,0.2)`,
-    },
-    buttonDanger: {
-      background: C.danger,
-      color: C.surface,
-      boxShadow: `0 1px 4px rgba(217,83,79,0.2)`,
-    },
-    buttonSync: {
-      background: `linear-gradient(135deg, ${C.success} 0%, ${C.primaryHover} 100%)`,
-      color: C.surface,
-      boxShadow: `0 1px 4px rgba(5,150,105,0.2)`,
-    },
-
-    // ── Count badge
-    countBadge: {
-      display: "inline-flex",
-      alignItems: "center",
-      justifyContent: "center",
-      padding: "7px 14px",
-      borderRadius: "6px",
-      background: C.surface,
-      border: `1px solid ${C.primary}`,
-      color: C.primary,
-      fontSize: "0.85rem",
-      fontWeight: 600,
-      whiteSpace: "nowrap",
-    },
-
-    // ── Table card wrapper
-    tableContainer: {
-      borderRadius: "16px",
-      overflow: "hidden",
-      boxShadow: "0 2px 14px rgba(44, 56, 45, 0.06)",
-      backgroundColor: C.surface,
-      border: "none",
-    },
-    table: {
-      width: "100%",
-      borderCollapse: "collapse",
-      fontSize: "0.875rem",
-      minWidth: "1200px",
-    },
-
-    // ── Table header
-    th: {
-      position: "sticky",
-      top: 0,
-      zIndex: 10,
-      background: "#ffffff",
-      color: "#000000",
-      fontWeight: 700,
-      padding: "14px 14px",
-      textAlign: "left",
-      borderBottom: "2px solid #e5e7eb",
-      letterSpacing: "0.05em",
-      textTransform: "uppercase",
-      fontSize: "0.75rem",
-      whiteSpace: "nowrap",
-    },
-
-    // ── Table cells
-    td: {
-      padding: "13px 14px",
-      borderBottom: `1px solid ${C.borderLight}`,
-      color: C.textMain,
-      verticalAlign: "middle",
-    },
-    trHover: {
-      transition: "background 0.15s",
-    },
-
-    // ── Photo cell
-    photoCell: {
-      display: "flex",
-      flexDirection: "column",
-      alignItems: "center",
-      gap: "5px",
-    },
-    photo: {
-      width: "52px",
-      height: "52px",
-      objectFit: "cover",
-      borderRadius: "10px",
-      border: `2px solid ${C.borderLight}`,
-      boxShadow: "0 2px 6px rgba(0,0,0,0.06)",
-      transition: "transform 0.18s, box-shadow 0.18s",
-    },
-    photoTime: {
-      fontSize: "0.68rem",
-      color: C.textMuted,
-      fontWeight: 500,
-    },
-
-    // ── Status badge colours (used inline)
-    lateText:     { color: C.danger,      fontWeight: 700 },
-    onTimeText:   { color: C.success,  fontWeight: 700 },
-    overtimeText: { color: C.info,     fontWeight: 700 },
-    earlyOutText: { color: C.warning,  fontWeight: 700 },
-
-    // ── Row action buttons (small)
-    actionCell: {
-      display: "flex",
-      flexDirection: "row",
-      gap: "8px",
-      flexWrap: "nowrap",
-      alignItems: "center",
-      justifyContent: "flex-start",
-    },
-    smallButton: {
-      padding: "6px 10px",
-      borderRadius: "6px",
-      border: "none",
-      fontSize: "0.75rem",
-      fontWeight: 600,
-      cursor: "pointer",
-      transition: "opacity 0.15s, transform 0.1s",
-      display: "inline-flex",
-      alignItems: "center",
-      gap: "4px",
-      backgroundColor: C.background,
-      color: C.textMain,
-      letterSpacing: "0.01em",
-      whiteSpace: "nowrap",
-    },
-
-    // ── Empty state
-    emptyState: {
-      textAlign: "center",
-      padding: "72px 20px",
-      color: C.textMuted,
-      fontSize: "1rem",
-    },
-
-    // ── Pagination
-    paginationContainer: {
-      display: "flex",
-      justifyContent: "space-between",
-      alignItems: "center",
-      padding: "16px 20px",
-      backgroundColor: C.surface,
-      borderTop: `1px solid ${C.borderLight}`,
-      borderBottomLeftRadius: "12px",
-      borderBottomRightRadius: "12px",
-    },
-    paginationText: {
-      color: C.textMuted,
-      fontSize: "0.875rem",
-    },
-    paginationControls: {
-      display: "flex",
-      gap: "6px",
-      alignItems: "center",
-    },
-    pageButton: {
-      display: "flex",
-      alignItems: "center",
-      justifyContent: "center",
-      minWidth: "32px",
-      height: "32px",
-      padding: "0 6px",
-      borderRadius: "8px",
-      border: `1px solid ${C.border}`,
-      backgroundColor: C.surface,
-      color: C.textMuted,
-      fontSize: "0.85rem",
-      fontWeight: 600,
-      cursor: "pointer",
-      transition: "all 0.2s",
-    },
-    pageButtonActive: {
-      backgroundColor: C.primary,
-      color: C.surface,
-      border: `1px solid ${C.primary}`,
-    },
-    pageButtonDisabled: {
-      opacity: 0.4,
-      cursor: "not-allowed",
-    },
   };
 
   const [syncingDahua, setSyncingDahua] = useState(false);
@@ -426,7 +83,6 @@ export default function AttendanceTable() {
   const fetchData = useCallback(async () => {
     try {
       setError(null);
-      // Fetch attendance from supabase
       const { data: attData, error: attErr } = await supabase
         .from("attendance")
         .select("*");
@@ -451,13 +107,13 @@ export default function AttendanceTable() {
         ).values(),
       );
       setRecords(uniqueAttendance);
-      // Fetch persons from supabase
+      
       const { data: personsData, error: personsErr } = await supabase
         .from("persons")
         .select("id, name, department, registration_photo");
       if (personsErr) throw personsErr;
       setPersons(personsData || []);
-      // Fetch work hours settings from supabase
+      
       const { data: settingsData, error: settingsErr } = await supabase
         .from("settings")
         .select("*")
@@ -480,6 +136,10 @@ export default function AttendanceTable() {
       title: "Syncing Dahua Logs...",
       html: "Fetching face recognition and card logs from <b>DHI-ASA3213GL-MW</b> to Supabase...",
       allowOutsideClick: false,
+      customClass: {
+        popup: "!rounded-3xl !shadow-[0_24px_60px_rgba(0,0,0,0.15)] !px-8 !py-8 !max-w-[400px]",
+        title: "!text-gray-800 !text-[1.35rem] !font-bold",
+      },
       didOpen: () => {
         Swal.showLoading();
       },
@@ -494,6 +154,14 @@ export default function AttendanceTable() {
         html: `<b>${data.count || 0}</b> new attendance scan(s) synced directly to Supabase.<br/><small style="color:#64748b">${data.message || ""}</small>`,
         timer: 3500,
         showConfirmButton: true,
+        confirmButtonText: "OK",
+        confirmButtonColor: "#237227",
+        customClass: {
+          popup: "!rounded-3xl !shadow-[0_24px_60px_rgba(0,0,0,0.15)] !px-8 !py-8 !max-w-[400px]",
+          title: "!text-gray-800 !text-[1.35rem] !font-bold",
+          confirmButton: "!bg-[#237227] hover:!bg-[#1a5a1d] !text-white !font-semibold !rounded-lg !px-6 !py-2.5 !text-sm cursor-pointer !m-0 !min-w-[100px]",
+        },
+        buttonsStyling: false,
       });
 
       await fetchData();
@@ -502,6 +170,13 @@ export default function AttendanceTable() {
         icon: "error",
         title: "Sync Failed",
         text: err.message || "Could not reach Dahua device.",
+        confirmButtonText: "OK",
+        customClass: {
+          popup: "!rounded-3xl !shadow-[0_24px_60px_rgba(0,0,0,0.15)] !px-8 !py-8 !max-w-[400px]",
+          title: "!text-gray-800 !text-[1.35rem] !font-bold",
+          confirmButton: "!bg-red-500 hover:!bg-red-600 !text-white !font-semibold !rounded-lg !px-6 !py-2.5 !text-sm cursor-pointer !m-0 !min-w-[100px]",
+        },
+        buttonsStyling: false,
       });
     } finally {
       dahuaAttendanceSyncInFlightRef.current = false;
@@ -511,7 +186,7 @@ export default function AttendanceTable() {
 
   useEffect(() => {
     fetchData();
-    const interval = setInterval(() => { if (typeof document === 'undefined' || !document.hidden) fetchData(); }, 60_000); // 60s
+    const interval = setInterval(() => { if (typeof document === 'undefined' || !document.hidden) fetchData(); }, 60_000); 
     return () => clearInterval(interval);
   }, [fetchData]);
 
@@ -533,145 +208,148 @@ export default function AttendanceTable() {
     return () => window.removeEventListener("keydown", onKey);
   }, [photoModal.visible]);
 
-  // Loading overlay handled by `LoadingContext` provider
-
   if (error) {
-    return <p style={{ color: "red" }}>{error}</p>;
+    return <p className="text-red-500">{error}</p>;
   }
 
-  // Form handlers
-  // compute event/status for an edited attendance time
-  const computeStatusForEdit = async (rec, isoTime) => {
-    if (!settings) return { event: rec.event, status: rec.status };
-    try {
-      const deviceDate = new Date(isoTime);
-      const year = deviceDate.getFullYear();
-      const month = String(deviceDate.getMonth() + 1).padStart(2, "0");
-      const day = String(deviceDate.getDate()).padStart(2, "0");
-      const dayStartIso = `${year}-${month}-${day}T00:00:00.000Z`;
-      const dayEndIso = `${year}-${month}-${day}T23:59:59.999Z`;
 
-      const { data: attData, error: attErr } = await supabase
-        .from("attendance")
-        .select("id,event,device_time")
-        .eq("person_id", rec.person_id)
-        .gte("device_time", dayStartIso)
-        .lte("device_time", dayEndIso)
-        .order("device_time", { ascending: true });
-      if (attErr) throw attErr;
 
-      // find last event before the edited time (exclude the edited record itself)
-      let lastEvent = null;
-      let lastEventDeviceTimeIso = null;
-      if (Array.isArray(attData)) {
-        for (const r of attData) {
-          if (!r || !r.device_time) continue;
-          if (r.id === rec.id) continue;
-          if (new Date(r.device_time).getTime() < deviceDate.getTime()) {
-            lastEvent = r.event;
-            lastEventDeviceTimeIso = r.device_time;
-          }
-        }
-      }
-
-      const currentTime = deviceDate.toTimeString().slice(0, 5);
-      const event = determineExpectedEvent(currentTime, lastEvent, settings, lastEventDeviceTimeIso);
-
-      // detect whether there was a morning time-in (excluding this edited record)
-      let hadMorningTimeIn = false;
-      if (Array.isArray(attData) && attData.length > 0) {
-        const morningStartMinutes = toMinutes(settings.morning_start);
-        const morningEndMinutes = toMinutes(settings.morning_end);
-        for (const row of attData) {
-          if (!row || row.id === rec.id) continue;
-          if (row.event !== "time-in" || !row.device_time) continue;
-          const dt = new Date(row.device_time);
-          const hhmm = dt.toTimeString().slice(0, 5);
-          const minutes = toMinutes(hhmm);
-          if (minutes >= morningStartMinutes && minutes <= morningEndMinutes) {
-            hadMorningTimeIn = true;
-            break;
-          }
-        }
-      }
-
-      const status = determineAttendanceStatus(currentTime, event, settings, hadMorningTimeIn);
-      return { event, status };
-    } catch (e) {
-      console.error("computeStatusForEdit failed", e);
-      return { event: rec.event, status: rec.status };
-    }
-  };
-
-  // open an edit modal and persist edited attendance time, event and status
   const handleEdit = async (rec) => {
     try {
-      // format a Date as local `datetime-local` value (YYYY-MM-DDTHH:MM)
-      const formatForDatetimeLocal = (d) => {
-        const dt = d instanceof Date ? d : new Date(d);
-        const pad = (n) => String(n).padStart(2, "0");
-        const y = dt.getFullYear();
-        const m = pad(dt.getMonth() + 1);
-        const day = pad(dt.getDate());
-        const hh = pad(dt.getHours());
-        const mm = pad(dt.getMinutes());
-        return `${y}-${m}-${day}T${hh}:${mm}`;
-      };
+      const d = rec.device_time ? new Date(rec.device_time) : new Date();
+      const pad = (n) => String(n).padStart(2, '0');
+      const defaultTime = `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
 
-      const currentLocal = rec.device_time ? formatForDatetimeLocal(new Date(rec.device_time)) : formatForDatetimeLocal(new Date());
-      const { value } = await Swal.fire({
-        title: `Edit Attendance Time for ${rec.name || rec.person_id}`,
-        input: 'datetime-local',
-        inputValue: currentLocal,
+      const { value: formValues } = await Swal.fire({
+        title: 'Edit Attendance',
+        html: `
+          <div style="text-align: left; margin-top: 1.25rem;">
+            <!-- Time Field (Full Width) -->
+            <div style="margin-bottom: 1rem;">
+              <label style="display: block; font-size: 0.85rem; font-weight: 600; color: #374151; margin-bottom: 0.35rem;">
+                Time
+              </label>
+              <input 
+                id="swal-time" 
+                type="time"
+                step="1"
+                value="${defaultTime}" 
+                style="display: block; width: 100%; padding: 0.65rem 0.85rem; font-size: 0.95rem; border: 1.5px solid #d1d5db; border-radius: 0.75rem; outline: none; box-sizing: border-box; background: #ffffff; color: #1f2937; cursor: pointer; transition: all 0.15s ease;"
+                onfocus="this.style.borderColor='#237227'; this.style.outline='none'; this.style.boxShadow='0 0 0 1px #237227';"
+                onblur="this.style.borderColor='#d1d5db'; this.style.outline='none'; this.style.boxShadow='none';"
+              />
+            </div>
+
+            <!-- 2-Column Grid for Event and Status -->
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.85rem; margin-bottom: 0.5rem;">
+              <!-- Column 1: Event Field -->
+              <div>
+                <label style="display: block; font-size: 0.85rem; font-weight: 600; color: #374151; margin-bottom: 0.35rem;">
+                  Attendance Event
+                </label>
+                <select 
+                  id="swal-event" 
+                  style="display: block; width: 100%; padding: 0.65rem 0.85rem; font-size: 0.95rem; border: 1.5px solid #d1d5db; border-radius: 0.75rem; outline: none; box-sizing: border-box; background: #ffffff; color: #1f2937; cursor: pointer; transition: all 0.15s ease;"
+                  onfocus="this.style.borderColor='#237227'; this.style.outline='none'; this.style.boxShadow='0 0 0 1px #237227';"
+                  onblur="this.style.borderColor='#d1d5db'; this.style.outline='none'; this.style.boxShadow='none';"
+                >
+                  <option value="time-in" ${rec.event === 'time-in' ? 'selected' : ''}>Time In</option>
+                  <option value="time-out" ${rec.event === 'time-out' ? 'selected' : ''}>Time Out</option>
+                </select>
+              </div>
+
+              <!-- Column 2: Status Field -->
+              <div>
+                <label style="display: block; font-size: 0.85rem; font-weight: 600; color: #374151; margin-bottom: 0.35rem;">
+                  Attendance Status
+                </label>
+                <select 
+                  id="swal-status" 
+                  style="display: block; width: 100%; padding: 0.65rem 0.85rem; font-size: 0.95rem; border: 1.5px solid #d1d5db; border-radius: 0.75rem; outline: none; box-sizing: border-box; background: #ffffff; color: #1f2937; cursor: pointer; transition: all 0.15s ease;"
+                  onfocus="this.style.borderColor='#237227'; this.style.outline='none'; this.style.boxShadow='0 0 0 1px #237227';"
+                  onblur="this.style.borderColor='#d1d5db'; this.style.outline='none'; this.style.boxShadow='none';"
+                >
+                  <option value="on-time" ${rec.status === 'on-time' ? 'selected' : ''}>on-time</option>
+                  <option value="late" ${rec.status === 'late' ? 'selected' : ''}>late</option>
+                  <option value="overtime" ${rec.status === 'overtime' ? 'selected' : ''}>overtime</option>
+                </select>
+              </div>
+            </div>
+          </div>
+        `,
+        focusConfirm: false,
         showCancelButton: true,
         confirmButtonText: 'Save',
+        confirmButtonColor: '#237227',
+        cancelButtonColor: '#E5E7EB',
+        customClass: {
+          popup: '!rounded-3xl !shadow-[0_24px_60px_rgba(0,0,0,0.15)] !px-8 !py-8 !max-w-[460px]',
+          title: '!text-gray-800 !text-[1.4rem] !font-bold !mt-1 !mb-0',
+          actions: '!flex !items-center !justify-center !gap-4 !mt-6 !w-full',
+          confirmButton: '!bg-[#237227] hover:!bg-[#1a5a1d] !text-white !font-semibold !rounded-lg !px-7 !py-2.5 !text-sm cursor-pointer !m-0 !min-w-[100px] !transform-none hover:!transform-none focus:!outline-none focus:!ring-0 focus:!shadow-none',
+          cancelButton: '!bg-white !border !border-gray-300 !text-gray-700 !font-semibold !rounded-lg !px-7 !py-2.5 !text-sm cursor-pointer !m-0 !min-w-[100px] !transform-none hover:!transform-none focus:!outline-none focus:!ring-0 focus:!border-gray-300 focus:!shadow-none active:!outline-none active:!shadow-none !outline-none !shadow-none',
+        },
+        buttonsStyling: false,
+        didOpen: () => {
+          const timeInput = document.getElementById('swal-time');
+          if (timeInput) {
+            timeInput.addEventListener('click', () => {
+              try {
+                if (typeof timeInput.showPicker === 'function') {
+                  timeInput.showPicker();
+                }
+              } catch (err) {}
+            });
+          }
+        },
+        preConfirm: () => {
+          const timeVal = document.getElementById('swal-time').value.trim();
+          const eventVal = document.getElementById('swal-event').value;
+          const statusVal = document.getElementById('swal-status').value;
+          if (!timeVal) { Swal.showValidationMessage('Time is required'); return false; }
+          const fullTime = timeVal.length === 5 ? `${timeVal}:00` : timeVal;
+          return { time: fullTime, event: eventVal, status: statusVal };
+        }
       });
-      if (!value) return;
-      const iso = new Date(value).toISOString();
-      const { event, status } = await computeStatusForEdit(rec, iso);
+      if (!formValues) return;
+      const { time, event, status } = formValues;
+      const targetDate = rec.device_time ? new Date(rec.device_time) : new Date();
+      const [h, m, s] = time.split(':').map(Number);
+      targetDate.setHours(h || 0, m || 0, s || 0, 0);
+      const iso = targetDate.toISOString();
       const { error } = await supabase.from('attendance').update({ device_time: iso, event, status }).eq('id', rec.id);
       if (error) {
-        Swal.fire('Error', error.message, 'error');
+        Swal.fire({
+          title: 'Error',
+          text: error.message,
+          icon: 'error',
+          confirmButtonText: 'OK',
+          customClass: {
+            popup: '!rounded-3xl !shadow-[0_24px_60px_rgba(0,0,0,0.15)] !px-8 !py-8 !max-w-[380px]',
+            confirmButton: '!bg-red-500 hover:!bg-red-600 !text-white !font-semibold !rounded-lg !px-8 !py-2.5 !text-sm',
+          },
+          buttonsStyling: false,
+        });
         return;
       }
       setRecords((prev) => prev.map((r) => (r.id === rec.id ? { ...r, device_time: iso, event, status } : r)));
-      Swal.fire('Saved', 'Attendance updated.', 'success');
+      showToast('Attendance updated successfully!');
     } catch (e) {
       console.error('handleEdit failed', e);
-      Swal.fire('Error', e.message || String(e), 'error');
+      Swal.fire({
+        title: 'Error',
+        text: e.message || String(e),
+        icon: 'error',
+        confirmButtonText: 'OK',
+        customClass: {
+          popup: '!rounded-3xl !shadow-[0_24px_60px_rgba(0,0,0,0.15)] !px-8 !py-8 !max-w-[380px]',
+          confirmButton: '!bg-red-500 hover:!bg-red-600 !text-white !font-semibold !rounded-lg !px-8 !py-2.5 !text-sm',
+        },
+        buttonsStyling: false,
+      });
     }
   };
 
-  // const handleFormChange = (e) => {
-  //   const { name, value } = e.target;
-  //   setForm((prev) => ({ ...prev, [name]: value }));
-  // };
-
-  // const handleAdd = () => {
-  //   setForm({ person_id: '', event: 'time-in', status: '', method: '', device_time: '' });
-  //   setEditing(null);
-  //   setShowForm(true);
-  // };
-
-  // const handleEdit = (rec) => {
-  //   setForm({
-  //     person_id: rec.person_id,
-  //     event: rec.event,
-  //     status: rec.status,
-  //     method: rec.method,
-  //     device_time: rec.device_time ? new Date(rec.device_time).toISOString().slice(0, 16) : '',
-  //   });
-  //   setEditing(rec);
-  //   showEditModal({
-  //     ...rec,
-  //     device_time: rec.device_time ? new Date(rec.device_time).toISOString().slice(0, 16) : '',
-  //   });
-  // };
-
-  // Show edit form in SweetAlert2 modal
-  // Removed unused showEditModal function
-
-  // Archive (soft delete)
   const handleArchive = async (rec) => {
     const confirm = await Swal.fire({
       title: "Archive Attendance",
@@ -679,6 +357,16 @@ export default function AttendanceTable() {
       icon: "warning",
       showCancelButton: true,
       confirmButtonText: "Archive",
+      confirmButtonColor: "#237227",
+      cancelButtonColor: "#ffffff",
+      customClass: {
+        popup: "!rounded-3xl !shadow-[0_24px_60px_rgba(0,0,0,0.15)] !px-8 !py-8 !max-w-[380px]",
+        title: "!text-gray-800 !text-[1.35rem] !font-bold !mt-2",
+        actions: "!flex !items-center !justify-center !gap-4 !mt-6 !w-full",
+        confirmButton: "!bg-[#237227] hover:!bg-[#1a5a1d] !text-white !font-semibold !rounded-lg !px-6 !py-2.5 !text-sm cursor-pointer !m-0 !min-w-[100px]",
+        cancelButton: "!bg-white !border !border-gray-300 !text-gray-700 !font-semibold !rounded-lg !px-6 !py-2.5 !text-sm cursor-pointer !m-0 !min-w-[100px]",
+      },
+      buttonsStyling: false,
     });
     if (confirm.isConfirmed) {
       const { error: archErr } = await supabase
@@ -686,29 +374,48 @@ export default function AttendanceTable() {
         .update({ archived: true })
         .eq("id", rec.id);
       if (archErr) {
-        Swal.fire("Error", archErr.message, "error");
+        Swal.fire({
+          title: "Error",
+          text: archErr.message,
+          icon: "error",
+          confirmButtonText: "OK",
+          customClass: {
+            popup: "!rounded-3xl !shadow-[0_24px_60px_rgba(0,0,0,0.15)] !px-8 !py-8 !max-w-[380px]",
+            confirmButton: "!bg-red-500 hover:!bg-red-600 !text-white !font-semibold !rounded-lg !px-8 !py-2.5 !text-sm",
+          },
+          buttonsStyling: false,
+        });
       } else {
         setRecords((prev) =>
           prev.map((r) => (r.id === rec.id ? { ...r, archived: true } : r))
         );
-        Swal.fire("Archived!", "", "success");
+        showToast("Attendance archived successfully!");
       }
     }
   };
 
-  // Restore archived record
   const handleRestore = async (rec) => {
     const { error: resErr } = await supabase
       .from("attendance")
       .update({ archived: false })
       .eq("id", rec.id);
     if (resErr) {
-      Swal.fire("Error", resErr.message, "error");
+      Swal.fire({
+        title: "Error",
+        text: resErr.message,
+        icon: "error",
+        confirmButtonText: "OK",
+        customClass: {
+          popup: "!rounded-3xl !shadow-[0_24px_60px_rgba(0,0,0,0.15)] !px-8 !py-8 !max-w-[380px]",
+          confirmButton: "!bg-red-500 hover:!bg-red-600 !text-white !font-semibold !rounded-lg !px-8 !py-2.5 !text-sm",
+        },
+        buttonsStyling: false,
+      });
     } else {
       setRecords((prev) =>
         prev.map((r) => (r.id === rec.id ? { ...r, archived: false } : r))
       );
-      Swal.fire("Restored!", "", "success");
+      showToast("Attendance restored successfully!");
     }
   };
 
@@ -720,6 +427,15 @@ export default function AttendanceTable() {
       showCancelButton: true,
       confirmButtonText: "Delete from Dahua",
       confirmButtonColor: "#dc2626",
+      cancelButtonColor: "#ffffff",
+      customClass: {
+        popup: "!rounded-3xl !shadow-[0_24px_60px_rgba(0,0,0,0.15)] !px-8 !py-8 !max-w-[380px]",
+        title: "!text-gray-800 !text-[1.35rem] !font-bold !mt-2",
+        actions: "!flex !items-center !justify-center !gap-4 !mt-6 !w-full",
+        confirmButton: "!bg-[#dc2626] hover:!bg-red-700 !text-white !font-semibold !rounded-lg !px-6 !py-2.5 !text-sm cursor-pointer !m-0 !min-w-[100px]",
+        cancelButton: "!bg-white !border !border-gray-300 !text-gray-700 !font-semibold !rounded-lg !px-6 !py-2.5 !text-sm cursor-pointer !m-0 !min-w-[100px]",
+      },
+      buttonsStyling: false,
     });
     if (!confirm.isConfirmed) return;
 
@@ -736,67 +452,33 @@ export default function AttendanceTable() {
       }
 
       setRecords((prev) => prev.filter((record) => record.id !== rec.id));
-      Swal.fire("Deleted", "The attendance record was deleted from Dahua and the website.", "success");
+      showToast("Attendance deleted from Dahua successfully!");
     } catch (err) {
-      Swal.fire("Delete failed", err.message || "Could not delete the Dahua record.", "error");
+      Swal.fire({
+        title: "Delete failed",
+        text: err.message || "Could not delete the Dahua record.",
+        icon: "error",
+        confirmButtonText: "OK",
+        customClass: {
+          popup: "!rounded-3xl !shadow-[0_24px_60px_rgba(0,0,0,0.15)] !px-8 !py-8 !max-w-[380px]",
+          confirmButton: "!bg-red-500 hover:!bg-red-600 !text-white !font-semibold !rounded-lg !px-8 !py-2.5 !text-sm",
+        },
+        buttonsStyling: false,
+      });
     }
   };
 
-  // const handleFormSubmit = async (e) => {
-  //   e.preventDefault();
-  //   if (!form.person_id || !form.event || !form.device_time) {
-  //     Swal.fire('Error', 'Person, event, and time are required.', 'error');
-  //     return;
-  //   }
-  //   const payload = {
-  //     person_id: form.person_id,
-  //     event: form.event,
-  //     status: form.status,
-  //     method: form.method,
-  //     device_time: new Date(form.device_time).toISOString(),
-  //   };
-  //   if (editing) {
-  //     // Update
-  //     const { error: upErr } = await supabase.from('attendance').update(payload).eq('id', editing.id);
-  //     if (upErr) {
-  //       Swal.fire('Error', upErr.message, 'error');
-  //       return;
-  //     }
-  //   } else {
-  //     // Insert
-  //     const { error: inErr } = await supabase.from('attendance').insert([payload]);
-  //     if (inErr) {
-  //       Swal.fire('Error', inErr.message, 'error');
-  //       return;
-  //     }
-  //   }
-  //   setShowForm(false);
-  //   setEditing(null);
-  //   setForm({ person_id: '', event: 'time-in', status: '', method: '', device_time: '' });
-  //   // Refresh
-  //   setLoading(true);
-  //   const { data: attData } = await supabase.from('attendance').select('*');
-  //   setRecords(attData || []);
-  //   setLoading(false);
-  // };
-
-  // Sort by device_time descending (latest first)
-  // Filter and sort records
   const filteredRecords = records.filter((r) => {
     if (r.archived) return false;
     const person = persons.find((p) => p.id === r.person_id) || {};
-    // Search by name or person_id
     const matchesSearch =
       !search ||
       (person.name &&
         person.name.toLowerCase().includes(search.toLowerCase())) ||
       (r.person_id && r.person_id.toLowerCase().includes(search.toLowerCase()));
-    // Status filter
     const matchesStatus = !statusFilter || getAttendanceStatus(r, settings) === statusFilter;
-    // Department filter
     const matchesDept =
       !departmentFilter || (person.department || "") === departmentFilter;
-    // Date filter (match full yyyy-mm-dd)
     const recordDate = r.device_time
       ? new Date(r.device_time).toISOString().slice(0, 10)
       : null;
@@ -828,7 +510,6 @@ export default function AttendanceTable() {
     return 0;
   });
 
-  // Archived records (not filtered)
   const archivedRecords = [...records]
     .filter((r) => r.archived)
     .filter((r) => {
@@ -838,7 +519,6 @@ export default function AttendanceTable() {
     })
     .sort((a, b) => new Date(b.device_time) - new Date(a.device_time));
 
-  // Pagination logic
   const activeRecords = showArchived ? archivedRecords : sortedRecords;
   const totalRecords = activeRecords.length;
   const totalPages = Math.ceil(totalRecords / itemsPerPage) || 1;
@@ -856,7 +536,6 @@ export default function AttendanceTable() {
     { key: "method", label: "Attendance Method" },
   ];
 
-  // Export to Excel
   const handleExportExcel = () => {
     if (!Array.isArray(sortedRecords) || !Array.isArray(persons)) return;
     const exportData = sortedRecords.map((row) => {
@@ -878,31 +557,110 @@ export default function AttendanceTable() {
   };
 
   return (
-    <div style={styles.container}>
-      <div style={styles.header}>
-        <h1 style={styles.title}>
-          <span style={styles.titleBlack}>Attendance </span>
-          <span style={styles.titlePrimary}>Records</span>
+    <div className="attendance-table-root mx-auto py-9 px-7 max-w-full font-sans bg-white min-h-screen text-[#2c382d]">
+      <style>{`
+        .attendance-table-root button,
+        .attendance-table-root button:hover,
+        .attendance-table-root button:hover:not(:disabled),
+        .attendance-table-root button:focus,
+        .attendance-table-root button:active,
+        .attendance-table-root input,
+        .attendance-table-root input:focus,
+        .attendance-table-root select,
+        .attendance-table-root select:focus,
+        .attendance-table-root *:focus,
+        .attendance-table-root div,
+        .attendance-table-root img,
+        .attendance-table-root a {
+          transform: none !important;
+          outline: none !important;
+          box-shadow: none !important;
+        }
+        .attendance-table-root input:focus,
+        .attendance-table-root select:focus {
+          border-color: #dce3dd !important;
+          outline: none !important;
+          box-shadow: none !important;
+        }
+        .attendance-table-root button:focus,
+        .attendance-table-root button:focus-visible {
+          outline: none !important;
+          box-shadow: none !important;
+        }
+        .attendance-table-root table tbody tr,
+        .attendance-table-root table tbody tr td {
+          transition: none !important;
+        }
+        .attendance-table-root table tbody tr:nth-child(odd),
+        .attendance-table-root table tbody tr:nth-child(odd):hover,
+        .attendance-table-root table tbody tr:nth-child(odd):hover td {
+          background-color: #ffffff !important;
+        }
+        .attendance-table-root table tbody tr:nth-child(even),
+        .attendance-table-root table tbody tr:nth-child(even):hover,
+        .attendance-table-root table tbody tr:nth-child(even):hover td {
+          background-color: #f9fafb !important;
+        }
+        .attendance-table-root table th,
+        .attendance-table-root table th:hover {
+          background-color: #ffffff !important;
+        }
+
+        /* SweetAlert2 Dialog Overrides */
+        .swal2-container .swal2-popup button,
+        .swal2-container .swal2-popup button:hover,
+        .swal2-container .swal2-popup button:hover:not(:disabled),
+        .swal2-container .swal2-popup button:focus,
+        .swal2-container .swal2-popup button:active,
+        .swal2-container .swal2-actions button,
+        .swal2-container .swal2-actions button:hover,
+        .swal2-container .swal2-actions button:focus {
+          transform: none !important;
+          outline: none !important;
+          box-shadow: none !important;
+        }
+        .swal2-container .swal2-popup input,
+        .swal2-container .swal2-popup select,
+        .swal2-container #swal-time,
+        .swal2-container #swal-event,
+        .swal2-container #swal-status {
+          outline: none !important;
+          box-shadow: none !important;
+        }
+        .swal2-container .swal2-popup input:focus,
+        .swal2-container .swal2-popup select:focus,
+        .swal2-container #swal-time:focus,
+        .swal2-container #swal-event:focus,
+        .swal2-container #swal-status:focus {
+          border-color: #237227 !important;
+          outline: none !important;
+          box-shadow: 0 0 0 1px #237227 !important;
+        }
+      `}</style>
+      <div className="mb-6 flex flex-col items-start gap-1.5">
+        <h1 className="text-[2.5rem] font-extrabold m-0 tracking-[-0.02em]">
+          <span className="text-[#2c382d]">Attendance </span>
+          <span className="text-[#237227]">Records</span>
         </h1>
       </div>
 
       {/* Filter Bar */}
-      <div style={styles.filterBar}>
-        <div style={styles.filterGroup}>
-          <div style={{ position: "relative" }}>
-            <span style={styles.searchIcon}>{Icons.search}</span>
+      <div className="flex flex-nowrap justify-between items-center gap-3.5 mb-5 py-3 px-4 bg-white rounded-xl shadow-[0_1px_4px_rgba(0,0,0,0.04)] border border-[#edf2ee] overflow-x-auto">
+        <div className="flex flex-nowrap gap-2.5 items-center">
+          <div className="relative">
+            <FiSearch className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 text-sm" />
             <input
               type="text"
               placeholder="Search name or ID"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              style={styles.filterInput}
+              className="py-2 pr-3.5 pl-9 text-[0.85rem] rounded-md border border-[#dce3dd] bg-white text-[#2c382d] min-w-[180px] outline-none focus:border-[#237227] focus:ring-0 transition-colors"
             />
           </div>
           <select
             value={statusFilter}
             onChange={(e) => setStatusFilter(e.target.value)}
-            style={styles.filterSelect}
+            className="py-2 px-3 text-[0.85rem] rounded-md border border-[#dce3dd] bg-white text-[#2c382d] cursor-pointer min-w-[130px] outline-none focus:border-[#237227] focus:ring-0 transition-colors"
           >
             <option value="">All Status</option>
             <option value="on-time">on-time</option>
@@ -913,7 +671,7 @@ export default function AttendanceTable() {
           <select
             value={departmentFilter}
             onChange={(e) => setDepartmentFilter(e.target.value)}
-            style={styles.filterSelect}
+            className="py-2 px-3 text-[0.85rem] rounded-md border border-[#dce3dd] bg-white text-[#2c382d] cursor-pointer min-w-[130px] outline-none focus:border-[#237227] focus:ring-0 transition-colors"
           >
             <option value="">All Departments</option>
             {Array.from(
@@ -928,12 +686,12 @@ export default function AttendanceTable() {
             type="date"
             value={selectedDate}
             onChange={(e) => setSelectedDate(e.target.value)}
-            style={styles.filterSelect}
+            className="py-2 px-3 text-[0.85rem] rounded-md border border-[#dce3dd] bg-white text-[#2c382d] cursor-pointer min-w-[130px] outline-none focus:border-[#237227] focus:ring-0 transition-colors"
           />
           {selectedDate && (
             <button
               onClick={() => setSelectedDate("")}
-              style={{ ...styles.smallButton, marginLeft: 4 }}
+              className="py-1.5 px-2.5 rounded-md border-none text-xs font-semibold cursor-pointer inline-flex items-center gap-1 bg-[#f6f8f6] text-[#2c382d] whitespace-nowrap ml-1 outline-none focus:outline-none"
             >
               {Icons.close} Clear
             </button>
@@ -941,260 +699,240 @@ export default function AttendanceTable() {
           <button
             aria-label="Toggle sort order"
             onClick={() => setSortOrder((s) => (s === "asc" ? "desc" : "asc"))}
-            style={styles.sortToggle}
+            className="py-2 px-4 rounded-md bg-[#237227] text-white text-[0.85rem] cursor-pointer font-semibold min-w-[60px] text-center outline-none focus:outline-none"
           >
             {sortOrder === "asc" ? "Asc" : "Desc"}
           </button>
         </div>
 
-        <div style={styles.actionButtons}>
-          <div style={styles.countBadge}>
+        <div className="flex gap-2.5 flex-nowrap items-center">
+          <div className="inline-flex items-center justify-center py-[7px] px-3.5 rounded-md bg-white border border-[#237227] text-[#237227] text-[0.85rem] font-semibold whitespace-nowrap">
             {(showArchived ? archivedRecords.length : sortedRecords.length) + " records"}
           </div>
           <button
             onClick={() => setShowArchived((a) => !a)}
-            style={{ ...styles.button, ...styles.buttonSecondary }}
+            className="inline-flex items-center gap-1.5 py-2 px-4 rounded-md text-[0.85rem] font-semibold cursor-pointer whitespace-nowrap bg-white text-[#237227] border border-[#237227] shadow-[0_1px_2px_rgba(0,0,0,0.03)] outline-none focus:outline-none"
           >
             {Icons.archive} {showArchived ? "Show Active" : "Show Archived"}
           </button>
           <button
             onClick={handleExportExcel}
-            style={{ ...styles.button, ...styles.buttonPrimary }}
+            className="inline-flex items-center gap-1.5 py-2 px-4 rounded-md text-[0.85rem] font-semibold cursor-pointer whitespace-nowrap bg-[#237227] text-white shadow-[0_1px_4px_rgba(35,114,39,0.2)] border-none outline-none focus:outline-none"
           >
             {Icons.download} Export Excel
           </button>
           <button
             onClick={handleSyncDahuaAttendance}
             disabled={syncingDahua}
-            style={{ ...styles.button, ...styles.buttonSync }}
+            className="inline-flex items-center gap-1.5 py-2 px-4 rounded-md text-[0.85rem] font-semibold cursor-pointer whitespace-nowrap bg-gradient-to-br from-[#059669] to-[#1d5e20] text-white shadow-[0_1px_4px_rgba(5,150,105,0.2)] border-none disabled:opacity-70 disabled:cursor-not-allowed outline-none focus:outline-none"
           >
-            <FiRefreshCw style={{ marginRight: 6 }} /> Sync Dahua
+            <FiRefreshCw className="mr-1.5" /> Sync Dahua
           </button>
         </div>
       </div>
 
       {/* Table */}
-      <div style={styles.tableContainer}>
-        <div style={{ overflowX: "auto", maxHeight: "600px" }}>
-          <table style={styles.table}>
+      <div className="rounded-2xl overflow-hidden shadow-[0_2px_14px_rgba(44,56,45,0.06)] bg-white border-none min-h-[540px] flex flex-col justify-between">
+        <div className="overflow-x-auto flex-1">
+          <table className="w-full border-collapse text-[0.875rem] min-w-[1200px]">
             <thead>
               <tr>
                 {columns.map((col) => (
-                  <th key={col.key} style={styles.th}>
+                  <th key={col.key} className="sticky top-0 z-10 bg-white text-black font-bold py-3.5 px-3.5 text-left border-b-2 border-gray-200 tracking-wide uppercase text-xs whitespace-nowrap">
                     {col.label}
                   </th>
                 ))}
-                <th style={styles.th}>Actions</th>
+                <th className="sticky top-0 z-10 bg-white text-black font-bold py-3.5 px-3.5 text-left border-b-2 border-gray-200 tracking-wide uppercase text-xs whitespace-nowrap">
+                  Actions
+                </th>
               </tr>
             </thead>
             <tbody>
               {currentRecords.length === 0 ? (
                 <tr>
-                  <td colSpan={columns.length + 1} style={styles.emptyState}>
+                  <td colSpan={columns.length + 1} className="text-center py-[72px] px-5 text-[#677368] text-base">
                     {showArchived
                       ? "No archived attendance records found."
                       : "No attendance records found."}
                   </td>
                 </tr>
               ) : (
-                currentRecords.map(
-                  (row, idx) => {
-                    const person =
-                      persons.find((p) => p.id === row.person_id) || {};
-                    const rowStyle = {
-                      ...styles.trHover,
-                      backgroundColor: idx % 2 === 0 ? "#f9fafb" : "#ffffff",
-                    };
-                    return (
-                      <tr key={row.id} style={rowStyle}>
-                        {columns.map((col) => {
-                          if (col.key === "photo") {
-                            return (
-                              <td key="photo" style={styles.td}>
-                                {person.registration_photo ? (
-                                  <div style={styles.photoCell}>
-                                    <img
-                                      src={person.registration_photo}
-                                      alt="registration"
-                                          style={{ ...styles.photo, cursor: 'pointer' }}
-                                          onClick={() => openPhotoModal(person.registration_photo, person.name || row.person_id)}
-                                    />
-                                    <span style={styles.photoTime}>
-                                      {row.device_time
-                                        ? new Date(
-                                            row.device_time
-                                          ).toLocaleString(undefined, {
-                                            hour: "2-digit",
-                                            minute: "2-digit",
-                                            second: "2-digit",
-                                          })
-                                        : ""}
-                                    </span>
-                                  </div>
-                                ) : (
-                                  <span style={{ color: "#9ca3af" }}>
-                                    No photo
-                                  </span>
-                                )}
-                              </td>
-                            );
-                          }
-                          let value = row[col.key];
-                          if (col.key === "name") value = person.name || "";
-                          if (col.key === "department")
-                            value = person.department || "";
-                          if (col.key === "status") value = getAttendanceStatus(row, settings);
-                          if (col.key === "device_time" && row[col.key])
-                            value = formatDateTime(row[col.key]);
-                          if (col.key === "shift") {
-                            if (!settings) value = "-";
-                            else {
-                              const time = new Date(row.device_time);
-                              const hour = time.getHours();
-                              const minute = time.getMinutes();
-                              const totalMinutes = hour * 60 + minute;
-                              const morningStart = settings.morning_start
-                                ? settings.morning_start.split(":").map(Number)
-                                : [0, 0];
-                              const morningEnd = settings.morning_end
-                                ? settings.morning_end.split(":").map(Number)
-                                : [0, 0];
-                              const afternoonStart = settings.afternoon_start
-                                ? settings.afternoon_start
-                                    .split(":")
-                                    .map(Number)
-                                : [0, 0];
-                              const afternoonEnd = settings.afternoon_end
-                                ? settings.afternoon_end.split(":").map(Number)
-                                : [0, 0];
-                              const morningStartMin =
-                                morningStart[0] * 60 + morningStart[1];
-                              const morningEndMin =
-                                morningEnd[0] * 60 + morningEnd[1];
-                              const afternoonStartMin =
-                                afternoonStart[0] * 60 + afternoonStart[1];
-                              const afternoonEndMin =
-                                afternoonEnd[0] * 60 + afternoonEnd[1];
-                              if (
-                                totalMinutes >= morningStartMin &&
-                                totalMinutes <= morningEndMin
-                              )
-                                value = "Morning Shift";
-                              else if (
-                                totalMinutes >= afternoonStartMin &&
-                                totalMinutes <= afternoonEndMin
-                              )
-                                value = "Afternoon Shift";
-                              else value = "-";
-                            }
-                          }
-                          if (col.key === "work_hours") {
-                            if (!settings) {
-                              value = "-";
-                            } else {
-                              let label = "";
-                              let configTime = "";
-                              if (row.event === "time-in" || row.event === "time-out") {
-                                label = "Morning In";
-                                configTime = settings.morning_start;
-                                if (settings.morning_end && settings.afternoon_end) {
-                                  const d = new Date(row.device_time);
-                                  const minutes = d.getHours() * 60 + d.getMinutes();
-                                  const morningEnd = settings.morning_end.split(":").map(Number);
-                                  const morningEndMin = morningEnd[0] * 60 + morningEnd[1];
-                                  const morningGrace = Number(settings.morning_grace_minutes) || 0;
-                                  // If the time is past the morning shift, treat it as Afternoon Out
-                                  if (minutes > morningEndMin + morningGrace) {
-                                    label = "Afternoon Out";
-                                    configTime = settings.afternoon_end;
-                                  }
-                                }
-                              } else {
-                                value = "-";
-                              }
-                              value =
-                                label && configTime
-                                  ? `${label}: ${configTime}`
-                                  : "-";
-                            }
-                          }
-                          const isLate = col.key === "status" && value === "late";
-                          const isOnTime = col.key === "status" && value === "on-time";
-                          const isOvertime = col.key === "status" && value === "overtime";
-                          const isEarlyOut = col.key === "status" && value === "early-out";
-                          const cellStyle = {
-                            ...styles.td,
-                            fontFamily:
-                              col.key === "person_id" ? "monospace" : "inherit",
-                            wordBreak: col.key === "point" ? "break-word" : "normal",
-                            maxWidth: col.key === "point" ? "220px" : "none",
-                            color: isLate
-                              ? styles.lateText.color
-                              : isOnTime
-                              ? styles.onTimeText.color
-                              : isOvertime
-                              ? styles.overtimeText.color
-                              : isEarlyOut
-                              ? styles.earlyOutText.color
-                              : styles.td.color,
-                            fontWeight: isLate || isOnTime || isOvertime || isEarlyOut ? 600 : 400,
-                          };
+                currentRecords.map((row, idx) => {
+                  const person = persons.find((p) => p.id === row.person_id) || {};
+                  
+                  return (
+                    <tr key={row.id} className="odd:bg-white even:bg-[#f9fafb]">
+                      {columns.map((col) => {
+                        if (col.key === "photo") {
                           return (
-                            <td key={col.key} style={cellStyle}>
-                              {value || "-"}
+                            <td key="photo" className="py-[13px] px-3.5 border-b border-[#edf2ee] align-middle">
+                              {person.registration_photo ? (
+                                <div className="flex flex-col items-center gap-1">
+                                  <img
+                                    src={person.registration_photo}
+                                    alt="registration"
+                                    className="w-[52px] h-[52px] object-cover rounded-[10px] border-2 border-[#edf2ee] shadow-[0_2px_6px_rgba(0,0,0,0.06)] cursor-pointer"
+                                    onClick={() => openPhotoModal(person.registration_photo, person.name || row.person_id)}
+                                  />
+                                  <span className="text-[0.68rem] text-[#677368] font-medium">
+                                    {row.device_time
+                                      ? new Date(row.device_time).toLocaleString(undefined, {
+                                          hour: "2-digit",
+                                          minute: "2-digit",
+                                          second: "2-digit",
+                                        })
+                                      : ""}
+                                  </span>
+                                </div>
+                              ) : (
+                                <span className="text-gray-400">No photo</span>
+                              )}
                             </td>
                           );
-                        })}
-                        <td style={styles.td}>
-                          <div style={styles.actionCell}>
-                            {!row.archived ? (
-                              <>
-                                <button
-                                  onClick={() => handleEdit(row)}
-                                  style={styles.smallButton}
-                                >
-                                  Edit Time
-                                </button>
-                                <button
-                                  onClick={() => handleArchive(row)}
-                                  style={styles.smallButton}
-                                >
-                                  {Icons.archive} Archive
-                                </button>
-                                <button
-                                  onClick={() => handleDeleteFromDahua(row)}
-                                  style={{ ...styles.smallButton, background: "#dc2626", color: "#fff" }}
-                                >
-                                  Delete from Dahua
-                                </button>
-                              </>
-                            ) : (
+                        }
+                        
+                        let value = row[col.key];
+                        if (col.key === "name") value = person.name || "";
+                        if (col.key === "department") value = person.department || "";
+                        if (col.key === "status") value = getAttendanceStatus(row, settings);
+                        if (col.key === "device_time" && row[col.key]) value = formatDateTime(row[col.key]);
+                        if (col.key === "shift") {
+                          if (!settings) value = "-";
+                          else {
+                            const time = new Date(row.device_time);
+                            const hour = time.getHours();
+                            const minute = time.getMinutes();
+                            const totalMinutes = hour * 60 + minute;
+                            const morningStart = settings.morning_start ? settings.morning_start.split(":").map(Number) : [0, 0];
+                            const morningEnd = settings.morning_end ? settings.morning_end.split(":").map(Number) : [0, 0];
+                            const afternoonStart = settings.afternoon_start ? settings.afternoon_start.split(":").map(Number) : [0, 0];
+                            const afternoonEnd = settings.afternoon_end ? settings.afternoon_end.split(":").map(Number) : [0, 0];
+                            const morningStartMin = morningStart[0] * 60 + morningStart[1];
+                            const morningEndMin = morningEnd[0] * 60 + morningEnd[1];
+                            const afternoonStartMin = afternoonStart[0] * 60 + afternoonStart[1];
+                            const afternoonEndMin = afternoonEnd[0] * 60 + afternoonEnd[1];
+                            
+                            if (totalMinutes >= morningStartMin && totalMinutes <= morningEndMin) value = "Morning Shift";
+                            else if (totalMinutes >= afternoonStartMin && totalMinutes <= afternoonEndMin) value = "Afternoon Shift";
+                            else value = "-";
+                          }
+                        }
+                        if (col.key === "work_hours") {
+                          if (!settings) {
+                            value = "-";
+                          } else {
+                            let label = "";
+                            let configTime = "";
+                            if (row.event === "time-in" || row.event === "time-out") {
+                              label = "Morning In";
+                              configTime = settings.morning_start;
+                              if (settings.morning_end && settings.afternoon_end) {
+                                const d = new Date(row.device_time);
+                                const minutes = d.getHours() * 60 + d.getMinutes();
+                                const morningEnd = settings.morning_end.split(":").map(Number);
+                                const morningEndMin = morningEnd[0] * 60 + morningEnd[1];
+                                const morningGrace = Number(settings.morning_grace_minutes) || 0;
+                                if (minutes > morningEndMin + morningGrace) {
+                                  label = "Afternoon Out";
+                                  configTime = settings.afternoon_end;
+                                }
+                              }
+                            } else {
+                              value = "-";
+                            }
+                            value = label && configTime ? `${label}: ${configTime}` : "-";
+                          }
+                        }
+
+                        if (col.key === "status") {
+                          let badgeClass = "bg-gray-100 text-gray-700 border border-gray-200";
+                          const lowerVal = String(value || "").toLowerCase().trim();
+
+                          if (lowerVal === "on-time" || lowerVal === "on time") {
+                            badgeClass = "bg-[#237227]/10 text-[#237227] border border-[#237227]/30";
+                          } else if (lowerVal === "late") {
+                            badgeClass = "bg-red-50 text-red-600 border border-red-200";
+                          } else if (lowerVal === "early-out" || lowerVal === "early out") {
+                            badgeClass = "bg-orange-50 text-orange-600 border border-orange-200";
+                          } else if (lowerVal === "overtime") {
+                            badgeClass = "bg-blue-50 text-blue-600 border border-blue-200";
+                          }
+
+                          return (
+                            <td 
+                              key={col.key} 
+                              className="py-[13px] px-3.5 border-b border-[#edf2ee] align-middle"
+                            >
+                              {value && value !== "-" ? (
+                                <span className={`inline-flex items-center justify-center px-2.5 py-0.5 rounded-full text-xs font-semibold ${badgeClass}`}>
+                                  {value}
+                                </span>
+                              ) : (
+                                "-"
+                              )}
+                            </td>
+                          );
+                        }
+
+                        return (
+                          <td 
+                            key={col.key} 
+                            className={`py-[13px] px-3.5 border-b border-[#edf2ee] align-middle text-[#2c382d] font-normal ${col.key === 'person_id' ? 'font-mono' : ''} ${col.key === 'point' ? 'max-w-[220px] break-words' : 'whitespace-normal'}`}
+                          >
+                            {value || "-"}
+                          </td>
+                        );
+                      })}
+                      
+                      <td className="py-[13px] px-3.5 border-b border-[#edf2ee] align-middle text-[#2c382d]">
+                        <div className="flex flex-row gap-2 flex-nowrap items-center justify-start">
+                          {!row.archived ? (
+                            <>
                               <button
-                                onClick={() => handleRestore(row)}
-                                style={styles.smallButton}
+                                onClick={() => handleEdit(row)}
+                                className="py-1.5 px-2.5 rounded-md border-none text-xs font-semibold cursor-pointer inline-flex items-center gap-1 bg-[#237227] text-[#ffffff] tracking-[0.01em] whitespace-nowrap outline-none focus:outline-none"
                               >
-                                {Icons.restore} Restore
+                                Edit Time
                               </button>
-                            )}
-                          </div>
-                        </td>
-                      </tr>
-                    );
-                  }
-                )
+                              <button
+                                onClick={() => handleArchive(row)}
+                                className="py-1.5 px-2.5 rounded-md border border-gray-300 text-xs font-semibold cursor-pointer inline-flex items-center gap-1 bg-white text-[#2c382d] tracking-[0.01em] whitespace-nowrap outline-none focus:outline-none"
+                              >
+                                {Icons.archive} Archive
+                              </button>
+                              <button
+                                onClick={() => handleDeleteFromDahua(row)}
+                                className="py-1.5 px-2.5 rounded-md border-none text-xs font-semibold cursor-pointer inline-flex items-center gap-1 bg-[#dc2626] text-white tracking-[0.01em] whitespace-nowrap outline-none focus:outline-none"
+                              >
+                                Delete from Dahua
+                              </button>
+                            </>
+                          ) : (
+                            <button
+                              onClick={() => handleRestore(row)}
+                              className="py-1.5 px-2.5 rounded-md border-none text-xs font-semibold cursor-pointer inline-flex items-center gap-1 bg-[#237227] hover:bg-[#1a5a1d] text-white tracking-[0.01em] whitespace-nowrap outline-none focus:outline-none"
+                            >
+                              {Icons.restore} Restore
+                            </button>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })
               )}
             </tbody>
           </table>
         </div>
 
         {/* Pagination Footer */}
-        <div style={styles.paginationContainer}>
-          <div style={styles.paginationText}>
+        <div className="flex justify-between items-center py-4 px-5 bg-white border-t border-[#edf2ee] rounded-b-xl">
+          <div className="text-[#677368] text-[0.875rem]">
             Showing <strong>{totalRecords === 0 ? 0 : startIndex + 1}</strong> to <strong>{Math.min(startIndex + itemsPerPage, totalRecords)}</strong> of <strong>{totalRecords}</strong> records
           </div>
-          <div style={styles.paginationControls}>
+          <div className="flex gap-1.5 items-center">
             <button 
-              style={{ ...styles.pageButton, ...(currentPage === 1 ? styles.pageButtonDisabled : {}) }}
+              className="flex items-center justify-center min-w-[32px] h-8 px-1.5 rounded-lg border border-[#dce3dd] bg-white text-[#677368] text-[0.85rem] font-semibold cursor-pointer outline-none focus:outline-none disabled:opacity-40 disabled:cursor-not-allowed"
               onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
               disabled={currentPage === 1}
             >
@@ -1204,10 +942,15 @@ export default function AttendanceTable() {
             {Array.from({ length: totalPages }, (_, i) => i + 1)
               .filter(p => p === 1 || p === totalPages || Math.abs(currentPage - p) <= 1)
               .map((p, idx, arr) => {
+                const isActive = p === currentPage;
                 const renderButton = (
                   <button
                     key={p}
-                    style={p === currentPage ? { ...styles.pageButton, ...styles.pageButtonActive } : styles.pageButton}
+                    className={`flex items-center justify-center min-w-[32px] h-8 px-1.5 rounded-lg border text-[0.85rem] font-semibold cursor-pointer outline-none focus:outline-none ${
+                      isActive 
+                        ? "!bg-[#237227] !text-white !border-[#237227]" 
+                        : "border-[#dce3dd] bg-white text-[#677368]"
+                    }`}
                     onClick={() => setCurrentPage(p)}
                   >
                     {p}
@@ -1216,8 +959,8 @@ export default function AttendanceTable() {
 
                 if (idx > 0 && arr[idx] - arr[idx - 1] > 1) {
                   return (
-                    <div key={`group-${p}`} style={{ display: "flex", alignItems: "center", gap: "6px" }}>
-                      <span style={{ color: "#677368", padding: "0 2px" }}>...</span>
+                    <div key={`group-${p}`} className="flex items-center gap-1.5">
+                      <span className="text-[#677368] px-0.5">...</span>
                       {renderButton}
                     </div>
                   );
@@ -1226,7 +969,7 @@ export default function AttendanceTable() {
               })}
             
             <button 
-              style={{ ...styles.pageButton, ...(currentPage === totalPages ? styles.pageButtonDisabled : {}) }}
+              className="flex items-center justify-center min-w-[32px] h-8 px-1.5 rounded-lg border border-[#dce3dd] bg-white text-[#677368] text-[0.85rem] font-semibold cursor-pointer outline-none focus:outline-none disabled:opacity-40 disabled:cursor-not-allowed"
               onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
               disabled={currentPage === totalPages}
             >
@@ -1235,19 +978,33 @@ export default function AttendanceTable() {
           </div>
         </div>
       </div>
-      {/* Photo modal for AttendanceTable */}
+      
+      {/* Photo modal */}
       {photoModal.visible && (
         <div
           onClick={() => closePhotoModal()}
-          style={{ position: 'fixed', left: 0, top: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.6)', zIndex: 10000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}
+          className="fixed inset-0 bg-black/60 z-[10000] flex items-center justify-center p-5"
         >
-          <div onClick={(e) => e.stopPropagation()} style={{ maxWidth: '90%', maxHeight: '90%', borderRadius: 8, overflow: 'hidden', background: '#fff', padding: 12, boxShadow: '0 12px 40px rgba(2,6,23,0.4)' }}>
-            <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-              <button onClick={() => closePhotoModal()} aria-label="Close photo" style={{ background: 'transparent', border: 'none', color: '#0f172a', fontSize: 22, cursor: 'pointer' }}>×</button>
+          <div 
+            onClick={(e) => e.stopPropagation()} 
+            className="max-w-[90%] max-h-[90%] rounded-lg overflow-hidden bg-white p-3 shadow-[0_12px_40px_rgba(2,6,23,0.4)]"
+          >
+            <div className="flex justify-end">
+              <button 
+                onClick={() => closePhotoModal()} 
+                aria-label="Close photo" 
+                className="bg-transparent border-none text-slate-900 text-[22px] cursor-pointer"
+              >
+                ×
+              </button>
             </div>
-            <div style={{ textAlign: 'center' }}>
-              <img src={photoModal.src} alt={photoModal.title} style={{ maxWidth: '100%', maxHeight: '80vh', display: 'block', margin: '0 auto' }} />
-              {photoModal.title && <div style={{ marginTop: 8, color: '#0f172a' }}>{photoModal.title}</div>}
+            <div className="text-center">
+              <img 
+                src={photoModal.src} 
+                alt={photoModal.title} 
+                className="max-w-full max-h-[80vh] block mx-auto" 
+              />
+              {photoModal.title && <div className="mt-2 text-slate-900">{photoModal.title}</div>}
             </div>
           </div>
         </div>
