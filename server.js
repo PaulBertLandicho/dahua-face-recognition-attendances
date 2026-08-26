@@ -26,6 +26,9 @@ const DAHUA_DEVICE_IP = process.env.DAHUA_DEVICE_IP || "192.168.111.227";
 const DAHUA_DEVICE_PORT = Number(process.env.DAHUA_DEVICE_PORT || 80);
 const DAHUA_USERNAME = process.env.DAHUA_USERNAME || "admin";
 const DAHUA_PASSWORD = process.env.DAHUA_PASSWORD || "";
+const AUTO_SYNC_ATTENDANCE_MINUTES = Number(
+  process.env.AUTO_SYNC_ATTENDANCE_MINUTES || 0,
+);
 
 const hlsDir = path.join(__dirname, "hls");
 if (!fs.existsSync(hlsDir)) {
@@ -853,14 +856,33 @@ app.get("/health", (req, res) => {
   res.json({ status: "ok" });
 });
 
-app.get("/", (req, res) => {
-  res.json({
-    service: "Multifactors Attendance Backend",
-    status: "ok",
-    health: "/health",
-  });
-});
+let automaticSyncInFlight = false;
+
+async function runAutomaticAttendanceSync() {
+  if (automaticSyncInFlight || !AUTO_SYNC_ATTENDANCE_MINUTES) return;
+  automaticSyncInFlight = true;
+  try {
+    const response = await fetch(`http://127.0.0.1:${PORT}/api/dahua/sync-attendance`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: "{}",
+    });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error || `HTTP ${response.status}`);
+    console.log(`Automatic Dahua attendance sync completed: ${result.count || 0} new record(s).`);
+  } catch (err) {
+    console.error("Automatic Dahua attendance sync failed:", err.message);
+  } finally {
+    automaticSyncInFlight = false;
+  }
+}
 
 app.listen(PORT, () => {
   console.log(`HLS server running at http://localhost:${PORT}/hls/index.m3u8`);
+  if (AUTO_SYNC_ATTENDANCE_MINUTES > 0) {
+    const intervalMs = AUTO_SYNC_ATTENDANCE_MINUTES * 60 * 1000;
+    console.log(`Automatic Dahua attendance sync enabled every ${AUTO_SYNC_ATTENDANCE_MINUTES} minute(s).`);
+    setTimeout(runAutomaticAttendanceSync, 5000);
+    setInterval(runAutomaticAttendanceSync, intervalMs);
+  }
 });
