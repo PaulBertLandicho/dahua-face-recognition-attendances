@@ -58,8 +58,8 @@ export default function PayslipModal({
 
       if (!error && data) {
         setDeptHolidayRates({
-          regular: Number(data.regular_holiday_rate ?? data.holiday_rate ?? 0),
-          special: Number(data.special_holiday_rate ?? 0),
+          regular: Number(data.regular_holiday_rate ?? data.holiday_rate ?? 100),
+          special: Number(data.special_holiday_rate ?? 30),
         });
       }
     }
@@ -544,6 +544,10 @@ export default function PayslipModal({
       (Number(payroll.totalDeductions ?? payroll.total_deductions ?? computedDeductionsSum) || computedDeductionsSum) *
         100,
     ) / 100;
+  const adjustedGrossPay =
+    Math.round((standardPayAmount + otPay + totalHolidayPay) * 100) / 100;
+  const adjustedNetPay =
+    Math.round((adjustedGrossPay - totalDeductions) * 100) / 100;
 
   const totalLateOccurrences = detailedAttendance
     .map((rec) => (rec.lateDetails ? rec.lateDetails.length : 0))
@@ -940,12 +944,10 @@ export default function PayslipModal({
                   Gross Pay
                 </td>
                 <td className="py-2.5 px-2 border-b border-gray-200 text-gray-800">
-                  ₱{(
-                    Number(
-                      payroll.gross ??
-                        Math.round((standardPayAmount + otPay + totalHolidayPay) * 100) / 100,
-                    )
-                  ).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                  ₱{adjustedGrossPay.toLocaleString(undefined, {
+                    minimumFractionDigits: 2,
+                    maximumFractionDigits: 2,
+                  })}
                 </td>
               </tr>
             </tbody>
@@ -1032,18 +1034,10 @@ export default function PayslipModal({
 
           {/* Net Pay: use rounded OT pay in gross calculation */}
           <h3 className="text-right text-[1.6rem] font-bold text-[#237227] mt-4 mb-0">
-            Net Pay: ₱{(
-              Number(
-                payroll.net ??
-                  (Math.round(
-                    ((standardPayAmount ?? 0) +
-                      otPay +
-                      totalHolidayPay -
-                      totalDeductions) *
-                      100,
-                  ) / 100),
-              )
-            ).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+            Net Pay: ₱{adjustedNetPay.toLocaleString(undefined, {
+              minimumFractionDigits: 2,
+              maximumFractionDigits: 2,
+            })}
           </h3>
         </div>
 

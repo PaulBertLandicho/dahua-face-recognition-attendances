@@ -775,7 +775,7 @@ export default function PayrollPage() {
             const { data: holidays, error } = await supabase
               .from("holidays")
               .select("*")
-              .eq("department", person.department)
+              .or(`department.eq.${person.department},department.is.null`)
               .gte("date", start)
               .lte("date", end);
             if (error) throw error;
@@ -795,9 +795,9 @@ export default function PayrollPage() {
 
         const deptHolidayRates = {
           regular: Number(
-            deptRate.regular_holiday_rate ?? deptRate.holiday_rate ?? 0,
+            deptRate.regular_holiday_rate ?? deptRate.holiday_rate ?? 100,
           ),
-          special: Number(deptRate.special_holiday_rate ?? 0),
+          special: Number(deptRate.special_holiday_rate ?? 30),
         };
 
         let holidayPayDetails = [];
