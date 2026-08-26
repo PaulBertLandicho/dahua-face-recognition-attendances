@@ -8,10 +8,15 @@ import Icon from "../components/Icon";
 
 export default function DepartmentRates() {
   const [rates, setRates] = useState([]);
+  const [originalRates, setOriginalRates] = useState([]);
   // Track original department names for rename
   const [originalNames, setOriginalNames] = useState([]);
   const [saving, setSaving] = useState(false);
-  // Removed unused navigate
+  const [editModes, setEditModes] = useState({});
+
+  const toggleEdit = (idx) => {
+    setEditModes((prev) => ({ ...prev, [idx]: !prev[idx] }));
+  };
   const Icons = {
     circlePlus: <Icon as={FiPlusCircle} ariaLabel="Add" color="#ffffff" />,
   };
@@ -28,6 +33,7 @@ export default function DepartmentRates() {
         .order("department");
       if (!error && data) {
         setRates(data);
+        setOriginalRates(JSON.parse(JSON.stringify(data)));
         setOriginalNames(data.map((row) => row.department));
       }
     } catch (e) {
@@ -144,8 +150,12 @@ export default function DepartmentRates() {
         .eq("department", item.department);
       error = updateError;
     }
-    if (error) Swal.fire("Error", error.message, "error");
-    else Swal.fire("Saved", "", "success");
+    if (error) {
+      Swal.fire("Error", error.message, "error");
+    } else {
+      Swal.fire("Saved", "", "success");
+      setEditModes((prev) => ({ ...prev, [index]: false }));
+    }
     setSaving(false);
     fetchRates();
   };
@@ -154,8 +164,10 @@ export default function DepartmentRates() {
     <div style={styles.container}>
       {/* Header */}
       <div style={styles.header}>
-        <h1 style={styles.title}>Employee Rates</h1>
-        <div style={styles.titleUnderline} />
+        <h1 style={styles.title}>
+          <span style={styles.titleBlack}>Employee </span>
+          <span style={styles.titlePrimary}>Rates</span>
+        </h1>
       </div>
 
       {/* Add Department Button (modal) */}
@@ -168,13 +180,13 @@ export default function DepartmentRates() {
         </button>
       </div>
 
-      {/* Horizontal scrollable cards */}
-      <div style={styles.cardsContainer}>
+      {/* Vertically scrollable grid */}
+      <div className="cardsContainer" style={styles.cardsContainer}>
         {rates.map((row, idx) => (
           <div key={row.department} style={styles.card}>
             <div style={styles.cardHeader}>
               <span style={styles.cardIcon}>
-                <Icon as={FiHome} size={28} ariaLabel="Department" />
+                <Icon as={FiHome} size={24} color="#ffffff" ariaLabel="Department" />
               </span>
               <input
                 type="text"
@@ -184,86 +196,50 @@ export default function DepartmentRates() {
                 onChange={(e) =>
                   handleChange(idx, "department", e.target.value)
                 }
+                disabled={!editModes[idx]}
                 style={{
                   ...styles.departmentName,
-                  border: "1px solid #d1d5db",
-                  borderRadius: 8,
-                  padding: "2px 8px",
-                  minWidth: 120,
+                  border: editModes[idx] ? "1px solid #d1d5db" : "1px solid transparent",
+                  backgroundColor: editModes[idx] ? "#ffffff" : "transparent",
+                  borderRadius: 6,
+                  padding: "4px 10px",
+                  fontSize: "1.2rem",
+                  flex: 1,
+                  minWidth: 0,
+                  outline: "none",
                 }}
               />
-              <button
-                onClick={() => handleSave(idx)}
-                disabled={saving}
-                style={{
-                  marginLeft: 8,
-                  background: "#237227",
-                  color: "#fff",
-                  border: "none",
-                  borderRadius: 8,
-                  padding: "4px 12px",
-                  cursor: saving ? "not-allowed" : "pointer",
-                  fontWeight: 600,
-                }}
-                title="Save Department Name"
-              >
-                Save
-              </button>
-              <button
-                onClick={async () => {
-                  const confirm = await Swal.fire({
-                    title: `Delete ${row.department}?`,
-                    text: "This will remove the department and all its rates.",
-                    icon: "warning",
-                    showCancelButton: true,
-                    confirmButtonText: "Delete",
-                    cancelButtonText: "Cancel",
-                  });
-                  if (confirm.isConfirmed) {
-                    setSaving(true);
-                    const { error } = await supabase
-                      .from("department_rates")
-                      .delete()
-                      .eq("department", row.department);
-                    if (error) Swal.fire("Error", error.message, "error");
-                    else {
-                      Swal.fire("Deleted", "", "success");
-                      fetchRates();
-                    }
-                    setSaving(false);
-                  }
-                }}
-                style={{
-                  marginLeft: 8,
-                  background: "#ef4444",
-                  color: "#fff",
-                  border: "none",
-                  borderRadius: 8,
-                  padding: "4px 12px",
-                  cursor: "pointer",
-                  fontWeight: 600,
-                }}
-                disabled={saving}
-                title="Delete Department"
-              >
-                Delete
-              </button>
+              <div style={{ display: "flex", gap: "8px", flexShrink: 0 }}>
+                {!editModes[idx] && (
+                  <button
+                    onClick={() => toggleEdit(idx)}
+                    style={{
+                      background: "#f3f4f6",
+                      color: "#4b5563",
+                      border: "1px solid #d1d5db",
+                      borderRadius: 6,
+                      padding: "6px 12px",
+                      cursor: "pointer",
+                      fontWeight: 600,
+                      fontSize: "0.85rem",
+                    }}
+                  >
+                    Edit
+                  </button>
+                )}
+              </div>
             </div>
 
             {/* Rates Section */}
             <div style={styles.section}>
-              <h3 style={styles.sectionTitle}>
-                <span
-                  aria-label="Peso"
-                  style={{ marginRight: 8, fontSize: 18, fontWeight: 700 }}
-                >
-                  ₱
-                </span>
-                Rates
-              </h3>
               <div style={styles.inputGrid}>
                 <div style={styles.inputGroup}>
-                  <label htmlFor={`daily-rate-${row.department || idx}`} style={styles.label}>Daily Rate (₱)</label>
+                  <label
+                    htmlFor={`daily-rate-${row.department || idx}`}
+                    style={styles.label}
+                  >
+                    Daily Rate (₱)
+                  </label>
                   <input
                     id={`daily-rate-${row.department || idx}`}
                     name={`daily-rate-${row.department || idx}`}
@@ -274,11 +250,17 @@ export default function DepartmentRates() {
                     onChange={(e) =>
                       handleChange(idx, "daily_rate", e.target.value)
                     }
+                    disabled={!editModes[idx]}
                     style={styles.input}
                   />
                 </div>
                 <div style={styles.inputGroup}>
-                  <label htmlFor={`late-penalty-${row.department || idx}`} style={styles.label}>Late Penalty (₱)</label>
+                  <label
+                    htmlFor={`late-penalty-${row.department || idx}`}
+                    style={styles.label}
+                  >
+                    Late Penalty (₱)
+                  </label>
                   <input
                     id={`late-penalty-${row.department || idx}`}
                     name={`late-penalty-${row.department || idx}`}
@@ -289,22 +271,17 @@ export default function DepartmentRates() {
                     onChange={(e) =>
                       handleChange(idx, "late_penalty", e.target.value)
                     }
+                    disabled={!editModes[idx]}
                     style={styles.input}
                   />
                 </div>
-                {/* <div style={styles.inputGroup}>
-                  <label style={styles.label}>OT Rate (Hrs of Work)</label>
-                  <input
-                    type="number"
-                    step="0.01"
-                    min="0"
-                    value={row.ot_rate || 0}
-                    onChange={(e) => handleChange(idx, 'ot_rate', e.target.value)}
-                    style={styles.input}
-                  />
-                </div> */}
                 <div style={styles.inputGroup}>
-                  <label htmlFor={`regular-holiday-rate-${row.department || idx}`} style={styles.label}>Regular Holiday Rate (%)</label>
+                  <label
+                    htmlFor={`regular-holiday-rate-${row.department || idx}`}
+                    style={styles.label}
+                  >
+                    Regular Holiday Rate (%)
+                  </label>
                   <input
                     id={`regular-holiday-rate-${row.department || idx}`}
                     name={`regular-holiday-rate-${row.department || idx}`}
@@ -315,9 +292,17 @@ export default function DepartmentRates() {
                     onChange={(e) =>
                       handleChange(idx, "regular_holiday_rate", e.target.value)
                     }
+                    disabled={!editModes[idx]}
                     style={styles.input}
                   />
-                  <label htmlFor={`special-holiday-rate-${row.department || idx}`} style={styles.label}>Special Holiday Rate (%)</label>
+                </div>
+                <div style={styles.inputGroup}>
+                  <label
+                    htmlFor={`special-holiday-rate-${row.department || idx}`}
+                    style={styles.label}
+                  >
+                    Special Holiday Rate (%)
+                  </label>
                   <input
                     id={`special-holiday-rate-${row.department || idx}`}
                     name={`special-holiday-rate-${row.department || idx}`}
@@ -328,6 +313,7 @@ export default function DepartmentRates() {
                     onChange={(e) =>
                       handleChange(idx, "special_holiday_rate", e.target.value)
                     }
+                    disabled={!editModes[idx]}
                     style={styles.input}
                   />
                 </div>
@@ -344,9 +330,14 @@ export default function DepartmentRates() {
                 />
                 Deductions
               </h3>
-              <div style={styles.inputGrid}>
+              <div style={styles.inputGridDeductions}>
                 <div style={styles.inputGroup}>
-                  <label htmlFor={`sss-${row.department || idx}`} style={styles.label}>SSS (₱)</label>
+                  <label
+                    htmlFor={`sss-${row.department || idx}`}
+                    style={styles.label}
+                  >
+                    SSS (₱)
+                  </label>
                   <input
                     id={`sss-${row.department || idx}`}
                     name={`sss-${row.department || idx}`}
@@ -355,11 +346,17 @@ export default function DepartmentRates() {
                     min="0"
                     value={row.sss || 0}
                     onChange={(e) => handleChange(idx, "sss", e.target.value)}
+                    disabled={!editModes[idx]}
                     style={styles.input}
                   />
                 </div>
                 <div style={styles.inputGroup}>
-                  <label htmlFor={`pag-ibig-${row.department || idx}`} style={styles.label}>Pag-ibig (₱)</label>
+                  <label
+                    htmlFor={`pag-ibig-${row.department || idx}`}
+                    style={styles.label}
+                  >
+                    Pag-ibig (₱)
+                  </label>
                   <input
                     id={`pag-ibig-${row.department || idx}`}
                     name={`pag-ibig-${row.department || idx}`}
@@ -370,11 +367,17 @@ export default function DepartmentRates() {
                     onChange={(e) =>
                       handleChange(idx, "pag_ibig", e.target.value)
                     }
+                    disabled={!editModes[idx]}
                     style={styles.input}
                   />
                 </div>
                 <div style={styles.inputGroup}>
-                  <label htmlFor={`philhealth-${row.department || idx}`} style={styles.label}>PhilHealth (₱)</label>
+                  <label
+                    htmlFor={`philhealth-${row.department || idx}`}
+                    style={styles.label}
+                  >
+                    PhilHealth (₱)
+                  </label>
                   <input
                     id={`philhealth-${row.department || idx}`}
                     name={`philhealth-${row.department || idx}`}
@@ -385,38 +388,94 @@ export default function DepartmentRates() {
                     onChange={(e) =>
                       handleChange(idx, "philhealth", e.target.value)
                     }
+                    disabled={!editModes[idx]}
                     style={styles.input}
                   />
                 </div>
               </div>
             </div>
 
-            {/* Save Button */}
-            <div style={styles.action}>
-              <button
-                onClick={() => handleSave(idx)}
-                disabled={saving}
-                style={{
-                  ...styles.saveButton,
-                  opacity: saving ? 0.7 : 1,
-                  cursor: saving ? "not-allowed" : "pointer",
-                }}
-              >
-                {saving ? "Saving..." : "Save Changes"}
-              </button>
-            </div>
-
-            {/* Holiday Manager Integration */}
-            {/* <HolidayManager
-              department={row.department}
-              regularRate={row.regular_holiday_rate || 100}
-              specialRate={row.special_holiday_rate || 30}
-              onSave={holidayData => {
-                // You can handle saving holidayData to your database here
-                // Example: console.log('Holiday Data:', holidayData);
-                Swal.fire('Saved holidays for ' + row.department, JSON.stringify(holidayData, null, 2), 'success');
-              }}
-            /> */}
+            {/* Action Buttons (Bottom Right) */}
+            {editModes[idx] && (
+              <div style={{ ...styles.action, gap: "10px" }}>
+                <button
+                  onClick={() => {
+                    toggleEdit(idx);
+                    fetchRates();
+                  }}
+                  style={{
+                    background: "#6b7280",
+                    color: "#ffffff",
+                    border: "none",
+                    borderRadius: 6,
+                    padding: "8px 16px",
+                    cursor: "pointer",
+                    fontWeight: 600,
+                    fontSize: "0.85rem",
+                  }}
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={async () => {
+                    const confirm = await Swal.fire({
+                      title: `Delete ${row.department}?`,
+                      text: "This will remove the department and all its rates.",
+                      icon: "warning",
+                      showCancelButton: true,
+                      confirmButtonText: "Delete",
+                      cancelButtonText: "Cancel",
+                    });
+                    if (confirm.isConfirmed) {
+                      setSaving(true);
+                      const { error } = await supabase
+                        .from("department_rates")
+                        .delete()
+                        .eq("department", row.department);
+                      if (error) Swal.fire("Error", error.message, "error");
+                      else {
+                        Swal.fire("Deleted", "", "success");
+                        fetchRates();
+                      }
+                      setSaving(false);
+                    }
+                  }}
+                  style={{
+                    background: "#ef4444",
+                    color: "#ffffff",
+                    border: "none",
+                    borderRadius: 6,
+                    padding: "8px 16px",
+                    cursor: "pointer",
+                    fontWeight: 600,
+                    fontSize: "0.85rem",
+                  }}
+                  disabled={saving}
+                  title="Delete Department"
+                >
+                  Delete
+                </button>
+                {JSON.stringify(rates[idx]) !== JSON.stringify(originalRates[idx]) && (
+                  <button
+                    onClick={() => handleSave(idx)}
+                    disabled={saving}
+                    style={{
+                      background: "#237227",
+                      color: "#fff",
+                      border: "none",
+                      borderRadius: 6,
+                      padding: "8px 16px",
+                      cursor: saving ? "not-allowed" : "pointer",
+                      fontWeight: 600,
+                      fontSize: "0.85rem",
+                    }}
+                    title="Save Changes"
+                  >
+                    Save Changes
+                  </button>
+                )}
+              </div>
+            )}
           </div>
         ))}
       </div>
@@ -427,47 +486,48 @@ export default function DepartmentRates() {
 // Light theme styles with green accent
 const styles = {
   container: {
-    maxWidth: "1400px",
-    margin: "40px auto",
-    padding: "40px 32px",
+    margin: "0 auto",
+    padding: "24px 20px",
+    maxWidth: "100%",
     background: "#ffffff",
-    borderRadius: "32px",
-    boxShadow: "0 10px 30px rgba(0, 0, 0, 0.1)",
+    minHeight: "100vh",
     color: "#1f2937",
     fontFamily:
       '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif',
   },
   header: {
-    textAlign: "center",
-    marginBottom: "32px",
+    marginBottom: "20px",
+    display: "flex",
+    flexDirection: "column",
+    alignItems: "flex-start",
+    gap: "4px",
   },
   title: {
-    fontSize: "2.8rem",
-    fontWeight: 700,
-    color: "#1f2937",
+    fontSize: "2rem",
+    fontWeight: 800,
     margin: 0,
+    letterSpacing: "-0.02em",
     display: "inline-block",
   },
-  titleUnderline: {
-    height: "4px",
-    width: "100px",
-    background: "#237227",
-    margin: "8px auto 0",
-    borderRadius: "2px",
+  titleBlack: {
+    color: "#2c382d",
+  },
+  titlePrimary: {
+    color: "#237227",
   },
   tabContainer: {
     display: "flex",
     justifyContent: "center",
     gap: "8px",
-    marginBottom: "32px",
+    marginBottom: "24px",
     borderBottom: "2px solid #e5e7eb",
     paddingBottom: "8px",
   },
   tab: {
-    padding: "10px 24px",
-    fontSize: "1rem",
+    padding: "8px 20px",
+    fontSize: "0.95rem",
     fontWeight: 600,
-    borderRadius: "30px 30px 0 0",
+    borderRadius: "20px 20px 0 0",
     border: "none",
     cursor: "pointer",
     transition: "all 0.2s",
@@ -488,22 +548,20 @@ const styles = {
     },
   },
   cardsContainer: {
-    display: "flex",
-    flexDirection: "row",
-    overflowX: "auto",
+    display: "grid",
+    gridTemplateColumns: "repeat(auto-fill, minmax(350px, 1fr))",
     gap: "24px",
-    paddingBottom: "8px",
-    scrollbarWidth: "thin",
-    scrollbarColor: "#cbd5e0 #f1f5f9",
+    padding: "8px",
+    paddingRight: "16px",
+    maxHeight: "75vh",
+    overflowY: "auto",
   },
   card: {
-    flex: "0 0 auto",
-    width: "400px",
     background: "#f9fafb",
-    borderRadius: "24px",
-    padding: "28px 24px",
+    borderRadius: "16px",
+    padding: "20px",
     border: "1px solid #e5e7eb",
-    boxShadow: "0 4px 12px rgba(0, 0, 0, 0.05)",
+    boxShadow: "0 2px 8px rgba(0, 0, 0, 0.04)",
     transition: "transform 0.2s, box-shadow 0.2s",
     display: "flex",
     flexDirection: "column",
@@ -511,50 +569,87 @@ const styles = {
   cardHeader: {
     display: "flex",
     alignItems: "center",
-    gap: "12px",
-    marginBottom: "24px",
+    gap: "10px",
+    marginBottom: "16px",
   },
   cardIcon: {
-    fontSize: "2rem",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    width: "44px",
+    height: "44px",
+    borderRadius: "12px",
+    background: "#237227",
+    color: "#ffffff",
+    flexShrink: 0,
   },
   departmentName: {
-    fontSize: "1.8rem",
+    fontSize: "1.4rem",
     fontWeight: 600,
     margin: 0,
     color: "#1f2937",
   },
+  smallIconWrapperPrimary: {
+    display: "inline-flex",
+    alignItems: "center",
+    justifyContent: "center",
+    width: "28px",
+    height: "28px",
+    borderRadius: "8px",
+    background: "#f0fdf4",
+    color: "#237227",
+    marginRight: "8px",
+    fontSize: "1rem",
+    fontWeight: 700,
+  },
+  smallIconWrapperSecondary: {
+    display: "inline-flex",
+    alignItems: "center",
+    justifyContent: "center",
+    width: "28px",
+    height: "28px",
+    borderRadius: "8px",
+    background: "#f3f4f6",
+    color: "#4b5563",
+    marginRight: "8px",
+  },
   section: {
-    marginBottom: "24px",
+    marginBottom: "16px",
   },
   sectionTitle: {
-    fontSize: "1.2rem",
-    fontWeight: 500,
+    fontSize: "1.05rem",
+    fontWeight: 600,
     color: "#4b5563",
-    marginBottom: "16px",
+    marginBottom: "12px",
     borderBottom: "1px solid #e5e7eb",
-    paddingBottom: "8px",
+    paddingBottom: "6px",
   },
   inputGrid: {
     display: "grid",
-    gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))",
-    gap: "16px",
+    gridTemplateColumns: "repeat(2, 1fr)",
+    gap: "12px",
+  },
+  inputGridDeductions: {
+    display: "grid",
+    gridTemplateColumns: "repeat(3, 1fr)",
+    gap: "12px",
   },
   inputGroup: {
     display: "flex",
     flexDirection: "column",
-    gap: "6px",
+    gap: "4px",
   },
   label: {
-    fontSize: "0.85rem",
-    fontWeight: 500,
+    fontSize: "0.75rem",
+    fontWeight: 600,
     color: "#4b5563",
     textTransform: "uppercase",
     letterSpacing: "0.5px",
   },
   input: {
-    padding: "10px 12px",
-    fontSize: "1rem",
-    borderRadius: "12px",
+    padding: "4px 8px",
+    fontSize: "0.85rem",
+    borderRadius: "4px",
     border: "1px solid #d1d5db",
     background: "#ffffff",
     color: "#1f2937",
@@ -564,20 +659,25 @@ const styles = {
     boxSizing: "border-box",
   },
   action: {
-    marginTop: "auto",
-    textAlign: "center",
+    marginTop: "20px",
+    display: "flex",
+    justifyContent: "flex-end",
   },
   saveButton: {
-    padding: "12px 24px",
-    fontSize: "1rem",
+    display: "inline-flex",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: "6px",
+    padding: "8px 16px",
+    fontSize: "0.85rem",
     fontWeight: 600,
-    borderRadius: "30px",
+    borderRadius: "6px",
     border: "none",
     cursor: "pointer",
     transition: "all 0.2s",
     background: "#237227",
     color: "#ffffff",
-    boxShadow: "0 4px 10px rgba(16, 185, 129, 0.3)",
+    boxShadow: "0 1px 4px rgba(35, 114, 39, 0.2)",
     width: "100%",
     maxWidth: "200px",
   },
@@ -606,23 +706,33 @@ styleSheet.textContent = `
     100% { transform: rotate(360deg); }
   }
   input:focus {
-    border-color: #237227 !important;
-    box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.2) !important;
+    border-color: #d1d5db !important;
+    outline: none !important;
+    box-shadow: none !important;
+  }
+  button:focus {
+    outline: none !important;
+    box-shadow: none !important;
   }
   button:hover:not(:disabled) {
     transform: translateY(-2px);
-    box-shadow: 0 8px 20px rgba(0, 0, 0, 0.15);
-  }
-  .saveButton:hover {
-    background: #0f9e6e !important;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
   }
   .inactiveTab:hover {
     color: #1f2937 !important;
     border-bottom: 3px solid #d1d5db !important;
   }
+  .cardsContainer input:disabled {
+    background-color: transparent !important;
+    border-color: transparent !important;
+    color: #4b5563 !important;
+    padding-left: 0 !important;
+    font-weight: 500;
+  }
   /* Custom scrollbar for light theme */
   .cardsContainer::-webkit-scrollbar {
     height: 8px;
+    width: 8px;
   }
   .cardsContainer::-webkit-scrollbar-track {
     background: #f1f5f9;

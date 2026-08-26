@@ -4,6 +4,7 @@
   "private": true,
   "dependencies": {
     "@supabase/supabase-js": "^2.98.0",
+    "@tailwindcss/vite": "^4.3.3",
     "@tanstack/react-query": "^5.99.2",
     "@testing-library/dom": "^10.4.1",
     "@testing-library/jest-dom": "^6.9.1",
@@ -36,10 +37,14 @@
     "node-cron": "^3.0.2"
   },
   "devDependencies": {
-    "@craco/craco": "^7.1.0"
+    "@craco/craco": "^7.1.0",
+    "autoprefixer": "^10.4.21",
+    "postcss": "^8.5.26",
+    "tailwindcss": "^3.4.17"
   },
   "scripts": {
     "start": "craco start",
+    "server": "node server.js",
     "build": "craco build",
     "test": "craco test",
     "eject": "react-scripts eject",
@@ -51,7 +56,7 @@
       "react-app/jest"
     ]
   },
-  "proxy": "http://localhost:3000",
+  "proxy": "http://localhost:4000",
   "browserslist": {
     "production": [
       ">0.2%",

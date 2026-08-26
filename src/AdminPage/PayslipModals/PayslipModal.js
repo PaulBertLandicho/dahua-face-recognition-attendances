@@ -422,25 +422,37 @@ export default function PayslipModal({
     daysWorked = Number(payrollDaysPresent) || 0;
     daysWorkedDisplay = `${daysWorked} day(s)`;
   } else if (detailedAttendance.length) {
-    let fullDays = 0;
-    let halfDays = 0;
+    let totalHoursWorked = 0;
+    const lunchStart = parseTimeToMinutes(payroll?.settings?.morning_end || "12:00") || 720;
+    const lunchEnd = parseTimeToMinutes(payroll?.settings?.afternoon_start || "13:00") || 780;
+    const lunchDuration = Math.max(0, lunchEnd - lunchStart);
+    
     detailedAttendance.forEach((rec) => {
-      const hasMorning = !!rec.morningIn;
-      const hasAfternoon = !!rec.afternoonIn;
-      if (hasMorning && hasAfternoon) {
-        fullDays += 1;
-      } else if (hasMorning || hasAfternoon) {
-        halfDays += 1;
+      if (!rec.morningIn || !rec.afternoonOut) return;
+      const scheduledStart = parseTimeToMinutes(payroll?.settings?.morning_start || "08:00") || 480;
+      const aOut = parseTimeToMinutes(rec.afternoonOut);
+      if (aOut !== null) {
+        const mIn = scheduledStart; // Use scheduled start to avoid double deduction with Late Penalty
+        let workedMinutes = aOut - mIn;
+        if (mIn <= lunchStart && aOut >= lunchEnd) {
+          workedMinutes -= lunchDuration;
+        } else if (mIn <= lunchStart && aOut > lunchStart && aOut < lunchEnd) {
+          workedMinutes -= (aOut - lunchStart);
+        } else if (mIn > lunchStart && mIn < lunchEnd && aOut >= lunchEnd) {
+          workedMinutes -= (lunchEnd - mIn);
+        }
+        
+        // Round to the nearest 15 minutes to handle tiny variations (e.g. clocking out at 4:59 PM)
+        workedMinutes = Math.round(workedMinutes / 15) * 15;
+
+        let standardWorkedMinutes = Math.min(workedMinutes, 480);
+        if (standardWorkedMinutes > 0) {
+          totalHoursWorked += standardWorkedMinutes / 60;
+        }
       }
     });
-    daysWorked = fullDays + halfDays * 0.5;
-    // Display as e.g. "2 full, 1 half (2.5 days)"
-    let parts = [];
-    if (fullDays > 0) parts.push(`${fullDays} full`);
-    if (halfDays > 0) parts.push(`${halfDays} half`);
-    daysWorkedDisplay = parts.length
-      ? `${parts.join(", ")} (${daysWorked} day${daysWorked !== 1 ? "s" : ""})`
-      : "0 days";
+    daysWorked = Math.round((totalHoursWorked / 8) * 1000) / 1000;
+    daysWorkedDisplay = `${totalHoursWorked.toFixed(2)} hrs (${daysWorked} days)`;
   } else {
     daysWorked = payroll.daysPresent || 0;
     daysWorkedDisplay = `${daysWorked} day(s)`;
@@ -693,8 +705,6 @@ export default function PayslipModal({
               <tr>
                 <th style={styles.th}>Date</th>
                 <th style={styles.th}>Morning In</th>
-                <th style={styles.th}>Morning Out</th>
-                <th style={styles.th}>Afternoon In</th>
                 <th style={styles.th}>Afternoon Out</th>
                 <th style={styles.th}>OT</th>
                 <th style={styles.th}>Late Count</th>
@@ -742,28 +752,12 @@ export default function PayslipModal({
                     morningInDisplay = "Not time-in";
                   }
 
-                  // Morning Out
-                  let morningOutDisplay = "-";
-                  if (rec.morningOut) {
-                    morningOutDisplay = rec.morningOut;
-                  } else if (!isNotYetTime("morning", rec.date, "out")) {
-                    morningOutDisplay = "Not time-out";
-                  }
-
-                  // Afternoon In
-                  let afternoonInDisplay = "-";
-                  if (rec.afternoonIn) {
-                    afternoonInDisplay = rec.afternoonIn;
-                  } else if (!isNotYetTime("afternoon", rec.date, "in")) {
-                    afternoonInDisplay = "Not time-in";
-                  }
-
                   // Afternoon Out
                   let afternoonOutDisplay = "-";
                   if (rec.afternoonOut) {
                     afternoonOutDisplay = rec.afternoonOut;
                   } else if (!isNotYetTime("afternoon", rec.date, "out")) {
-                    afternoonOutDisplay = "Not time-out";
+                    afternoonOutDisplay = "Missing (Rate: 0)";
                   }
 
                   // Compute per-row overtime (minutes) by comparing out times to scheduled end times.
@@ -787,7 +781,8 @@ export default function PayslipModal({
                       typeof schedAfternoonEndMin === "number" &&
                       afternoonOutMin > schedAfternoonEndMin
                     ) {
-                      otMinutes += afternoonOutMin - schedAfternoonEndMin;
+                      const mins = afternoonOutMin - schedAfternoonEndMin;
+                      if (mins >= 60) otMinutes += mins;
                     }
                     // include morning overtime if present (rare)
                     if (
@@ -795,7 +790,8 @@ export default function PayslipModal({
                       typeof schedMorningEndMin === "number" &&
                       morningOutMin > schedMorningEndMin
                     ) {
-                      otMinutes += morningOutMin - schedMorningEndMin;
+                      const mins = morningOutMin - schedMorningEndMin;
+                      if (mins >= 60) otMinutes += mins;
                     }
                   } catch (e) {
                     otMinutes = 0;
@@ -816,18 +812,6 @@ export default function PayslipModal({
                         }}
                       >
                         {morningInDisplay}
-                      </td>
-                      <td style={styles.td}>{morningOutDisplay}</td>
-                      <td
-                        style={{
-                          ...styles.td,
-                          color:
-                            rec.afternoonInStatus === "late"
-                              ? styles.lateText.color
-                              : undefined,
-                        }}
-                      >
-                        {afternoonInDisplay}
                       </td>
                       <td style={styles.td}>{afternoonOutDisplay}</td>
                       <td style={styles.td}>

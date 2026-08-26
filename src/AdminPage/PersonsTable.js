@@ -9,18 +9,13 @@ import {
   FiBriefcase,
   FiPhone,
   FiMail,
-  FiUserPlus,
   FiPlusCircle,
+  FiRefreshCw,
 } from "react-icons/fi";
-import PersonRegistration from "./PersonRegistration";
 import { determineAttendanceStatus } from "./attendanceUtils";
+import { syncDahuaUsers } from "../utils/dahuaApi";
 
 export default function PersonsTable() {
-  // Camera state/hooks for Edit Person modal
-  const [showCamera, setShowCamera] = useState(false);
-  const cameraVideoRef = useRef(null);
-
-  const cameraStreamRef = useRef(null);
   const adminLastLocationRef = useRef({ point: "Location unavailable", ts: 0 });
 
   const buildLocationResult = (point, status, message) => ({ point, status, message });
@@ -180,75 +175,27 @@ export default function PersonsTable() {
     return locationResult;
   };
 
-  // Start camera when modal opens
-
-  useEffect(() => {
-    // Capture refs at effect start for cleanup
-    const initialVideoRef = cameraVideoRef.current;
-    if (showCamera) {
-      (async () => {
-        try {
-          const stream = await navigator.mediaDevices.getUserMedia({ video: true });
-          if (initialVideoRef) {
-            initialVideoRef.srcObject = stream;
-            cameraStreamRef.current = stream;
-          }
-        } catch (err) {
-          Swal.fire("Camera Error", "Unable to access camera.", "error");
-          setShowCamera(false);
-        }
-      })();
-    } else {
-      // Stop camera
-      if (cameraStreamRef.current) {
-        cameraStreamRef.current.getTracks &&
-          cameraStreamRef.current.getTracks().forEach((track) => track.stop());
-        cameraStreamRef.current = null;
-      }
-      if (initialVideoRef) {
-        initialVideoRef.srcObject = null;
-      }
-    }
-    // Cleanup on unmount
-    return () => {
-      const localStream = cameraStreamRef.current;
-      if (localStream) {
-        localStream.getTracks &&
-          localStream.getTracks().forEach((track) => track.stop());
-        cameraStreamRef.current = null;
-      }
-      if (initialVideoRef) {
-        initialVideoRef.srcObject = null;
-      }
-    };
-  }, [showCamera]);
-
-  // Handler to capture photo from camera
-  const handleCapturePhoto = () => {
-    if (!cameraVideoRef.current) return;
-    const video = cameraVideoRef.current;
-    const canvas = document.createElement("canvas");
-    canvas.width = video.videoWidth || 320;
-    canvas.height = video.videoHeight || 240;
-    const ctx = canvas.getContext("2d");
-    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-    const dataUrl = canvas.toDataURL("image/jpeg", 0.92);
-    setEditPerson((prev) => ({ ...prev, registration_photo: dataUrl }));
-    setShowCamera(false);
-  };
   const [search, setSearch] = useState("");
   const [departmentFilter, setDepartmentFilter] = useState("");
   const [sortKey] = useState("created_at");
   const [sortOrder] = useState("desc");
   const [showArchived, setShowArchived] = useState(false);
+  
+  // Pagination
+  const [currentPage, setCurrentPage] = useState(1);
+  const itemsPerPage = 12; // 12 fits nicely in a grid (e.g. 4x3 or 3x4)
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [search, departmentFilter, showArchived]);
+
   const [persons, setPersons] = useState([]);
   const [photoModal, setPhotoModal] = useState({ visible: false, src: "", title: "" });
   const [payrollMap, setPayrollMap] = useState({});
   const [payrollGrossMap, setPayrollGrossMap] = useState({});
   const [presenceMap, setPresenceMap] = useState({});
   const [departments, setDepartments] = useState([]);
-  const [showRegModal, setShowRegModal] = useState(false);
-  const [regModalImage, setRegModalImage] = useState(null);
+  const [syncingDahuaUsers, setSyncingDahuaUsers] = useState(false);
   const [error, setError] = useState(null);
   const [showEditModal, setShowEditModal] = useState(false);
   const [editPerson, setEditPerson] = useState(null);
@@ -265,7 +212,6 @@ export default function PersonsTable() {
     download: <FiDownload color="#ffffff" style={{ marginRight: 8 }} />,
     archive: <FiArchive />,
     edit: <FiEdit color="#ffffff" style={{ marginRight: 8 }} />,
-    add: <FiUserPlus color="#ffffff" style={{ marginRight: 8 }} />,
     circle: <FiPlusCircle color="#ffffff" style={{ marginRight: 0 }} />,
   };
 
@@ -861,12 +807,52 @@ export default function PersonsTable() {
     return 0;
   });
 
-  // Page-level loading handled by LoadingContext overlay
-  if (error) {
-    return <p style={{ color: "red" }}>{error}</p>;
-  }
+  // Pagination logic
+  const activeRecords = sortedPersons;
+  const totalRecords = activeRecords.length;
+  const totalPages = Math.ceil(totalRecords / itemsPerPage) || 1;
+  const startIndex = (currentPage - 1) * itemsPerPage;
+  const currentRecords = activeRecords.slice(startIndex, startIndex + itemsPerPage);
 
   // Export to Excel
+  const handleSyncDahuaPersons = async () => {
+    if (syncingDahuaUsers) return;
+    setSyncingDahuaUsers(true);
+
+    Swal.fire({
+      title: "Syncing Users from Dahua...",
+      html: "Fetching enrolled users from <b>DHI-ASA3213GL-MW</b> and saving them to Supabase...",
+      allowOutsideClick: false,
+      didOpen: () => Swal.showLoading(),
+    });
+
+    try {
+      const data = await syncDahuaUsers();
+
+      try {
+        const { data: refreshedPersons, error: refreshError } = await supabase
+          .from("persons")
+          .select("*");
+        if (!refreshError) setPersons(refreshedPersons || []);
+      } catch (refreshErr) {}
+
+      Swal.fire({
+        icon: "success",
+        title: "Users Synced!",
+        html: `Synced <b>${data?.count || 0}</b> user(s) from Dahua to Supabase.`,
+        timer: 2800,
+      });
+    } catch (err) {
+      Swal.fire({
+        icon: "error",
+        title: "Sync Error",
+        text: err?.message || "Failed to sync users from Dahua device.",
+      });
+    } finally {
+      setSyncingDahuaUsers(false);
+    }
+  };
+
   const handleExportExcel = () => {
     if (!Array.isArray(sortedPersons)) return;
     const exportData = sortedPersons.map((row) => ({
@@ -893,9 +879,27 @@ export default function PersonsTable() {
 
   return (
     <div style={styles.container}>
+      {error && (
+        <div
+          role="alert"
+          style={{
+            marginBottom: 16,
+            padding: "10px 14px",
+            border: "1px solid #fecaca",
+            borderRadius: 8,
+            background: "#fef2f2",
+            color: "#b91c1c",
+            fontSize: 14,
+          }}
+        >
+          {error}
+        </div>
+      )}
       <div style={styles.header}>
-        <h1 style={styles.title}>Registered Persons</h1>
-        <div style={styles.titleUnderline} />
+        <h1 style={styles.title}>
+          <span style={styles.titleBlack}>Registered </span>
+          <span style={styles.titlePrimary}>Persons</span>
+        </h1>
       </div>
 
       {/* Filter Bar */}
@@ -913,23 +917,25 @@ export default function PersonsTable() {
               style={styles.searchInput}
             />
           </div>
-          <label htmlFor="persons-department-filter" style={{ display: "block", marginBottom: 4, fontSize: 12, color: "#4b5563", fontWeight: 600 }}>Department</label>
-          <select
-            id="persons-department-filter"
-            name="persons-department-filter"
-            value={departmentFilter}
-            onChange={(e) => setDepartmentFilter(e.target.value)}
-            style={styles.select}
-          >
-            <option value="">All Departments</option>
-            {[...new Set(persons.map((p) => p.department).filter(Boolean))].map(
-              (dept) => (
-                <option key={dept} value={dept}>
-                  {dept}
-                </option>
-              ),
-            )}
-          </select>
+          <div>
+            <label htmlFor="persons-department-filter" style={{ display: "block", marginBottom: 4, fontSize: 12, color: "#4b5563", fontWeight: 600 }}>Department</label>
+            <select
+              id="persons-department-filter"
+              name="persons-department-filter"
+              value={departmentFilter}
+              onChange={(e) => setDepartmentFilter(e.target.value)}
+              style={styles.select}
+            >
+              <option value="">All Departments</option>
+              {[...new Set(persons.map((p) => p.department).filter(Boolean))].map(
+                (dept) => (
+                  <option key={dept} value={dept}>
+                    {dept}
+                  </option>
+                ),
+              )}
+            </select>
+          </div>
           <button
             onClick={() => setShowArchived((a) => !a)}
             style={{ ...styles.button, ...styles.buttonSecondary }}
@@ -940,97 +946,38 @@ export default function PersonsTable() {
               <>{Icons.archive} Show Archived</>
             )}
           </button>
-          <input
-            id="reg-image-input"
-            type="file"
-            accept="image/*"
-            style={{ display: "none" }}
-            onChange={(e) => {
-              const f = e.target.files && e.target.files[0];
-              if (!f) return;
-              const reader = new FileReader();
-              reader.onload = () => {
-                const url = reader.result;
-                setRegModalImage(url);
-                setShowRegModal(true);
-              };
-              reader.readAsDataURL(f);
-            }}
-          />
+        </div>
+
+        <div style={styles.actionButtons}>
           <button
-            onClick={() => {
-              setRegModalImage(null);
-              setShowRegModal(true);
+            onClick={handleSyncDahuaPersons}
+            disabled={syncingDahuaUsers}
+            style={{
+              ...styles.button,
+              ...styles.buttonPrimary,
+              opacity: syncingDahuaUsers ? 0.7 : 1,
             }}
-            style={{ ...styles.button, ...styles.buttonPrimary, marginLeft: 8 }}
           >
-            {Icons.add} Open Register Camera
+            <FiRefreshCw color="#ffffff" style={{ marginRight: 8 }} />
+            {syncingDahuaUsers ? "Syncing Dahua Users..." : "Sync Dahua Users"}
+          </button>
+          <button
+            onClick={handleExportExcel}
+            style={{ ...styles.button, ...styles.buttonPrimary }}
+          >
+            {Icons.download} Export Excel
           </button>
         </div>
-
-        <button
-          onClick={handleExportExcel}
-          style={{ ...styles.button, ...styles.buttonPrimary }}
-        >
-          {Icons.download} Export Excel
-        </button>
       </div>
-
-      {/* Registration modal */}
-      {showRegModal && (
-        <div
-          style={{
-            position: "fixed",
-            top: 0,
-            left: 0,
-            width: "100vw",
-            height: "100vh",
-            background: "rgba(0,0,0,0.5)",
-            zIndex: 2000,
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-          }}
-        >
-          <div
-            style={{
-              background: "#fff",
-              borderRadius: 12,
-              padding: 20,
-              width: 800,
-              maxWidth: "95vw",
-              maxHeight: "90vh",
-              overflow: "auto",
-              position: "relative",
-            }}
-          >
-            <button
-              onClick={() => setShowRegModal(false)}
-              style={{
-                position: "absolute",
-                right: 12,
-                top: 12,
-                border: "none",
-                background: "transparent",
-                fontSize: 20,
-                cursor: "pointer",
-              }}
-            >
-              &times;
-            </button>
-            <PersonRegistration initialImageUrl={regModalImage} />
-          </div>
-        </div>
-      )}
 
       {/* Card Grid */}
       <div style={styles.tableContainer}>
         <div style={{ padding: 24 }}>
           <div style={styles.cardsGrid}>
-            {sortedPersons.length === 0 ? (
+            {currentRecords.length === 0 ? (
               <div style={styles.emptyState}>No persons found.</div>
             ) : (
-              sortedPersons.map((p) => {
+              currentRecords.map((p) => {
                 const initials = (p.name || "")
                   .split(" ")
                   .map((n) => (n ? n[0] : ""))
@@ -1113,35 +1060,62 @@ export default function PersonsTable() {
                       </div>
                     </div>
 
-                    <div style={styles.cardActions}>
-                      <button
-                        onClick={() => handleEdit(p)}
-                        style={{
-                          ...styles.smallButton,
-                          ...styles.buttonSuccess,
-                        }}
-                      >
-                        {Icons.edit} Edit
-                      </button>
-                      {!p.archived && (
+                    <div style={{ display: "flex", flexDirection: "column", gap: "8px", marginTop: "16px" }}>
+                      <div style={{ display: "flex", gap: "8px" }}>
                         <button
-                          onClick={() => handleArchive(p)}
+                          onClick={() => handleEdit(p)}
                           style={{
-                            ...styles.smallButton,
-                            ...styles.buttonSecondary,
+                            flex: 1,
+                            padding: "10px 0",
+                            borderRadius: "10px",
+                            fontSize: "0.85rem",
+                            fontWeight: 600,
+                            cursor: "pointer",
+                            transition: "all 0.2s",
+                            background: "#237227",
+                            color: "#ffffff",
+                            border: "none",
+                            textAlign: "center"
                           }}
                         >
-                          {Icons.archive} Archive
+                          Edit
                         </button>
-                      )}
+                        {!p.archived && (
+                          <button
+                            onClick={() => handleArchive(p)}
+                            style={{
+                              flex: 1,
+                              padding: "10px 0",
+                              borderRadius: "10px",
+                              fontSize: "0.85rem",
+                              fontWeight: 600,
+                              cursor: "pointer",
+                              transition: "all 0.2s",
+                              background: "#ffffff",
+                              color: "#1f2937",
+                              border: "1px solid #d1d5db",
+                              textAlign: "center"
+                            }}
+                          >
+                            Archive
+                          </button>
+                        )}
+                      </div>
                       {!p.archived && (
                         <button
                           onClick={() => handleAdminAttendance(p)}
                           style={{
-                            ...styles.smallButton,
-                            background: '#868279',
-                            color: '#fff',
-                            border: 'none',
+                            width: "100%",
+                            padding: "10px 0",
+                            borderRadius: "10px",
+                            fontSize: "0.85rem",
+                            fontWeight: 600,
+                            cursor: "pointer",
+                            transition: "all 0.2s",
+                            background: "#e5e7eb",
+                            color: "#1f2937",
+                            border: "none",
+                            textAlign: "center"
                           }}
                         >
                           Customize Attendance
@@ -1152,6 +1126,54 @@ export default function PersonsTable() {
                 );
               })
             )}
+          </div>
+        </div>
+
+        {/* Pagination Footer */}
+        <div style={styles.paginationContainer}>
+          <div style={styles.paginationText}>
+            Showing <strong>{totalRecords === 0 ? 0 : startIndex + 1}</strong> to <strong>{Math.min(startIndex + itemsPerPage, totalRecords)}</strong> of <strong>{totalRecords}</strong> records
+          </div>
+          <div style={styles.paginationControls}>
+            <button 
+              style={{ ...styles.pageButton, ...(currentPage === 1 ? styles.pageButtonDisabled : {}) }}
+              onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+              disabled={currentPage === 1}
+            >
+              &lt;
+            </button>
+            
+            {Array.from({ length: totalPages }, (_, i) => i + 1)
+              .filter(p => p === 1 || p === totalPages || Math.abs(currentPage - p) <= 1)
+              .map((p, idx, arr) => {
+                const renderButton = (
+                  <button
+                    key={p}
+                    style={p === currentPage ? { ...styles.pageButton, ...styles.pageButtonActive } : styles.pageButton}
+                    onClick={() => setCurrentPage(p)}
+                  >
+                    {p}
+                  </button>
+                );
+
+                if (idx > 0 && arr[idx] - arr[idx - 1] > 1) {
+                  return (
+                    <div key={`group-${p}`} style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                      <span style={{ color: "#677368", padding: "0 2px" }}>...</span>
+                      {renderButton}
+                    </div>
+                  );
+                }
+                return renderButton;
+              })}
+            
+            <button 
+              style={{ ...styles.pageButton, ...(currentPage === totalPages ? styles.pageButtonDisabled : {}) }}
+              onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
+              disabled={currentPage === totalPages}
+            >
+              &gt;
+            </button>
           </div>
         </div>
       </div>
@@ -1200,17 +1222,6 @@ export default function PersonsTable() {
                   >
                     Upload New Photo
                   </button>
-                  <button
-                    type="button"
-                    onClick={() => setShowCamera(true)}
-                    style={{
-                      ...styles.button,
-                      ...styles.buttonPrimary,
-                      padding: "8px 16px",
-                    }}
-                  >
-                    Use Camera
-                  </button>
                 </div>
                 <input
                   ref={editPhotoInputRef}
@@ -1220,77 +1231,6 @@ export default function PersonsTable() {
                   onChange={handleEditPhotoChange}
                 />
 
-                {/* Camera Modal for capturing photo */}
-                {showCamera && (
-                  <div
-                    style={{
-                      position: "fixed",
-                      top: 0,
-                      left: 0,
-                      width: "100vw",
-                      height: "100vh",
-                      background: "rgba(0,0,0,0.5)",
-                      zIndex: 2000,
-                      display: "flex",
-                      alignItems: "center",
-                      justifyContent: "center",
-                    }}
-                  >
-                    <div
-                      style={{
-                        background: "#fff",
-                        padding: 32,
-                        borderRadius: 20,
-                        boxShadow: "0 8px 32px rgba(0,0,0,0.2)",
-                        position: "relative",
-                      }}
-                    >
-                      <button
-                        onClick={() => setShowCamera(false)}
-                        style={{
-                          position: "absolute",
-                          top: 12,
-                          right: 16,
-                          background: "transparent",
-                          border: "none",
-                          fontSize: 28,
-                          color: "#888",
-                          cursor: "pointer",
-                        }}
-                      >
-                        &times;
-                      </button>
-                      <h3 style={{ marginBottom: 16 }}>Capture Photo</h3>
-                      <video
-                        ref={cameraVideoRef}
-                        autoPlay
-                        playsInline
-                        width={320}
-                        height={240}
-                        style={{ borderRadius: 12, background: "#000" }}
-                      />
-                      <div style={{ marginTop: 16, display: "flex", gap: 12 }}>
-                        <button
-                          type="button"
-                          style={{ ...styles.button, ...styles.buttonPrimary }}
-                          onClick={handleCapturePhoto}
-                        >
-                          Capture
-                        </button>
-                        <button
-                          type="button"
-                          style={{
-                            ...styles.button,
-                            ...styles.buttonSecondary,
-                          }}
-                          onClick={() => setShowCamera(false)}
-                        >
-                          Cancel
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                )}
               </div>
               <div className="persons-modal-grid" style={styles.modalGrid}>
                 <div style={styles.modalField}>
@@ -1662,128 +1602,138 @@ export default function PersonsTable() {
 // Light theme styles with green accent
 const styles = {
   container: {
-    maxWidth: "1600px",
-    margin: "40px auto",
-    padding: "40px 32px",
+    margin: "0 auto",
+    padding: "36px 28px",
+    maxWidth: "100%",
     background: "#ffffff",
-    borderRadius: "32px",
-    boxShadow: "0 10px 30px rgba(0, 0, 0, 0.1)",
+    minHeight: "100vh",
     color: "#1f2937",
     fontFamily:
       '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif',
   },
   header: {
-    textAlign: "center",
-    marginBottom: "40px",
+    marginBottom: "24px",
+    display: "flex",
+    flexDirection: "column",
+    alignItems: "flex-start",
+    gap: "6px",
   },
   title: {
-    fontSize: "2.8rem",
-    fontWeight: 700,
-    color: "#1f2937",
+    fontSize: "2.5rem",
+    fontWeight: 800,
     margin: 0,
+    letterSpacing: "-0.02em",
     display: "inline-block",
   },
-  titleUnderline: {
-    height: "4px",
-    width: "100px",
-    background: "#237227",
-    margin: "8px auto 0",
-    borderRadius: "2px",
+  titleBlack: {
+    color: "#2c382d",
+  },
+  titlePrimary: {
+    color: "#237227",
   },
   filterBar: {
     display: "flex",
-    flexWrap: "wrap",
+    flexWrap: "nowrap",
     justifyContent: "space-between",
-    alignItems: "center",
-    gap: "16px",
-    marginBottom: "24px",
-    padding: "20px 24px",
-    backgroundColor: "#f9fafb",
-    borderRadius: "20px",
-    border: "1px solid #e5e7eb",
-    boxShadow: "0 4px 12px rgba(0, 0, 0, 0.05)",
+    alignItems: "flex-end",
+    gap: "14px",
+    marginBottom: "20px",
+    padding: "12px 16px",
+    backgroundColor: "#ffffff",
+    borderRadius: "12px",
+    border: "1px solid #edf2ee",
+    boxShadow: "0 1px 4px rgba(0, 0, 0, 0.04)",
+    overflowX: "auto",
   },
   filterGroup: {
     display: "flex",
-    flexWrap: "wrap",
-    gap: "12px",
-    alignItems: "center",
+    flexWrap: "nowrap",
+    gap: "10px",
+    alignItems: "flex-end",
   },
   searchWrapper: {
     position: "relative",
   },
   searchInput: {
-    padding: "12px 16px 12px 40px",
-    fontSize: "0.95rem",
-    borderRadius: "40px",
+    padding: "8px 14px 8px 34px",
+    fontSize: "0.85rem",
+    borderRadius: "6px",
     border: "1px solid #d1d5db",
     backgroundColor: "#ffffff",
     color: "#1f2937",
     outline: "none",
-    transition: "all 0.2s",
-    backgroundImage: `url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="%236b7280" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>')`,
+    transition: "border-color 0.2s, box-shadow 0.2s",
+    backgroundImage: `url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="%236b7280" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>')`,
     backgroundRepeat: "no-repeat",
-    backgroundPosition: "16px center",
-    backgroundSize: "16px",
-    minWidth: "250px",
+    backgroundPosition: "10px center",
+    backgroundSize: "14px",
+    minWidth: "180px",
   },
   select: {
-    padding: "12px 20px",
-    fontSize: "0.95rem",
-    borderRadius: "40px",
+    padding: "8px 12px",
+    fontSize: "0.85rem",
+    borderRadius: "6px",
     border: "1px solid #d1d5db",
     backgroundColor: "#ffffff",
     color: "#1f2937",
     outline: "none",
     cursor: "pointer",
-    minWidth: "160px",
+    minWidth: "130px",
+  },
+  actionButtons: {
+    display: "flex",
+    gap: "10px",
+    flexWrap: "nowrap",
+    alignItems: "center",
   },
   button: {
     display: "inline-flex",
     alignItems: "center",
-    gap: "8px",
-    padding: "10px 18px",
-    borderRadius: "9999px",
-    fontSize: "1rem",
+    justifyContent: "center",
+    gap: "6px",
+    padding: "8px 16px",
+    borderRadius: "6px",
+    fontSize: "0.85rem",
     fontWeight: 600,
     border: "none",
     cursor: "pointer",
-    transition: "transform 0.12s ease, box-shadow 0.12s ease",
-    boxShadow: "0 6px 18px rgba(16, 185, 129, 0.06)",
+    transition: "opacity 0.18s, transform 0.12s",
+    letterSpacing: "0.01em",
+    whiteSpace: "nowrap",
   },
   buttonPrimary: {
-    background: "linear-gradient(180deg,#1f8a2a,#237227)",
+    background: "#237227",
     color: "#ffffff",
-    boxShadow: "0 6px 18px rgba(35,114,39,0.18)",
+    boxShadow: "0 1px 4px rgba(35, 114, 39, 0.2)",
   },
   buttonSecondary: {
     background: "#ffffff",
-    color: "#374151",
-    border: "1px solid #e6eef6",
-    boxShadow: "0 2px 8px rgba(15,23,42,0.04)",
+    color: "#237227",
+    border: "1px solid #237227",
+    boxShadow: "0 1px 2px rgba(0,0,0,0.03)",
   },
   buttonSuccess: {
     background: "#237227",
     color: "#ffffff",
   },
   smallButton: {
-    padding: "6px 12px",
-    borderRadius: "30px",
+    padding: "6px 14px",
+    borderRadius: "6px",
     border: "none",
     fontSize: "0.85rem",
-    fontWeight: 500,
+    fontWeight: 600,
     cursor: "pointer",
     transition: "all 0.2s",
     display: "inline-flex",
     alignItems: "center",
-    gap: "4px",
+    gap: "6px",
   },
   tableContainer: {
-    borderRadius: "20px",
+    borderRadius: "16px",
     overflow: "hidden",
-    border: "1px solid #e5e7eb",
     backgroundColor: "#ffffff",
-    boxShadow: "0 4px 12px rgba(0, 0, 0, 0.05)",
+    boxShadow: "0 2px 14px rgba(44, 56, 45, 0.06)",
+    border: "none",
   },
   tableWrapper: {
     overflowX: "auto",
@@ -1799,16 +1749,16 @@ const styles = {
     position: "sticky",
     top: 0,
     zIndex: 10,
-    backgroundColor: "#f9fafb",
-    color: "#4b5563",
-    fontWeight: 600,
-    padding: "16px 12px",
+    backgroundColor: "#ffffff",
+    color: "#000000",
+    fontWeight: 700,
+    padding: "14px 14px",
     textAlign: "left",
     borderBottom: "2px solid #e5e7eb",
-    letterSpacing: "0.03em",
+    letterSpacing: "0.05em",
     textTransform: "uppercase",
-    fontSize: "0.8rem",
-    cursor: "pointer",
+    fontSize: "0.75rem",
+    whiteSpace: "nowrap",
   },
   td: {
     padding: "14px 12px",
@@ -1822,14 +1772,14 @@ const styles = {
     width: "48px",
     height: "48px",
     objectFit: "cover",
-    borderRadius: "12px",
-    border: "2px solid #e5e7eb",
+    borderRadius: "8px",
+    border: "1px solid #e5e7eb",
   },
   photoPreview: {
     width: "88px",
     height: "88px",
     objectFit: "cover",
-    borderRadius: "9999px",
+    borderRadius: "12px",
     border: "2px solid rgba(34,197,94,0.12)",
     boxShadow: "0 6px 18px rgba(16,185,129,0.08)",
   },
@@ -2006,6 +1956,50 @@ const styles = {
     padding: "60px 20px",
     color: "#6b7280",
     fontSize: "1.1rem",
+  },
+  paginationContainer: {
+    display: "flex",
+    justifyContent: "space-between",
+    alignItems: "center",
+    padding: "16px 20px",
+    backgroundColor: "#ffffff",
+    borderTop: "1px solid #edf2ee",
+    borderBottomLeftRadius: "12px",
+    borderBottomRightRadius: "12px",
+  },
+  paginationText: {
+    color: "#6b7280",
+    fontSize: "0.875rem",
+  },
+  paginationControls: {
+    display: "flex",
+    gap: "6px",
+    alignItems: "center",
+  },
+  pageButton: {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    minWidth: "32px",
+    height: "32px",
+    padding: "0 6px",
+    borderRadius: "8px",
+    border: "1px solid #d1d5db",
+    backgroundColor: "#ffffff",
+    color: "#6b7280",
+    fontSize: "0.85rem",
+    fontWeight: 600,
+    cursor: "pointer",
+    transition: "all 0.2s",
+  },
+  pageButtonActive: {
+    backgroundColor: "#237227",
+    color: "#ffffff",
+    border: "1px solid #237227",
+  },
+  pageButtonDisabled: {
+    opacity: 0.4,
+    cursor: "not-allowed",
   },
   error: {
     color: "#ef4444",

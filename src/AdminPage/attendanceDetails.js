@@ -40,11 +40,8 @@ export function getDetailedAttendance(attendance, personId, settings = {}) {
     recs.sort((a, b) => a.dt - b.dt);
     // Find morning/afternoon in/out
     let morningIn = null,
-      morningOut = null,
-      afternoonIn = null,
       afternoonOut = null;
-    let morningInStatus = null,
-      afternoonInStatus = null;
+    let morningInStatus = null;
     let lateCount = 0;
     let lateDetails = [];
     recs.forEach((r) => {
@@ -53,8 +50,9 @@ export function getDetailedAttendance(attendance, personId, settings = {}) {
         hour: "2-digit",
         minute: "2-digit",
       });
+      // Morning punch (before 12 PM or based on a fixed cutoff like 12:00)
       if (hour < 12) {
-        if (r.event === "time-in" && !morningIn) {
+        if (!morningIn) {
           morningIn = timeStr;
           if (r.status === "late" || isLate(r.dt, "morning")) {
             morningInStatus = "late";
@@ -67,26 +65,11 @@ export function getDetailedAttendance(attendance, personId, settings = {}) {
           } else {
             morningInStatus = "on-time";
           }
-        } else if (r.event === "time-out") {
-          morningOut = timeStr;
         }
       } else {
-        if (r.event === "time-in" && !afternoonIn) {
-          afternoonIn = timeStr;
-          if (r.status === "late" || isLate(r.dt, "afternoon")) {
-            afternoonInStatus = "late";
-            lateCount++;
-            lateDetails.push({
-              session: "Afternoon In",
-              time: timeStr,
-              status: "late",
-            });
-          } else {
-            afternoonInStatus = "on-time";
-          }
-        } else if (r.event === "time-out") {
-          afternoonOut = timeStr;
-        }
+        // Afternoon punch
+        // Always take the latest afternoon punch as the checkout time
+        afternoonOut = timeStr;
       }
     });
     // Overtime calculation
@@ -125,11 +108,8 @@ export function getDetailedAttendance(attendance, personId, settings = {}) {
     return {
       date,
       morningIn,
-      morningOut,
-      afternoonIn,
       afternoonOut,
       morningInStatus,
-      afternoonInStatus,
       lateCount,
       lateDetails,
       status,

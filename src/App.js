@@ -14,7 +14,7 @@ import { supabase } from "./supabaseClient";
 
 import CameraPlayer from "./CameraAttendance/CameraPlayer";
 import AdminLogin from "./AdminPage/AdminLogin";
-import { FiLogIn } from "react-icons/fi";
+import { FiLogIn, FiLogOut } from "react-icons/fi";
 import { FiCamera } from "react-icons/fi";
 import Dashboard from "./AdminPage/Dashboard";
 import ReleasedHistoryPayroll from "./AdminPage/ReleasedHistoryPayroll";
@@ -27,6 +27,7 @@ import PersonsTable from "./AdminPage/PersonsTable";
 import StaffLoginModal from "./AdminPage/StaffLoginModal";
 import {
   ADMIN_ROLE,
+  SECRETARY_ROLE,
   STAFF_ROLES,
   getLoginRedirectPath,
   getSessionRole,
@@ -35,7 +36,6 @@ import {
 
 function App() {
   const modalTimerRef = useRef(null);
-  const [cameraActive, setCameraActive] = useState(false);
   const [showStaffLogin, setShowStaffLogin] = useState(false);
   const [session, setSession] = useState(() => {
     // Try to get session from localStorage if available
@@ -85,15 +85,8 @@ function App() {
   const currentRole = getSessionRole(session);
   const hasStaffAccess = hasAllowedRole(session, STAFF_ROLES);
 
-  useEffect(() => {
-    if (!session) return;
-    if (!hasStaffAccess) {
-      supabase.auth.signOut().finally(() => {
-        localStorage.removeItem("sb-session");
-        setSession(null);
-      });
-    }
-  }, [hasStaffAccess, session]);
+  // No auto-logout: the attendance account stays logged in until the user
+  // explicitly clicks the Logout button. This prevents camera stream loss.
 
   const ProtectedRoute = ({ allowedRoles = STAFF_ROLES, children }) =>
     hasAllowedRole(session, allowedRoles) ? (
@@ -122,6 +115,13 @@ function App() {
 
   // Removed unused: handleFaceScan, closeModal
 
+  // Manual logout handler for attendance account
+  const handleAttendanceLogout = async () => {
+    await supabase.auth.signOut();
+    localStorage.removeItem("sb-session");
+    setSession(null);
+  };
+
   return (
     <div className="App">
       <header className="App-header">
@@ -138,74 +138,50 @@ function App() {
                 }}
               >
                 <img
-                  src="/image/logo512.png"
+                  src="/image/logosidebar.jpg"
                   alt="Multifactors Sales Logo"
                   style={{
-                    ...styles.logoIcon,
-                    objectFit: "cover",
-                    padding: 5,
-                    width: 100,
-                    height: 100,
+                    height: 45,
+                    objectFit: "contain",
+                    paddingLeft: 10,
                   }}
                 />
                 <h1
                   style={{
                     ...styles.headerTitle,
-                    margin: -20,
-                    padding: "8px 0",
+                    margin: 0,
+                    padding: 0,
                   }}
                 >
-                  Multifactors Sales -{" "}
-                  <span style={{ ...styles.headerSubtitle }}>
-                    Facial Recognition for Attendances
-                  </span>
+                  Face Recognition Time and Attendance
                 </h1>
               </div>
-              {isAdminLoginPath ? (
-                <button
-                  type="button"
-                  onClick={() => navigate("/")}
-                  style={styles.adminButton}
-                >
-                  <span
-                    style={{ display: "inline-flex", alignItems: "center" }}
-                  >
-                    <FiCamera
-                      style={{ marginRight: 8, verticalAlign: "middle" }}
-                    />
-                    Attendance Camera
-                  </span>
-                </button>
-              ) : (
+              {hasStaffAccess && (
                 <div style={styles.headerActions}>
-                  {/* <button
-                    type="button"
-                    onClick={() => setShowStaffLogin(true)}
-                    style={styles.staffButton}
-                  >
-                    <span
-                      style={{ display: "inline-flex", alignItems: "center" }}
+                  {currentRole === ADMIN_ROLE && !location.pathname.startsWith("/admin") && (
+                    <button
+                      type="button"
+                      onClick={() => navigate("/admin/dashboard")}
+                      style={styles.adminButton}
                     >
-                      <FiLogIn
-                        style={{ marginRight: 8, verticalAlign: "middle" }}
-                      />
-                      Staff Login
-                    </span>
-                  </button> */}
-                  <button
-                    type="button"
-                    onClick={() => navigate("/admin")}
-                    style={styles.adminButton}
-                  >
-                    <span
-                      style={{ display: "inline-flex", alignItems: "center" }}
+                      <span style={{ display: "inline-flex", alignItems: "center" }}>
+                        <FiLogIn style={{ marginRight: 8, verticalAlign: "middle" }} />
+                        Admin Dashboard
+                      </span>
+                    </button>
+                  )}
+                  {(currentRole === ADMIN_ROLE || currentRole === SECRETARY_ROLE) && location.pathname.startsWith("/admin") && (
+                    <button
+                      type="button"
+                      onClick={() => navigate("/")}
+                      style={styles.adminButton}
                     >
-                      <FiLogIn
-                        style={{ marginRight: 8, verticalAlign: "middle" }}
-                      />
-                      Admin Login
-                    </span>
-                  </button>
+                      <span style={{ display: "inline-flex", alignItems: "center" }}>
+                        <FiCamera style={{ marginRight: 8, verticalAlign: "middle" }} />
+                        Attendance Camera
+                      </span>
+                    </button>
+                  )}
                 </div>
               )}
             </div>
@@ -215,82 +191,35 @@ function App() {
           <Route
             path="/"
             element={
-              <div style={{ maxWidth: 900, margin: "0 auto" }}>
-                {hasStaffAccess ? (
-                  cameraActive ? (
-                    <CameraPlayer />
-                  ) : (
-                    <div
-                      style={{
-                        marginTop: 24,
-                        padding: "40px 24px",
-                        borderRadius: 24,
-                        background: "#0b1120",
-                        color: "#e5e7eb",
-                        textAlign: "center",
-                      }}
-                    >
-                      <p style={{ marginBottom: 12, fontSize: 15 }}>
-                        Camera is currently off. Click below to open the camera.
-                      </p>
-                      <button
-                        type="button"
-                        onClick={() => setCameraActive(true)}
-                        style={{
-                          padding: "10px 24px",
-                          borderRadius: 999,
-                          border: "1px solid #237227",
-                          background: "#237227",
-                          color: "#ffffff",
-                          cursor: "pointer",
-                          fontSize: 14,
-                          fontWeight: 600,
-                        }}
-                      >
-                        Open Camera
-                      </button>
-                    </div>
-                  )
-                ) : (
-                  <div style={styles.staffGateCard}>
-                    <div style={styles.staffGatePill}>
-                      Attendance login required
-                    </div>
-                    <h2 style={styles.staffGateTitle}>
-                      Sign in to record attendance
-                    </h2>
-                    <p style={styles.staffGateText}>
-                      Log in to record attendance.
-                    </p>
-                    <button
-                      type="button"
-                      onClick={() => setShowStaffLogin(true)}
-                      style={styles.staffGateButton}
-                    >
-                      Open Attendance Login
-                    </button>
-                  </div>
-                )}
-                {cameraActive && hasStaffAccess && (
+              hasStaffAccess ? (
+                <div style={{ maxWidth: 900, margin: "0 auto" }}>
+                  <CameraPlayer />
                   <div style={{ marginTop: 12, textAlign: "right" }}>
                     <button
                       type="button"
-                      onClick={() => setCameraActive(false)}
+                      onClick={handleAttendanceLogout}
                       style={{
-                        padding: "6px 12px",
+                        padding: "8px 16px",
                         borderRadius: 999,
-                        border: "1px solid #d1d5db",
-                        background: "#f9fafb",
-                        color: "#4b5563",
+                        border: "1px solid #dc2626",
+                        background: "#dc2626",
+                        color: "#ffffff",
                         cursor: "pointer",
-                        fontSize: 12,
+                        fontSize: 13,
+                        fontWeight: 600,
+                        display: "inline-flex",
+                        alignItems: "center",
+                        gap: 6,
                       }}
                     >
-                      Close Camera
+                      <FiLogOut style={{ fontSize: 14 }} />
+                      Logout Attendance
                     </button>
                   </div>
-                )}
-              </div>
+                </div>
+              ) : (
+                <AdminLogin />
+              )
             }
           />
           <Route
@@ -566,11 +495,11 @@ function App() {
 // Light theme styles with green accent
 const styles = {
   headerTitle: {
-    color: "#237227",
-    fontSize: "2rem",
+    color: "#000000",
+    fontSize: "1.45rem",
     fontWeight: "bold",
-    textAlign: "center",
-    margin: "20px 0",
+    margin: 0,
+    letterSpacing: "0.01em",
   },
   headerSubtitle: {
     color: "#6b7280",
@@ -671,7 +600,9 @@ const styles = {
     borderBottom: "1px solid #eef2f6",
     padding: "30px 0",
     boxShadow: "0 6px 18px rgba(0,0,0,0.03)",
-    position: "relative",
+    position: "sticky",
+    top: 0,
+    zIndex: 100,
   },
   staffGateCard: {
     marginTop: 24,
