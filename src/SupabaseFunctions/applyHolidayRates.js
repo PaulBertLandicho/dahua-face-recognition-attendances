@@ -1,6 +1,7 @@
 // applyHolidayRates.js
 // Apply holiday rates to payroll based on holidays table
 import { fetchHolidays } from "./fetchHolidays";
+import { hasHolidayPayEligibility } from "../utils/holidayPayEligibility";
 
 /**
  * Modifies payroll array to apply holiday rates for matching dates
@@ -39,7 +40,7 @@ export async function applyHolidayRates(
     personAttendance.forEach((a) => {
       const attDate = a.device_time.split("T")[0];
       const holiday = holidays.find((h) => h.date === attDate);
-      if (holiday) {
+      if (holiday && hasHolidayPayEligibility(personAttendance, holiday.date)) {
         holidayDays++;
         if (holiday.type === "regular") {
           holidayPay += personPay.dailyRate * (regularRate / 100);
