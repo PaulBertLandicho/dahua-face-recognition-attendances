@@ -11,6 +11,7 @@ import {
 import Icon from "../../components/Icon";
 import { supabase } from "../../supabaseClient";
 import { generatePayslipPdf } from "./generatePayslipPdf";
+import { hasHolidayPayEligibility } from "../../utils/holidayPayEligibility";
 
 // detailedAttendance: [{ date, morningIn, morningOut, afternoonIn, afternoonOut, lateCount, lateDetails: [{session, time, status}]}]
 export default function PayslipModal({
@@ -392,6 +393,14 @@ export default function PayslipModal({
   if (!loadingHoliday && holidayDetails.length > 0) {
     holidayPayDetails = holidayDetails
       .map((h) => {
+        if (
+          !hasHolidayPayEligibility(
+            (detailedAttendance || []).map((a) => ({ date: a.date })),
+            h.date,
+          )
+        ) {
+          return null;
+        }
         let ratePercent = 0;
         if (h.type === "regular") {
           ratePercent = deptHolidayRates.regular;

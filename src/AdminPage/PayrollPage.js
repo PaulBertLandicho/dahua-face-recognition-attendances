@@ -5,6 +5,7 @@ import { calculatePayroll } from "./Payroll";
 import PayslipModal from "../AdminPage/PayslipModals/PayslipModal";
 import { getDetailedAttendance } from "./attendanceDetails";
 import { generateAllPayslipsPdf } from "./PayslipModals/generatePayslipPdf";
+import { hasHolidayPayEligibility } from "../utils/holidayPayEligibility";
 import * as XLSX from "xlsx";
 import { FiSearch, FiEye, FiDownload, FiPrinter } from "react-icons/fi";
 
@@ -748,6 +749,14 @@ export default function PayrollPage() {
         if (holidayDetails.length > 0) {
           holidayPayDetails = holidayDetails
             .map((h) => {
+              if (
+                !hasHolidayPayEligibility(
+                  (detailedAttendance || []).map((a) => ({ date: a.date })),
+                  h.date,
+                )
+              ) {
+                return null;
+              }
               let ratePercent = 0;
               if (h.type === "regular") {
                 ratePercent = deptHolidayRates.regular;
