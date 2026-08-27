@@ -993,8 +993,24 @@ export default function PersonsTable() {
 
     Swal.fire({
       title: "Syncing Users from Dahua...",
-      html: "Fetching enrolled users from <b>DHI-ASA3213GL-MW</b> and saving them to Supabase...",
+      html: `
+        <div class="flex flex-col items-center justify-center py-2 text-center">
+          <p class="text-sm text-gray-600 mb-1">
+            Fetching enrolled users from <span class="font-semibold text-gray-800">DHI-ASA3213GL-MW</span>
+          </p>
+          <p class="text-xs text-gray-400">Saving and updating records in Supabase...</p>
+        </div>
+      `,
       allowOutsideClick: false,
+      allowEscapeKey: false,
+      showConfirmButton: false,
+      width: "420px",
+      padding: "2rem 1.5rem",
+      customClass: {
+        popup: "!rounded-[28px] !shadow-[0_20px_50px_rgba(0,0,0,0.14)] !border !border-gray-100 !bg-white font-sans text-center",
+        title: "!text-xl !font-bold !text-gray-800 !m-0 !text-center",
+        loader: "!border-[#237227] !border-t-transparent",
+      },
       didOpen: () => Swal.showLoading(),
     });
 
@@ -1008,17 +1024,60 @@ export default function PersonsTable() {
         if (!refreshError) setPersons(refreshedPersons || []);
       } catch (refreshErr) {}
 
+      const count = data?.count || 0;
       Swal.fire({
         icon: "success",
+        iconColor: "#237227",
         title: "Users Synced!",
-        html: `Synced <b>${data?.count || 0}</b> user(s) from Dahua to Supabase.`,
-        timer: 2800,
+        html: `
+          <div class="flex flex-col items-center justify-center text-center mt-2 font-sans">
+            <div class="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full bg-emerald-50 text-[#237227] text-sm font-semibold mb-2.5 border border-emerald-100 shadow-xs">
+              <span class="inline-block w-2 h-2 rounded-full bg-[#237227]"></span>
+              <span>${count} user${count === 1 ? "" : "s"} synced</span>
+            </div>
+            <p class="text-sm text-gray-600 leading-relaxed max-w-xs">
+              Synced from Dahua terminal to Supabase database successfully.
+            </p>
+          </div>
+        `,
+        width: "420px",
+        padding: "2rem 1.5rem",
+        showConfirmButton: true,
+        confirmButtonText: "OK",
+        buttonsStyling: false,
+        timer: 3500,
+        customClass: {
+          popup: "!rounded-[28px] !shadow-[0_20px_50px_rgba(0,0,0,0.14)] !border !border-gray-100 !bg-white font-sans text-center",
+          title: "!text-2xl !font-bold !text-gray-800 !mt-2 !mb-0 !text-center tracking-tight",
+          icon: "!scale-95 !mx-auto !my-2",
+          actions: "!flex !items-center !justify-center !mt-5 !w-full",
+          confirmButton: "!bg-[#237227] hover:!bg-[#1c5c20] !text-white !font-semibold !rounded-xl !px-8 !py-2.5 !text-sm !border-none cursor-pointer !shadow-md hover:!shadow-lg !transition-all !duration-200 !min-w-[120px] active:!scale-95",
+        },
       });
     } catch (err) {
       Swal.fire({
         icon: "error",
+        iconColor: "#dc2626",
         title: "Sync Error",
-        text: err?.message || "Failed to sync users from Dahua device.",
+        html: `
+          <div class="flex flex-col items-center justify-center text-center mt-2 font-sans">
+            <p class="text-sm text-gray-600 max-w-xs">
+              ${err?.message || "Failed to sync users from Dahua device."}
+            </p>
+          </div>
+        `,
+        width: "420px",
+        padding: "2rem 1.5rem",
+        showConfirmButton: true,
+        confirmButtonText: "OK",
+        buttonsStyling: false,
+        customClass: {
+          popup: "!rounded-[28px] !shadow-[0_20px_50px_rgba(0,0,0,0.14)] !border !border-gray-100 !bg-white font-sans text-center",
+          title: "!text-2xl !font-bold !text-gray-800 !mt-2 !mb-0 !text-center tracking-tight",
+          icon: "!scale-95 !mx-auto !my-2",
+          actions: "!flex !items-center !justify-center !mt-5 !w-full",
+          confirmButton: "!bg-red-600 hover:!bg-red-700 !text-white !font-semibold !rounded-xl !px-8 !py-2.5 !text-sm !border-none cursor-pointer !shadow-md hover:!shadow-lg !transition-all !duration-200 !min-w-[120px] active:!scale-95",
+        },
       });
     } finally {
       setSyncingDahuaUsers(false);
@@ -1127,11 +1186,11 @@ export default function PersonsTable() {
           <button
             onClick={handleSyncDahuaPersons}
             disabled={syncingDahuaUsers}
-            className={`inline-flex items-center justify-center gap-1.5 py-2 px-4 rounded-md text-sm font-semibold border-none cursor-pointer transition-colors bg-[#237227] text-white shadow-sm whitespace-nowrap focus:outline-none ${
+            className={`inline-flex items-center justify-center gap-1.5 py-2 px-4 rounded-md text-sm font-semibold border-none cursor-pointer transition-colors bg-[#237227] hover:bg-[#1c5c20] text-white shadow-sm whitespace-nowrap focus:outline-none ${
               syncingDahuaUsers ? "opacity-70 cursor-not-allowed" : ""
             }`}
           >
-            <FiRefreshCw className="mr-1 text-white" />
+            <FiRefreshCw className={`mr-1 text-white ${syncingDahuaUsers ? "animate-spin" : ""}`} />
             {syncingDahuaUsers ? "Syncing Dahua Users..." : "Sync Dahua Users"}
           </button>
           <button

@@ -35,8 +35,24 @@ export default function DeviceStatus() {
     setSyncing(true);
     Swal.fire({
       title: "Syncing Users from Dahua...",
-      html: "Contacting <b>DHI-ASA3213GL-MW</b> to sync registered employees to Supabase...",
+      html: `
+        <div class="flex flex-col items-center justify-center py-2 text-center">
+          <p class="text-sm text-gray-600 mb-1">
+            Contacting <span class="font-semibold text-gray-800">DHI-ASA3213GL-MW</span>
+          </p>
+          <p class="text-xs text-gray-400">Syncing registered employees to Supabase database...</p>
+        </div>
+      `,
       allowOutsideClick: false,
+      allowEscapeKey: false,
+      showConfirmButton: false,
+      width: "420px",
+      padding: "2rem 1.5rem",
+      customClass: {
+        popup: "!rounded-[28px] !shadow-[0_20px_50px_rgba(0,0,0,0.14)] !border !border-gray-100 !bg-white font-sans text-center",
+        title: "!text-xl !font-bold !text-gray-800 !m-0 !text-center",
+        loader: "!border-[#237227] !border-t-transparent",
+      },
       didOpen: () => Swal.showLoading(),
     });
 
@@ -45,18 +61,61 @@ export default function DeviceStatus() {
         method: "POST",
       });
 
+      const count = data?.count || 0;
       Swal.fire({
         icon: "success",
+        iconColor: "#237227",
         title: "Users Synced!",
-        html: `Synced <b>${data.count || 0}</b> user(s) into Supabase database.`,
-        timer: 3000,
+        html: `
+          <div class="flex flex-col items-center justify-center text-center mt-2 font-sans">
+            <div class="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full bg-emerald-50 text-[#237227] text-sm font-semibold mb-2.5 border border-emerald-100 shadow-xs">
+              <span class="inline-block w-2 h-2 rounded-full bg-[#237227]"></span>
+              <span>${count} user${count === 1 ? "" : "s"} synced</span>
+            </div>
+            <p class="text-sm text-gray-600 leading-relaxed max-w-xs">
+              Synced from Dahua terminal to Supabase database successfully.
+            </p>
+          </div>
+        `,
+        width: "420px",
+        padding: "2rem 1.5rem",
+        showConfirmButton: true,
+        confirmButtonText: "OK",
+        buttonsStyling: false,
+        timer: 3500,
+        customClass: {
+          popup: "!rounded-[28px] !shadow-[0_20px_50px_rgba(0,0,0,0.14)] !border !border-gray-100 !bg-white font-sans text-center",
+          title: "!text-2xl !font-bold !text-gray-800 !mt-2 !mb-0 !text-center tracking-tight",
+          icon: "!scale-95 !mx-auto !my-2",
+          actions: "!flex !items-center !justify-center !mt-5 !w-full",
+          confirmButton: "!bg-[#237227] hover:!bg-[#1c5c20] !text-white !font-semibold !rounded-xl !px-8 !py-2.5 !text-sm !border-none cursor-pointer !shadow-md hover:!shadow-lg !transition-all !duration-200 !min-w-[120px] active:!scale-95",
+        },
       });
       fetchStatus(false);
     } catch (err) {
       Swal.fire({
         icon: "error",
+        iconColor: "#dc2626",
         title: "Sync Error",
-        text: err.message,
+        html: `
+          <div class="flex flex-col items-center justify-center text-center mt-2 font-sans">
+            <p class="text-sm text-gray-600 max-w-xs">
+              ${err?.message || "Failed to sync users from Dahua device."}
+            </p>
+          </div>
+        `,
+        width: "420px",
+        padding: "2rem 1.5rem",
+        showConfirmButton: true,
+        confirmButtonText: "OK",
+        buttonsStyling: false,
+        customClass: {
+          popup: "!rounded-[28px] !shadow-[0_20px_50px_rgba(0,0,0,0.14)] !border !border-gray-100 !bg-white font-sans text-center",
+          title: "!text-2xl !font-bold !text-gray-800 !mt-2 !mb-0 !text-center tracking-tight",
+          icon: "!scale-95 !mx-auto !my-2",
+          actions: "!flex !items-center !justify-center !mt-5 !w-full",
+          confirmButton: "!bg-red-600 hover:!bg-red-700 !text-white !font-semibold !rounded-xl !px-8 !py-2.5 !text-sm !border-none cursor-pointer !shadow-md hover:!shadow-lg !transition-all !duration-200 !min-w-[120px] active:!scale-95",
+        },
       });
     } finally {
       setSyncing(false);
@@ -67,8 +126,24 @@ export default function DeviceStatus() {
     setSyncing(true);
     Swal.fire({
       title: "Syncing Attendance Logs...",
-      html: "Pulling face recognition and card logs from Dahua device...",
+      html: `
+        <div class="flex flex-col items-center justify-center py-2 text-center">
+          <p class="text-sm text-gray-600 mb-1">
+            Pulling face recognition and card logs from Dahua device...
+          </p>
+          <p class="text-xs text-gray-400">Saving new scans to Supabase...</p>
+        </div>
+      `,
       allowOutsideClick: false,
+      allowEscapeKey: false,
+      showConfirmButton: false,
+      width: "420px",
+      padding: "2rem 1.5rem",
+      customClass: {
+        popup: "!rounded-[28px] !shadow-[0_20px_50px_rgba(0,0,0,0.14)] !border !border-gray-100 !bg-white font-sans text-center",
+        title: "!text-xl !font-bold !text-gray-800 !m-0 !text-center",
+        loader: "!border-[#237227] !border-t-transparent",
+      },
       didOpen: () => Swal.showLoading(),
     });
 
@@ -79,18 +154,61 @@ export default function DeviceStatus() {
         body: JSON.stringify({ limit: 100 }),
       });
 
+      const count = data?.count || 0;
       Swal.fire({
         icon: "success",
+        iconColor: "#237227",
         title: "Attendance Logs Synced!",
-        html: `Inserted <b>${data.count || 0}</b> new attendance scan(s) into Supabase.`,
-        timer: 3000,
+        html: `
+          <div class="flex flex-col items-center justify-center text-center mt-2 font-sans">
+            <div class="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full bg-emerald-50 text-[#237227] text-sm font-semibold mb-2.5 border border-emerald-100 shadow-xs">
+              <span class="inline-block w-2 h-2 rounded-full bg-[#237227]"></span>
+              <span>${count} scan${count === 1 ? "" : "s"} inserted</span>
+            </div>
+            <p class="text-sm text-gray-600 leading-relaxed max-w-xs">
+              Inserted new attendance scan(s) into Supabase successfully.
+            </p>
+          </div>
+        `,
+        width: "420px",
+        padding: "2rem 1.5rem",
+        showConfirmButton: true,
+        confirmButtonText: "OK",
+        buttonsStyling: false,
+        timer: 3500,
+        customClass: {
+          popup: "!rounded-[28px] !shadow-[0_20px_50px_rgba(0,0,0,0.14)] !border !border-gray-100 !bg-white font-sans text-center",
+          title: "!text-2xl !font-bold !text-gray-800 !mt-2 !mb-0 !text-center tracking-tight",
+          icon: "!scale-95 !mx-auto !my-2",
+          actions: "!flex !items-center !justify-center !mt-5 !w-full",
+          confirmButton: "!bg-[#237227] hover:!bg-[#1c5c20] !text-white !font-semibold !rounded-xl !px-8 !py-2.5 !text-sm !border-none cursor-pointer !shadow-md hover:!shadow-lg !transition-all !duration-200 !min-w-[120px] active:!scale-95",
+        },
       });
       fetchStatus(false);
     } catch (err) {
       Swal.fire({
         icon: "error",
+        iconColor: "#dc2626",
         title: "Sync Error",
-        text: err.message,
+        html: `
+          <div class="flex flex-col items-center justify-center text-center mt-2 font-sans">
+            <p class="text-sm text-gray-600 max-w-xs">
+              ${err?.message || "Failed to sync attendance logs from Dahua device."}
+            </p>
+          </div>
+        `,
+        width: "420px",
+        padding: "2rem 1.5rem",
+        showConfirmButton: true,
+        confirmButtonText: "OK",
+        buttonsStyling: false,
+        customClass: {
+          popup: "!rounded-[28px] !shadow-[0_20px_50px_rgba(0,0,0,0.14)] !border !border-gray-100 !bg-white font-sans text-center",
+          title: "!text-2xl !font-bold !text-gray-800 !mt-2 !mb-0 !text-center tracking-tight",
+          icon: "!scale-95 !mx-auto !my-2",
+          actions: "!flex !items-center !justify-center !mt-5 !w-full",
+          confirmButton: "!bg-red-600 hover:!bg-red-700 !text-white !font-semibold !rounded-xl !px-8 !py-2.5 !text-sm !border-none cursor-pointer !shadow-md hover:!shadow-lg !transition-all !duration-200 !min-w-[120px] active:!scale-95",
+        },
       });
     } finally {
       setSyncing(false);
