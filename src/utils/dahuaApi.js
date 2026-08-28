@@ -37,10 +37,10 @@ export async function fetchDahuaApi(endpoint, options = {}) {
       ? String(process.env.REACT_APP_BACKEND_URL).trim()
       : "";
 
-  // Prioritize relative URL (same-origin), then configured URL, then localhost connector
+  // Prioritize localhost connector first (for direct LAN Dahua sync), then relative URL
   const localConnectorUrls = ["http://localhost:4000", "http://127.0.0.1:4000"];
   const configuredUrl = configuredBase.replace(/\/$/, "");
-  const baseUrls = [...new Set(["", configuredUrl, ...localConnectorUrls])];
+  const baseUrls = [...new Set([...localConnectorUrls, configuredUrl, ""])];
 
   let lastError = null;
 
@@ -74,14 +74,12 @@ export async function fetchDahuaApi(endpoint, options = {}) {
         );
         httpError.isHttpError = true;
         httpError.status = res.status;
-        throw httpError;
+        lastError = httpError;
+        continue;
       }
 
       return data;
     } catch (err) {
-      if (err && err.isHttpError) {
-        throw err;
-      }
       lastError = err;
     }
   }
@@ -94,7 +92,7 @@ export async function fetchDahuaApi(endpoint, options = {}) {
     errMsg.includes("Load failed")
   ) {
     throw new Error(
-      "The Dahua server could not be reached. Ensure the backend server is running and the Dahua device is accessible."
+      "The Dahua connector could not be reached. Make sure `node server.js` is running on the computer connected to the Dahua device."
     );
   }
 
