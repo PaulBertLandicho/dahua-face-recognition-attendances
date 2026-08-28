@@ -383,6 +383,23 @@ app.get("/api/device/status", async (req, res) => {
   }
 });
 
+app.delete("/api/dahua/attendance", async (req, res) => {
+  const { personId, deviceTime } = req.body || {};
+  if (!personId || !deviceTime) {
+    return res.status(400).json({ error: "personId and deviceTime are required." });
+  }
+  try {
+    const formattedTime = new Date(deviceTime).toISOString().slice(0, 19).replace('T', ' ');
+    await pool.query(
+      "DELETE FROM attendance WHERE person_id = ? AND device_time = ?",
+      [personId, formattedTime]
+    );
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ==========================================
 // GENERIC DATABASE QUERY API ROUTE (MySQL)
 // ==========================================
@@ -723,7 +740,7 @@ app.get("/health", (req, res) => res.json({ status: "ok" }));
 // ==========================================
 app.use(express.static(path.join(__dirname, "public")));
 
-app.get("*", (req, res) => {
+app.use((req, res) => {
   res.sendFile(path.join(__dirname, "public", "index.html"));
 });
 
