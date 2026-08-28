@@ -19,7 +19,7 @@ wss.on("connection", (ws) => {
       "-vf",
       "fps=20", // 20 frames per second
       "-q:v",
-      "8", // Lower JPEG quality
+      "8", // Lower JPEG qualitya
       "-f",
       "image2pipe",
       "-vcodec",

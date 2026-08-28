@@ -134,7 +134,7 @@ export default function AttendanceTable() {
     setSyncingDahua(true);
     Swal.fire({
       title: "Syncing Dahua Logs...",
-      html: "Fetching face recognition and card logs from <b>DHI-ASA3213GL-MW</b> to Supabase...",
+      html: "Fetching face recognition and card logs from <b>DHI-ASA3213GL-MW</b> to MySQL database...",
       allowOutsideClick: false,
       customClass: {
         popup: "!rounded-3xl !shadow-[0_24px_60px_rgba(0,0,0,0.15)] !px-8 !py-8 !max-w-[400px]",
@@ -151,7 +151,7 @@ export default function AttendanceTable() {
       Swal.fire({
         icon: "success",
         title: "Attendance Synced!",
-        html: `<b>${data.count || 0}</b> new attendance scan(s) synced directly to Supabase.<br/><small style="color:#64748b">${data.message || ""}</small>`,
+        html: `<b>${data.count || 0}</b> new attendance scan(s) synced directly to MySQL database.<br/><small style="color:#64748b">${data.message || ""}</small>`,
         timer: 3500,
         showConfirmButton: true,
         confirmButtonText: "OK",

@@ -1,17 +1,24 @@
 require("dotenv").config();
+require("dotenv").config({ path: ".env.local" });
 const fs = require("fs");
 const path = require("path");
-const { createClient } = require("@supabase/supabase-js");
+const mysql = require("mysql2/promise");
 
-const supabaseUrl = process.env.SUPABASE_URL;
-const supabaseServiceKey = process.env.SUPABASE_SERVICE_KEY;
-
-if (!supabaseUrl || !supabaseServiceKey) {
-  console.error("Missing SUPABASE_URL or SUPABASE_SERVICE_KEY in .env");
+if (!process.env.DB_USER || !process.env.DB_NAME) {
+  console.error("Missing DB_USER or DB_NAME in .env");
   process.exit(1);
 }
 
-const supabase = createClient(supabaseUrl, supabaseServiceKey);
+// MySQL Connection Pool 
+const pool = mysql.createPool({
+  host: process.env.DB_HOST || "localhost",
+  user: process.env.DB_USER,
+  password: process.env.DB_PASSWORD,
+  database: process.env.DB_NAME,
+  waitForConnections: true,
+  connectionLimit: 10,
+  queueLimit: 0
+});
 
 const ATTENDANCE_DIR =
   process.env.ATTENDANCE_EXPORT_DIR ||
@@ -73,6 +80,12 @@ async function syncOnce() {
     return;
   }
 
+  // Convert time to MySQL format (YYYY-MM-DD HH:MM:SS)
+  const toMysqlDate = (dateString) => {
+    if (!dateString) return null;
+    return new Date(dateString).toISOString().slice(0, 19).replace('T', ' ');
+  };
+
   const payload = rows.map((r) => ({
     person_id: r["Person ID"] || null,
     name: r["Name"] || null,
@@ -80,10 +93,9 @@ async function syncOnce() {
     event: r["Attendance Event"] || null,
     point: r["Attendance Point"] || null,
     method: r["Attendance Method"] || null,
-    device_time: r["Time"] ? new Date(r["Time"]).toISOString() : null,
+    device_time: r["Time"] ? toMysqlDate(r["Time"]) : null,
   }));
 
-  // Deduplicate payload against existing attendance rows (exact match on person,event,device_time)
   try {
     const keys = payload
       .filter((p) => p.person_id && p.device_time)
@@ -91,44 +103,64 @@ async function syncOnce() {
 
     if (keys.length > 0) {
       const deviceTimes = [...new Set(keys.map((k) => k.device_time))];
-      const { data: existing = [], error: fetchErr } = await supabase
-        .from("attendance")
-        .select("person_id,event,device_time")
-        .in("device_time", deviceTimes);
+      let existingSet = new Set();
 
-      if (fetchErr) {
-        console.error("Could not fetch existing attendance for dedupe:", fetchErr.message || fetchErr);
-      } else {
-        const existingSet = new Set(
-          existing.map((r) => `${r.person_id}|${r.event}|${r.device_time}`)
+      try {
+        // Fetch existing records from MySQL
+        const [existing] = await pool.query(
+          "SELECT person_id, event, device_time FROM attendance WHERE device_time IN (?)",
+          [deviceTimes]
         );
-        const filtered = payload.filter((p) => {
-          if (!p.person_id || !p.device_time) return true;
-          return !existingSet.has(`${p.person_id}|${p.event}|${p.device_time}`);
-        });
 
-        if (!filtered.length) {
-          console.log("No new rows to insert after deduplication.");
-          return;
-        }
+        existingSet = new Set(
+          existing.map((r) => {
+            const dbDate = new Date(r.device_time).toISOString().slice(0, 19).replace('T', ' ');
+            return `${r.person_id}|${r.event}|${dbDate}`;
+          })
+        );
+      } catch (fetchErr) {
+        console.error("Could not fetch existing attendance for dedupe:", fetchErr.message);
+      }
 
-        const { error } = await supabase.from("attendance").insert(filtered);
-        if (error) console.error("Insert error:", error.message);
-        else console.log(`Inserted ${filtered.length} rows into Supabase.`);
+      const filtered = payload.filter((p) => {
+        if (!p.person_id || !p.device_time) return true;
+        return !existingSet.has(`${p.person_id}|${p.event}|${p.device_time}`);
+      });
+
+      if (!filtered.length) {
+        console.log("No new rows to insert after deduplication.");
         return;
       }
+
+      // MySQL Bulk Insert
+      const values = filtered.map(p => [
+        p.person_id, p.name, p.department, p.event, p.point, p.method, p.device_time
+      ]);
+
+      const [result] = await pool.query(
+        "INSERT INTO attendance (person_id, name, department, event, point, method, device_time) VALUES ?",
+        [values]
+      );
+      console.log(`Inserted ${result.affectedRows} rows into MySQL.`);
+      return;
     }
 
     // Fallback: insert everything if dedupe step couldn't run
-    const { error } = await supabase.from("attendance").insert(payload);
-    if (error) {
-      console.error("Insert error:", error.message);
-    } else {
-      console.log(`Inserted ${payload.length} rows into Supabase.`);
-    }
+    const values = payload.map(p => [
+      p.person_id, p.name, p.department, p.event, p.point, p.method, p.device_time
+    ]);
+    const [result] = await pool.query(
+      "INSERT INTO attendance (person_id, name, department, event, point, method, device_time) VALUES ?",
+      [values]
+    );
+    console.log(`Inserted ${result.affectedRows} rows into MySQL.`);
+    
   } catch (err) {
     console.error("Sync failed:", err);
   }
 }
 
-syncOnce().then(() => process.exit(0));
+syncOnce().then(() => {
+  pool.end(); // Close the database connection cleanly
+  process.exit(0);
+});

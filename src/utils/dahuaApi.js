@@ -37,9 +37,10 @@ export async function fetchDahuaApi(endpoint, options = {}) {
       ? String(process.env.REACT_APP_BACKEND_URL).trim()
       : "";
 
+  // Prioritize relative URL (same-origin), then configured URL, then localhost connector
   const localConnectorUrls = ["http://localhost:4000", "http://127.0.0.1:4000"];
   const configuredUrl = configuredBase.replace(/\/$/, "");
-  const baseUrls = [...new Set([...localConnectorUrls, configuredUrl].filter(Boolean))];
+  const baseUrls = [...new Set(["", configuredUrl, ...localConnectorUrls])];
 
   let lastError = null;
 
@@ -78,12 +79,10 @@ export async function fetchDahuaApi(endpoint, options = {}) {
 
       return data;
     } catch (err) {
-      // HTTP errors should surface immediately; fallback is only for connection-level failures.
       if (err && err.isHttpError) {
         throw err;
       }
       lastError = err;
-      // Continue to next candidate URL if connection failed
     }
   }
 
@@ -95,7 +94,7 @@ export async function fetchDahuaApi(endpoint, options = {}) {
     errMsg.includes("Load failed")
   ) {
     throw new Error(
-      "The local Dahua connector could not be reached. Start the automatic Dahua connector on the computer connected to the device, or configure a reachable backend URL."
+      "The Dahua server could not be reached. Ensure the backend server is running and the Dahua device is accessible."
     );
   }
 

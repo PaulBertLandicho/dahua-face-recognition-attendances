@@ -998,7 +998,7 @@ export default function PersonsTable() {
           <p class="text-sm text-gray-600 mb-1">
             Fetching enrolled users from <span class="font-semibold text-gray-800">DHI-ASA3213GL-MW</span>
           </p>
-          <p class="text-xs text-gray-400">Saving and updating records in Supabase...</p>
+          <p class="text-xs text-gray-400">Saving and updating records in MySQL database...</p>
         </div>
       `,
       allowOutsideClick: false,
@@ -1036,7 +1036,7 @@ export default function PersonsTable() {
               <span>${count} user${count === 1 ? "" : "s"} synced</span>
             </div>
             <p class="text-sm text-gray-600 leading-relaxed max-w-xs">
-              Synced from Dahua terminal to Supabase database successfully.
+              Synced from Dahua terminal to MySQL database successfully.
             </p>
           </div>
         `,
