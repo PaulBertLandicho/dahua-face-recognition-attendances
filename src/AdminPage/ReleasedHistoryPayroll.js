@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
 import * as XLSX from "xlsx";
-import { supabase } from "../supabaseClient";
+import { supabase } from "../mysqlClient";
 import PayslipModal from "./PayslipModals/PayslipModal";
 import { getDetailedAttendance } from "./attendanceDetails";
 import { calculatePayroll } from "./Payroll";

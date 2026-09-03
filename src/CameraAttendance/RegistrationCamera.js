@@ -3,7 +3,7 @@ import * as faceapi from "face-api.js/build/commonjs/index.js";
 import Swal from "sweetalert2";
 
 // RegistrationCamera: For registration only, supports Dahua stream or local webcam
-import { supabase, SUPABASE_CONFIGURED } from "../supabaseClient";
+import { supabase, SUPABASE_CONFIGURED } from "../mysqlClient";
 import {
   toFloat32Array,
   normalizeDescriptor,

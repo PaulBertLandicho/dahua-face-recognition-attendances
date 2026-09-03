@@ -10,12 +10,10 @@ import {
 } from "react-router-dom";
 import { useEffect, useRef, useState } from "react";
 import { useLoading } from "./LoadingContext";
-import { supabase } from "./supabaseClient";
+import { supabase } from "./mysqlClient";
 
-import CameraPlayer from "./CameraAttendance/CameraPlayer";
 import AdminLogin from "./AdminPage/AdminLogin";
-import { FiLogIn, FiLogOut } from "react-icons/fi";
-import { FiCamera } from "react-icons/fi";
+import { FiLogIn } from "react-icons/fi";
 import Dashboard from "./AdminPage/Dashboard";
 import ReleasedHistoryPayroll from "./AdminPage/ReleasedHistoryPayroll";
 import ReleasedPayrollLogs from "./AdminPage/ReleasedPayrollLogs";
@@ -27,7 +25,6 @@ import PersonsTable from "./AdminPage/PersonsTable";
 import StaffLoginModal from "./AdminPage/StaffLoginModal";
 import {
   ADMIN_ROLE,
-  SECRETARY_ROLE,
   STAFF_ROLES,
   getLoginRedirectPath,
   getSessionRole,
@@ -88,7 +85,6 @@ function App() {
   const location = useLocation();
   const navigate = useNavigate();
   // const isAdminPath = location.pathname.startsWith("/admin");
-  const isCameraPath = location.pathname === "/" || location.pathname === "";
   const isAdminLoginPath = location.pathname === "/admin";
   const currentRole = getSessionRole(session);
   const hasStaffAccess = hasAllowedRole(session, STAFF_ROLES);
@@ -114,17 +110,10 @@ function App() {
     };
   }, []);
 
-  // Manual logout handler for attendance account
-  const handleAttendanceLogout = async () => {
-    await supabase.auth.signOut();
-    localStorage.removeItem("sb-session");
-    setSession(null);
-  };
-
   return (
     <div className="App">
       <header className="App-header">
-        {(isCameraPath || isAdminLoginPath) && !isMobile && (
+        {isAdminLoginPath && !isMobile && (
           <div className="w-full bg-[#f9fafc] border-b border-[#eef2f6] px-6 lg:px-8 py-3.5 shadow-[0_4px_14px_rgba(0,0,0,0.03)] sticky top-0 z-[100]">
             <div className="flex items-center justify-between w-full">
               <div className="flex items-center gap-3.5">
@@ -152,18 +141,6 @@ function App() {
                       </span>
                     </button>
                   )}
-                  {(currentRole === ADMIN_ROLE || currentRole === SECRETARY_ROLE) && location.pathname.startsWith("/admin") && (
-                    <button
-                      type="button"
-                      onClick={() => navigate("/")}
-                      className="py-2 px-[16px] rounded-full border border-[#237227] bg-[#237227] text-white cursor-pointer text-sm font-bold shadow-sm"
-                    >
-                      <span className="inline-flex items-center">
-                        <FiCamera className="mr-2 align-middle" />
-                        Attendance Camera
-                      </span>
-                    </button>
-                  )}
                 </div>
               )}
             </div>
@@ -175,19 +152,7 @@ function App() {
             path="/"
             element={
               hasStaffAccess ? (
-                <div className="max-w-[900px] mx-auto">
-                  <CameraPlayer />
-                  <div className="mt-3 text-right">
-                    <button
-                      type="button"
-                      onClick={handleAttendanceLogout}
-                      className="py-2 px-4 rounded-full border border-[#dc2626] bg-[#dc2626] text-white cursor-pointer text-[13px] font-semibold inline-flex items-center gap-1.5"
-                    >
-                      <FiLogOut className="text-[14px]" />
-                      Logout Attendance
-                    </button>
-                  </div>
-                </div>
+                <Navigate to={getLoginRedirectPath(session)} replace />
               ) : (
                 <AdminLogin />
               )

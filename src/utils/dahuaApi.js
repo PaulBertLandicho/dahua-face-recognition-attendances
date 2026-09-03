@@ -30,6 +30,12 @@ export async function readJsonResponse(res) {
 }
 
 export async function fetchDahuaApi(endpoint, options = {}) {
+  const configuredConnector =
+    typeof process !== "undefined" &&
+    process.env &&
+    process.env.REACT_APP_DAHUA_CONNECTOR_URL
+      ? String(process.env.REACT_APP_DAHUA_CONNECTOR_URL).trim()
+      : "";
   const configuredBase =
     typeof process !== "undefined" &&
     process.env &&
@@ -37,10 +43,15 @@ export async function fetchDahuaApi(endpoint, options = {}) {
       ? String(process.env.REACT_APP_BACKEND_URL).trim()
       : "";
 
-  // Prioritize localhost connector first (for direct LAN Dahua sync), then relative URL
+  // Use explicitly configured endpoints before local development fallbacks.
   const localConnectorUrls = ["http://localhost:4000", "http://127.0.0.1:4000"];
-  const configuredUrl = configuredBase.replace(/\/$/, "");
-  const baseUrls = [...new Set([...localConnectorUrls, configuredUrl, ""])];
+  const isDevelopment = typeof process !== "undefined" && process.env?.NODE_ENV === "development";
+  const configuredUrls = [configuredConnector, configuredBase]
+    .map((url) => url.replace(/\/$/, ""))
+    .filter(Boolean);
+  const fallbackUrls = isDevelopment ? localConnectorUrls : [];
+  const baseUrls = [...new Set([...configuredUrls, ...fallbackUrls, ""])]
+    .filter((base, index, urls) => urls.indexOf(base) === index);
 
   let lastError = null;
 
@@ -74,12 +85,14 @@ export async function fetchDahuaApi(endpoint, options = {}) {
         );
         httpError.isHttpError = true;
         httpError.status = res.status;
-        lastError = httpError;
-        continue;
+        throw httpError;
       }
 
       return data;
     } catch (err) {
+      if (err && err.isHttpError) {
+        throw err;
+      }
       lastError = err;
     }
   }

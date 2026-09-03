@@ -40,7 +40,7 @@ export default function DeviceStatus() {
           <p class="text-sm text-gray-600 mb-1">
             Contacting <span class="font-semibold text-gray-800">DHI-ASA3213GL-MW</span>
           </p>
-          <p class="text-xs text-gray-400">Syncing registered employees to Supabase database...</p>
+            <p class="text-xs text-gray-400">Syncing registered employees to MySQL database...</p>
         </div>
       `,
       allowOutsideClick: false,
@@ -73,7 +73,7 @@ export default function DeviceStatus() {
               <span>${count} user${count === 1 ? "" : "s"} synced</span>
             </div>
             <p class="text-sm text-gray-600 leading-relaxed max-w-xs">
-              Synced from Dahua terminal to Supabase database successfully.
+              Synced from Dahua terminal to MySQL database successfully.
             </p>
           </div>
         `,
@@ -131,7 +131,7 @@ export default function DeviceStatus() {
           <p class="text-sm text-gray-600 mb-1">
             Pulling face recognition and card logs from Dahua device...
           </p>
-          <p class="text-xs text-gray-400">Saving new scans to Supabase...</p>
+          <p class="text-xs text-gray-400">Saving new scans to MySQL...</p>
         </div>
       `,
       allowOutsideClick: false,
@@ -166,7 +166,7 @@ export default function DeviceStatus() {
               <span>${count} scan${count === 1 ? "" : "s"} inserted</span>
             </div>
             <p class="text-sm text-gray-600 leading-relaxed max-w-xs">
-              Inserted new attendance scan(s) into Supabase successfully.
+              Inserted new attendance scan(s) into MySQL successfully.
             </p>
           </div>
         `,
@@ -308,7 +308,7 @@ export default function DeviceStatus() {
           disabled={syncing}
           style={{ ...buttonStyle, backgroundColor: "#0284c7" }}
         >
-          <FiUsers /> Sync Dahua Users to Supabase
+          <FiUsers /> Sync Dahua Users to MySQL
         </button>
 
         <button

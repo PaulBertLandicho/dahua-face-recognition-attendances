@@ -2,7 +2,7 @@
 import { useEffect, useState, useRef, useCallback } from "react";
 import { v4 as uuidv4 } from "uuid";
 import Swal from "sweetalert2";
-import { supabase, SUPABASE_CONFIGURED } from "../supabaseClient";
+import { supabase, SUPABASE_CONFIGURED } from "../mysqlClient";
 import {
   toFloat32Array,
   normalizeDescriptor,

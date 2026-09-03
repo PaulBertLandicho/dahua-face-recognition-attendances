@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from "react";
 import Swal from "sweetalert2";
 import { FiSun, FiMoon, FiAlertTriangle, FiCalendar, FiClock } from "react-icons/fi";
-import { supabase } from "../supabaseClient";
+import { supabase } from "../mysqlClient";
 import HolidayManagerGlobal from "./HolidayManager";
 
 const DEFAULT_SETTINGS = {

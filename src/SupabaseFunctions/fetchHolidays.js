@@ -1,6 +1,6 @@
 // fetchHolidays.js
 // Fetch holidays for a department and month from Supabase
-import { supabase } from "../supabaseClient";
+import { supabase } from "../mysqlClient";
 
 /**
  * Fetch holidays for a department and month/year

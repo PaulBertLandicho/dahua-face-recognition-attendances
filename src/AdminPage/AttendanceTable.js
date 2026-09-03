@@ -1,10 +1,11 @@
 import { useEffect, useState, useCallback, useRef } from "react";
 import { useLoading } from "../LoadingContext";
-import { supabase } from "../supabaseClient";
+import { supabase } from "../mysqlClient";
 import { getAttendanceStatus } from "./attendanceUtils";
 import * as XLSX from "xlsx";
 import Swal from "sweetalert2";
 import { syncDahuaAttendance, deleteDahuaAttendance } from "../utils/dahuaApi";
+import { attendanceDateKey, attendanceTimestamp, formatAttendanceDateTime, parseAttendanceTime, updateAttendanceClock } from "../utils/attendanceTime";
 import {
   FiSearch,
   FiDownload,
@@ -36,20 +37,7 @@ export default function AttendanceTable() {
   }, [search, statusFilter, departmentFilter, selectedDate, showArchived, sortOrder]);
 
   const formatDateTime = (value) => {
-    if (!value) return "";
-    const date = new Date(value);
-    if (Number.isNaN(date.getTime())) return "";
-    const datePart = date.toLocaleDateString("en-US", {
-      month: "long",
-      day: "2-digit",
-      year: "numeric",
-    });
-    const timePart = date.toLocaleTimeString(undefined, {
-      hour: "2-digit",
-      minute: "2-digit",
-      second: "2-digit",
-    });
-    return `${datePart} - ${timePart}`;
+    return formatAttendanceDateTime(value);
   };
 
   const showToast = (title, icon = "success") => {
@@ -94,9 +82,10 @@ export default function AttendanceTable() {
             .map((record) => {
             const normalizedTime = record.device_time
               ? (() => {
-                  const date = new Date(record.device_time);
-                  date.setMilliseconds(0);
-                  return date.toISOString();
+                  const parsed = parseAttendanceTime(record.device_time);
+                  return parsed.wallClock
+                    ? record.device_time.slice(0, 19)
+                    : new Date(record.device_time).toISOString();
                 })()
               : "";
             return [
@@ -216,7 +205,7 @@ export default function AttendanceTable() {
 
   const handleEdit = async (rec) => {
     try {
-      const d = rec.device_time ? new Date(rec.device_time) : new Date();
+      const d = rec.device_time ? parseAttendanceTime(rec.device_time).date : new Date();
       const pad = (n) => String(n).padStart(2, '0');
       const defaultTime = `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
 
@@ -313,11 +302,9 @@ export default function AttendanceTable() {
       });
       if (!formValues) return;
       const { time, event, status } = formValues;
-      const targetDate = rec.device_time ? new Date(rec.device_time) : new Date();
       const [h, m, s] = time.split(':').map(Number);
-      targetDate.setHours(h || 0, m || 0, s || 0, 0);
-      const iso = targetDate.toISOString();
-      const { error } = await supabase.from('attendance').update({ device_time: iso, event, status }).eq('id', rec.id);
+      const updatedTime = updateAttendanceClock(rec.device_time, `${String(h || 0).padStart(2, '0')}:${String(m || 0).padStart(2, '0')}:${String(s || 0).padStart(2, '0')}`);
+      const { error } = await supabase.from('attendance').update({ device_time: updatedTime, event, status }).eq('id', rec.id);
       if (error) {
         Swal.fire({
           title: 'Error',
@@ -332,7 +319,7 @@ export default function AttendanceTable() {
         });
         return;
       }
-      setRecords((prev) => prev.map((r) => (r.id === rec.id ? { ...r, device_time: iso, event, status } : r)));
+      setRecords((prev) => prev.map((r) => (r.id === rec.id ? { ...r, device_time: updatedTime, event, status } : r)));
       showToast('Attendance updated successfully!');
     } catch (e) {
       console.error('handleEdit failed', e);
@@ -479,9 +466,7 @@ export default function AttendanceTable() {
     const matchesStatus = !statusFilter || getAttendanceStatus(r, settings) === statusFilter;
     const matchesDept =
       !departmentFilter || (person.department || "") === departmentFilter;
-    const recordDate = r.device_time
-      ? new Date(r.device_time).toISOString().slice(0, 10)
-      : null;
+    const recordDate = r.device_time ? attendanceDateKey(r.device_time) : null;
     const matchesDate = !selectedDate || recordDate === selectedDate;
     return matchesSearch && matchesStatus && matchesDept && matchesDate;
   });
@@ -489,8 +474,8 @@ export default function AttendanceTable() {
   const sortedRecords = [...filteredRecords].sort((a, b) => {
     let aVal, bVal;
     if (sortKey === "device_time") {
-      aVal = new Date(a.device_time);
-      bVal = new Date(b.device_time);
+      aVal = attendanceTimestamp(a.device_time);
+      bVal = attendanceTimestamp(b.device_time);
     } else if (sortKey === "name") {
       const aPerson = persons.find((p) => p.id === a.person_id) || {};
       const bPerson = persons.find((p) => p.id === b.person_id) || {};
@@ -514,7 +499,7 @@ export default function AttendanceTable() {
     .filter((r) => r.archived)
     .filter((r) => {
       if (!selectedDate) return true;
-      const rd = r.device_time ? new Date(r.device_time).toISOString().slice(0, 10) : null;
+      const rd = r.device_time ? attendanceDateKey(r.device_time) : null;
       return rd === selectedDate;
     })
     .sort((a, b) => new Date(b.device_time) - new Date(a.device_time));

@@ -43,12 +43,14 @@
     "tailwindcss": "^3.4.17"
   },
   "scripts": {
-    "start": "craco start",
+    "start": "node server.js",
+    "frontend": "set PORT=3000&& craco start",
     "server": "node server.js",
     "build": "craco build",
     "test": "craco test",
     "eject": "react-scripts eject",
     "auto-morning-scheduler": "node scripts/autoMorningScheduler.js"
+    ,"local-sync": "node local-sync-agent.js"
   },
   "eslintConfig": {
     "extends": [

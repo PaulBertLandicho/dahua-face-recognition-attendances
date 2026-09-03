@@ -1,5 +1,5 @@
 import { useEffect, useState, useRef } from "react";
-import { supabase } from "../supabaseClient";
+import { supabase } from "../mysqlClient";
 import Swal from "sweetalert2";
 import * as XLSX from "xlsx";
 import {
@@ -34,6 +34,10 @@ export default function PersonsTable() {
   });
 
   const getCurrentLocationPoint = async () => {
+    return buildLocationResult(null, "disabled", "Browser location access is disabled.");
+
+    // Legacy location lookup is intentionally bypassed.
+    // eslint-disable-next-line no-unreachable
     const now = Date.now();
     if (adminLastLocationRef.current?.point && now - (adminLastLocationRef.current.ts || 0) < 60 * 1000) {
       return buildLocationResult(adminLastLocationRef.current.point, "ok", "Using cached location.");
@@ -683,7 +687,7 @@ export default function PersonsTable() {
       const iso = new Date(dtStr).toISOString();
       const hhmm = new Date(dtStr).toTimeString().slice(0, 5);
       const locationResult = adminModal.point ? { point: adminModal.point, status: adminModal.locationStatus || "ok", message: adminModal.locationMessage || "" } : await getCurrentLocationPoint();
-      if (locationResult.status !== "ok") {
+      if (locationResult.status !== "ok" && locationResult.status !== "disabled") {
         setAdminModal((s) => ({ ...s, point: locationResult.point, locationStatus: locationResult.status, locationMessage: locationResult.message }));
         Swal.fire(
           "Location unavailable",
@@ -692,7 +696,7 @@ export default function PersonsTable() {
         );
         return;
       }
-      const locationPoint = locationResult.point;
+      const locationPoint = locationResult.status === "disabled" ? null : locationResult.point;
       let status = "on-time";
       try {
         status = determineAttendanceStatus(hhmm, adminModal.event, settingsData || {}, false);

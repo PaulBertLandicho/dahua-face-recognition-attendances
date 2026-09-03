@@ -36,7 +36,7 @@ export function getSessionRole(sessionOrData) {
 }
 
 export function getLoginRedirectPath(sessionOrData) {
-  return getSessionRole(sessionOrData) === SECRETARY_ROLE ? "/" : "/admin/dashboard";
+  return getSessionRole(sessionOrData) === SECRETARY_ROLE ? "/admin/attendance" : "/admin/dashboard";
 }
 
 export function hasAllowedRole(sessionOrData, allowedRoles = STAFF_ROLES) {

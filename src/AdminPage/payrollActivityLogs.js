@@ -1,4 +1,4 @@
-import { supabase } from "../supabaseClient";
+import { supabase } from "../mysqlClient";
 import Swal from "sweetalert2";
 
 // Insert a release activity log. personName is stored for readability;

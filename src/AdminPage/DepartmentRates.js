@@ -2,7 +2,7 @@
 
 import React, { useEffect, useState } from "react";
 import Swal from "sweetalert2";
-import { supabase } from "../supabaseClient";
+import { supabase } from "../mysqlClient";
 import { FiPlusCircle, FiHome, FiTrendingDown } from "react-icons/fi";
 import Icon from "../components/Icon";
 

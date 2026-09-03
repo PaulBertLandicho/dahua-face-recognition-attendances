@@ -8,7 +8,7 @@ import {
   FaEye,
   FaEyeSlash,
 } from "react-icons/fa";
-import { supabase } from "../supabaseClient";
+import { supabase } from "../mysqlClient";
 import {
   SECRETARY_ROLE,
   getLoginRedirectPath,

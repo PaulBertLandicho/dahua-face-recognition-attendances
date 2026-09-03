@@ -1,5 +1,5 @@
 require("dotenv").config();
-require("dotenv").config({ path: ".env.local" });
+require("dotenv").config({ path: ".env.local", override: true });
 const express = require("express");
 const cors = require("cors");
 const http = require("http");
@@ -30,7 +30,18 @@ const DAHUA_DEVICE_IP = process.env.DAHUA_DEVICE_IP || "192.168.111.222";
 const DAHUA_DEVICE_PORT = Number(process.env.DAHUA_DEVICE_PORT || 80);
 const DAHUA_USERNAME = process.env.DAHUA_USERNAME || "admin";
 const DAHUA_PASSWORD = process.env.DAHUA_PASSWORD || "";
+const DAHUA_REQUEST_TIMEOUT_MS = Number(process.env.DAHUA_REQUEST_TIMEOUT_MS || 30000);
+const DAHUA_TIMEZONE = process.env.DAHUA_TIMEZONE || "Asia/Manila";
 const AUTO_SYNC_ATTENDANCE_MINUTES = Number(process.env.AUTO_SYNC_ATTENDANCE_MINUTES || 0);
+
+// Dahua Local Connector Configuration (optional, for network isolation fix)
+const DAHUA_CONNECTOR_URL = process.env.DAHUA_CONNECTOR_URL || null;
+const USE_LOCAL_CONNECTOR = !!DAHUA_CONNECTOR_URL;
+if (USE_LOCAL_CONNECTOR) {
+  console.log(`[Dahua] Using local connector at: ${DAHUA_CONNECTOR_URL}`);
+} else {
+  console.log(`[Dahua] Using direct connection to ${DAHUA_DEVICE_IP}:${DAHUA_DEVICE_PORT}`);
+}
 
 const hlsDir = path.join(__dirname, "hls");
 if (!fs.existsSync(hlsDir)) {
@@ -48,12 +59,14 @@ const streamState = {
 // MySQL Database Connection Pool
 const pool = mysql.createPool({
   host: process.env.DB_HOST || "localhost",
+  port: Number(process.env.DB_PORT || 3306),
   user: process.env.DB_USER,
   password: process.env.DB_PASSWORD,
   database: process.env.DB_NAME,
   waitForConnections: true,
   connectionLimit: 10,
   queueLimit: 0,
+  dateStrings: true,
 });
 
 process.on("uncaughtException", (err) => {
@@ -98,7 +111,7 @@ function requestDahua(requestPath, method = "GET", authorization = null, body = 
         port: DAHUA_DEVICE_PORT,
         path: requestPath,
         method,
-        timeout: 10000,
+        timeout: DAHUA_REQUEST_TIMEOUT_MS,
         headers: {
           ...(authorization ? { Authorization: authorization } : {}),
           ...(requestBody ? { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(requestBody) } : {}),
@@ -111,7 +124,14 @@ function requestDahua(requestPath, method = "GET", authorization = null, body = 
         response.on("end", () => resolve({ response, body }));
       }
     );
-    request.on("timeout", () => request.destroy(new Error("Dahua request timed out.")));
+    request.on("timeout", () => {
+      const target = `${DAHUA_DEVICE_IP}:${DAHUA_DEVICE_PORT}`;
+      const isPrivateLanAddress = /^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[0-1])\.)/.test(DAHUA_DEVICE_IP);
+      const networkHint = isPrivateLanAddress
+        ? " This is a private LAN address; a cPanel server cannot reach it unless cPanel is connected to the same LAN or VPN. Run the local connector on the Dahua network, or configure a publicly reachable/VPN endpoint."
+        : " Check that the Dahua endpoint is reachable from this server and that the port is open.";
+      request.destroy(new Error(`Dahua request timed out connecting to ${target}.${networkHint}`));
+    });
     request.on("error", reject);
     request.end(requestBody);
   });
@@ -151,6 +171,11 @@ async function requestDahuaJsonWithDigest(requestPath, method, payload) {
 }
 
 async function getDahuaUsers(requestedUserIds = null) {
+  // Use connector if available
+  if (USE_LOCAL_CONNECTOR) {
+    return await getDahuaUsersViaConnector(requestedUserIds);
+  }
+
   const firstLogin = await requestDahuaJsonWithDigest("/RPC2_Login", "POST", {
     method: "global.login",
     params: { userName: DAHUA_USERNAME, password: "", clientType: "Web3.0" },
@@ -224,12 +249,64 @@ function firstValue(row, names) {
   return names.map((name) => row[name]).find((value) => value !== undefined && value !== "") || null;
 }
 
+function errorMessage(error, fallback = "Unknown error") {
+  if (error instanceof Error && error.message) return error.message;
+  const connectionError = error?.code === "ECONNREFUSED" ? error : error?.errors?.find((item) => item?.code === "ECONNREFUSED");
+  if (connectionError?.code === "ECONNREFUSED") {
+    const target = connectionError.address && connectionError.port ? ` ${connectionError.address}:${connectionError.port}` : "";
+    return `MySQL connection was refused${target}. Check DB_HOST, DB_PORT, and that the MySQL service is running.`;
+  }
+  if (typeof error === "string" && error.trim()) return error;
+  try {
+    const serialized = JSON.stringify(error);
+    return serialized && serialized !== "{}" ? serialized : fallback;
+  } catch (serializationError) {
+    return fallback;
+  }
+}
+
 function normalizeDahuaDeviceTime(value) {
   if (!value) return null;
   const text = String(value).trim();
+  const localMatch = text.match(/^(\d{4})[-/](\d{2})[-/](\d{2})[ T](\d{2}):(\d{2})(?::(\d{2}))?/);
+  if (localMatch && !/[zZ]|[+-]\d{2}:?\d{2}$/.test(text)) {
+    return `${localMatch[1]}-${localMatch[2]}-${localMatch[3]} ${localMatch[4]}:${localMatch[5]}:${localMatch[6] || "00"}`;
+  }
+
   const numeric = Number(text);
   const date = /^\d{10,13}$/.test(text) ? new Date(text.length === 10 ? numeric * 1000 : numeric) : new Date(text);
-  return Number.isNaN(date.getTime()) ? null : date.toISOString();
+  if (Number.isNaN(date.getTime())) return null;
+
+  try {
+    const parts = new Intl.DateTimeFormat("en-CA", {
+      timeZone: DAHUA_TIMEZONE,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+      hourCycle: "h23",
+    }).formatToParts(date).reduce((result, part) => {
+      if (part.type !== "literal") result[part.type] = part.value;
+      return result;
+    }, {});
+    return `${parts.year}-${parts.month}-${parts.day} ${parts.hour}:${parts.minute}:${parts.second}`;
+  } catch (error) {
+    return date.toISOString().slice(0, 19).replace("T", " ");
+  }
+}
+
+function parseDahuaAttendanceTime(value) {
+  const text = String(value || "").trim();
+  const localMatch = text.match(/^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})(?::(\d{2}))?/);
+  if (localMatch && !/[zZ]|[+-]\d{2}:?\d{2}$/.test(text)) {
+    return new Date(Date.UTC(
+      Number(localMatch[1]), Number(localMatch[2]) - 1, Number(localMatch[3]),
+      Number(localMatch[4]), Number(localMatch[5]), Number(localMatch[6] || 0)
+    ));
+  }
+  return new Date(text);
 }
 
 function mapDahuaAttendanceEvent(record) {
@@ -242,6 +319,378 @@ function mapDahuaAttendanceMethod(value) {
   const method = String(value || "").toLowerCase();
   const methods = { "15": "face", "21": "fingerprint", "3": "card", "4": "password" };
   return methods[method] || (method || "device");
+}
+
+function parseHHMMToMinutes(value, fallback = 0) {
+  if (!value || typeof value !== "string") return fallback;
+  const match = value.trim().match(/^(\d{1,2}):(\d{2})/);
+  if (!match) return fallback;
+  const hours = Number(match[1]);
+  const minutes = Number(match[2]);
+  if (!Number.isFinite(hours) || !Number.isFinite(minutes)) return fallback;
+  return hours * 60 + minutes;
+}
+
+function dedupeDahuaAttendanceByPersonDay(records, settings = null) {
+  const safeRecords = (records || []).filter((record) => record && record.person_id && record.device_time);
+  if (!safeRecords.length) return [];
+
+  const morningStart = parseHHMMToMinutes(settings?.morning_start || "08:00", 8 * 60);
+  const morningEnd = parseHHMMToMinutes(settings?.morning_end || "11:59", 11 * 60 + 59);
+  const afternoonStart = parseHHMMToMinutes(settings?.afternoon_start || "13:00", 13 * 60);
+  const afternoonEnd = parseHHMMToMinutes(settings?.afternoon_end || "17:00", 17 * 60);
+
+  const byPersonDay = new Map();
+  for (const record of safeRecords) {
+    const date = parseDahuaAttendanceTime(record.device_time);
+    if (Number.isNaN(date.getTime())) continue;
+
+    const dateKey = `${record.person_id}|${date.toISOString().slice(0, 10)}`;
+    const bucket = byPersonDay.get(dateKey) || [];
+    bucket.push({
+      ...record,
+      _storedTime: parseDahuaAttendanceTime(record.device_time).getTime(),
+      _minutes: date.getUTCHours() * 60 + date.getUTCMinutes(),
+      event: String(record.event || "").toLowerCase() === "time-out" ? "time-out" : "time-in",
+    });
+    byPersonDay.set(dateKey, bucket);
+  }
+
+  const finalRecords = [];
+  for (const bucket of byPersonDay.values()) {
+    const morningInCandidates = bucket
+      .filter((record) => record.event === "time-in" && record._minutes >= morningStart && record._minutes <= morningEnd)
+      .sort((a, b) => a._storedTime - b._storedTime);
+
+    const afternoonOutCandidates = bucket
+      .filter((record) => {
+        const isAfternoonOut = record.event === "time-out" && record._minutes >= afternoonStart && record._minutes <= afternoonEnd;
+        const isLateOut = record.event === "time-out" && record._minutes > afternoonEnd && record._minutes <= 23 * 60 + 59;
+        return isAfternoonOut || isLateOut;
+      })
+      .sort((a, b) => a._storedTime - b._storedTime);
+
+    const morningIn = morningInCandidates[0];
+    const afternoonOut = afternoonOutCandidates[0];
+
+    if (morningIn) finalRecords.push(morningIn);
+    if (afternoonOut) finalRecords.push(afternoonOut);
+  }
+
+  return finalRecords.sort((a, b) => a._storedTime - b._storedTime);
+}
+
+async function getSettingsRow() {
+  const [rows] = await pool.query("SELECT * FROM settings ORDER BY id LIMIT 1");
+  return rows[0] || null;
+}
+
+async function generatePayrollPeriodsFromAttendance(attendanceRows = []) {
+  if (!Array.isArray(attendanceRows) || !attendanceRows.length) {
+    const [allAttendance] = await pool.query(
+      "SELECT * FROM attendance WHERE archived = 0 OR archived IS NULL ORDER BY device_time ASC"
+    );
+    attendanceRows = allAttendance;
+  }
+
+  if (!attendanceRows.length) return { created: 0, updated: 0 };
+
+  const settings = await getSettingsRow();
+  const periodDays = Number(settings?.payroll_period_days || 15);
+  const uniquePersonIds = [...new Set(attendanceRows.map((row) => row.person_id).filter(Boolean))];
+  if (!uniquePersonIds.length) return { created: 0, updated: 0 };
+
+  const [personsRows] = await pool.query(
+    "SELECT * FROM persons WHERE id IN (?) ORDER BY name ASC",
+    [uniquePersonIds]
+  );
+  const personById = new Map(personsRows.map((person) => [person.id, person]));
+
+  let created = 0;
+  let updated = 0;
+
+  for (const personId of uniquePersonIds) {
+    const person = personById.get(personId);
+    if (!person) continue;
+
+    const [rows] = await pool.query(
+      "SELECT * FROM attendance WHERE person_id = ? AND (archived = 0 OR archived IS NULL) ORDER BY device_time ASC",
+      [personId]
+    );
+    if (!rows.length) continue;
+
+    const earliestDate = parseDahuaAttendanceTime(rows[0].device_time);
+    const latestDate = parseDahuaAttendanceTime(rows[rows.length - 1].device_time);
+    let cursor = new Date(earliestDate);
+    cursor.setUTCHours(0, 0, 0, 0);
+
+    while (cursor <= latestDate) {
+      const periodEnd = new Date(cursor);
+      periodEnd.setUTCDate(periodEnd.getUTCDate() + periodDays - 1);
+      periodEnd.setUTCHours(23, 59, 59, 999);
+
+      const periodStartYmd = cursor.toISOString().slice(0, 10);
+      const periodEndYmd = periodEnd.toISOString().slice(0, 10);
+      const periodKey = `${periodStartYmd}_to_${periodEndYmd}`;
+
+      const periodAttendance = rows.filter((record) => {
+        const dt = parseDahuaAttendanceTime(record.device_time);
+        return dt >= cursor && dt <= periodEnd;
+      });
+
+      if (periodAttendance.length) {
+        const uniqueDates = new Set(
+          periodAttendance
+            .map((record) => parseDahuaAttendanceTime(record.device_time).toISOString().slice(0, 10))
+            .filter(Boolean)
+        );
+
+        const morningStart = Number((settings?.morning_start || "08:00").split(":")[0] || 8) * 60 + Number((settings?.morning_start || "08:00").split(":")[1] || 0);
+        const morningGrace = Number(settings?.morning_grace_minutes || 15);
+        const afternoonStart = Number((settings?.afternoon_start || "13:00").split(":")[0] || 13) * 60 + Number((settings?.afternoon_start || "13:00").split(":")[1] || 0);
+        const afternoonGrace = Number(settings?.afternoon_grace_minutes || 15);
+        const afternoonEnd = Number((settings?.afternoon_end || "17:00").split(":")[0] || 17) * 60 + Number((settings?.afternoon_end || "17:00").split(":")[1] || 0);
+
+        let lateCount = 0;
+        for (const dateKey of uniqueDates) {
+          const byDate = periodAttendance.filter((record) => parseDahuaAttendanceTime(record.device_time).toISOString().slice(0, 10) === dateKey);
+          byDate.sort((a, b) => parseDahuaAttendanceTime(a.device_time) - parseDahuaAttendanceTime(b.device_time));
+          const morningRecord = byDate.find((record) => parseDahuaAttendanceTime(record.device_time).getUTCHours() < 12) || null;
+          if (morningRecord) {
+            const dt = parseDahuaAttendanceTime(morningRecord.device_time);
+            const minutes = dt.getUTCHours() * 60 + dt.getUTCMinutes();
+            if (minutes > morningStart + morningGrace) lateCount += 1;
+          }
+          const afternoonRecord = [...byDate].reverse().find((record) => parseDahuaAttendanceTime(record.device_time).getUTCHours() >= 12) || null;
+          if (afternoonRecord) {
+            const dt = parseDahuaAttendanceTime(afternoonRecord.device_time);
+            const minutes = dt.getUTCHours() * 60 + dt.getUTCMinutes();
+            if (minutes > afternoonEnd + afternoonGrace) lateCount += 1;
+          }
+        }
+
+        const departmentRate = await pool.query(
+          "SELECT * FROM department_rates WHERE department = ? LIMIT 1",
+          [person.department || ""]
+        );
+        const rate = departmentRate[0]?.[0] || {};
+        const dailyRate = Number(person.daily_rate ?? rate.daily_rate ?? 0);
+        const latePenalty = Number(person.late_penalty ?? rate.late_penalty ?? 0);
+        const sss = Number(rate.sss ?? 0);
+        const pagIbig = Number(rate.pag_ibig ?? 0);
+        const philhealth = Number(rate.philhealth ?? 0);
+        const cashAdvance = Number(person.cash_advance ?? 0);
+
+        const daysPresent = uniqueDates.size;
+        const totalLateDeduction = lateCount * latePenalty;
+        const totalDeductions = sss + pagIbig + philhealth + cashAdvance + totalLateDeduction;
+        const gross = dailyRate * daysPresent;
+        const net = gross - totalDeductions;
+
+        const payload = {
+          person_id: person.id,
+          period: periodKey,
+          days_present: Number(daysPresent || 0),
+          daily_rate: Number(dailyRate || 0),
+          late_penalty: Number(latePenalty || 0),
+          late_count: Number(lateCount || 0),
+          gross: Number(gross || 0),
+          total_late_deduction: Number(totalLateDeduction || 0),
+          total_deductions: Number(totalDeductions || 0),
+          net: Number(net || 0),
+          released: 0,
+        };
+
+        const [result] = await pool.query(
+          `INSERT INTO payroll_periods
+            (id, person_id, period, days_present, daily_rate, late_penalty, late_count, gross, total_late_deduction, total_deductions, net, released, created_at, updated_at)
+           VALUES (UUID(), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())
+           ON DUPLICATE KEY UPDATE
+            days_present = VALUES(days_present),
+            daily_rate = VALUES(daily_rate),
+            late_penalty = VALUES(late_penalty),
+            late_count = VALUES(late_count),
+            gross = VALUES(gross),
+            total_late_deduction = VALUES(total_late_deduction),
+            total_deductions = VALUES(total_deductions),
+            net = VALUES(net),
+            updated_at = NOW()`,
+          [
+            payload.person_id,
+            payload.period,
+            payload.days_present,
+            payload.daily_rate,
+            payload.late_penalty,
+            payload.late_count,
+            payload.gross,
+            payload.total_late_deduction,
+            payload.total_deductions,
+            payload.net,
+            payload.released,
+          ]
+        );
+
+        if (result && result.affectedRows) {
+          if (result.insertId || result.warningStatus === 0) {
+            created += 1;
+          } else {
+            updated += 1;
+          }
+        }
+      }
+
+      cursor.setUTCDate(cursor.getUTCDate() + periodDays);
+    }
+  }
+
+  return { created, updated };
+}
+
+async function regeneratePayrollPeriodsIfNeeded() {
+  try {
+    const result = await generatePayrollPeriodsFromAttendance();
+    if (result.created || result.updated) {
+      console.log(`[Payroll] Generated payroll periods: created=${result.created}, updated=${result.updated}`);
+    }
+  } catch (error) {
+    console.error("[Payroll] Auto-generation failed:", error.message);
+  }
+}
+
+// ==========================================
+// LOCAL CONNECTOR HELPER FUNCTIONS
+// ==========================================
+// These functions route Dahua requests through the local connector if configured
+
+async function requestDahuaViaConnector(method, path, payload = null) {
+  if (!USE_LOCAL_CONNECTOR) throw new Error("Local connector not configured");
+  
+  return new Promise((resolve, reject) => {
+    const data = JSON.stringify({
+      path,
+      method,
+      payload,
+    });
+
+    const parsedUrl = new URL(DAHUA_CONNECTOR_URL);
+    const transport = parsedUrl.protocol === "https:" ? https : http;
+    
+    const request = transport.request(
+      {
+        method: "POST",
+        hostname: parsedUrl.hostname,
+        port: parsedUrl.port || (parsedUrl.protocol === "https:" ? 443 : 80),
+        path: "/dahua/rpc",
+        timeout: DAHUA_REQUEST_TIMEOUT_MS,
+        headers: {
+          "Content-Type": "application/json",
+          "Content-Length": Buffer.byteLength(data),
+        },
+      },
+      (response) => {
+        let body = "";
+        response.setEncoding("utf8");
+        response.on("data", (chunk) => (body += chunk));
+        response.on("end", () => {
+          try {
+            const result = JSON.parse(body || "{}");
+            resolve(result);
+          } catch (e) {
+            reject(new Error(`Invalid JSON response from connector: ${body}`));
+          }
+        });
+      }
+    );
+    
+    request.on("timeout", () => {
+      request.destroy();
+      reject(new Error(`Connector request timed out after ${DAHUA_REQUEST_TIMEOUT_MS}ms`));
+    });
+    
+    request.on("error", reject);
+    request.write(data);
+    request.end();
+  });
+}
+
+async function requestDahuaGetViaConnector(path) {
+  if (!USE_LOCAL_CONNECTOR) throw new Error("Local connector not configured");
+  
+  return new Promise((resolve, reject) => {
+    const parsedUrl = new URL(DAHUA_CONNECTOR_URL);
+    const transport = parsedUrl.protocol === "https:" ? https : http;
+    const fullPath = `/dahua/get?path=${encodeURIComponent(path)}`;
+    
+    const request = transport.request(
+      {
+        method: "GET",
+        hostname: parsedUrl.hostname,
+        port: parsedUrl.port || (parsedUrl.protocol === "https:" ? 443 : 80),
+        path: fullPath,
+        timeout: DAHUA_REQUEST_TIMEOUT_MS,
+      },
+      (response) => {
+        let body = "";
+        response.setEncoding("utf8");
+        response.on("data", (chunk) => (body += chunk));
+        response.on("end", () => resolve(body));
+      }
+    );
+    
+    request.on("timeout", () => {
+      request.destroy();
+      reject(new Error(`Connector GET request timed out after ${DAHUA_REQUEST_TIMEOUT_MS}ms`));
+    });
+    
+    request.on("error", reject);
+    request.end();
+  });
+}
+
+async function getDahuaUsersViaConnector(requestedUserIds = null) {
+  const firstLogin = await requestDahuaViaConnector("POST", "/RPC2_Login", {
+    method: "global.login",
+    params: { userName: DAHUA_USERNAME, password: "", clientType: "Web3.0" },
+    id: 1,
+  });
+  if (!firstLogin.success) throw new Error(firstLogin.error || "Failed to login to Dahua via connector");
+  
+  const firstData = JSON.parse(firstLogin.body || "{}");
+  const loginParams = firstData.params || {};
+  const passwordHash = md5(`${DAHUA_USERNAME}:${loginParams.realm}:${DAHUA_PASSWORD}`);
+  const loginPassword = passwordHash.toUpperCase();
+  const session = firstData.session || 0;
+  
+  const secondLogin = await requestDahuaViaConnector("POST", "/RPC2_Login", {
+    method: "global.login",
+    params: { userName: DAHUA_USERNAME, password: loginPassword, clientType: "Web3.0", authorityType: "Default" },
+    id: 2,
+    session,
+  });
+  if (!secondLogin.success) throw new Error(secondLogin.error || "Failed to authenticate with Dahua via connector");
+  
+  const secondData = JSON.parse(secondLogin.body || "{}");
+  const activeSession = secondData.session || session;
+  const users = [];
+  
+  const batches = requestedUserIds
+    ? Array.from({ length: Math.ceil(requestedUserIds.length / 10) }, (_, index) => requestedUserIds.slice(index * 10, index * 10 + 10))
+    : Array.from({ length: 100 }, (_, index) => Array.from({ length: 10 }, (_, offset) => String(index * 10 + offset + 1)));
+  
+  for (const userIds of batches) {
+    const usersResponse = await requestDahuaViaConnector("POST", "/RPC2", {
+      method: "AccessUser.list",
+      params: { UserIDList: userIds },
+      id: users.length + 3,
+      session: activeSession,
+    });
+    if (!usersResponse.success) throw new Error(usersResponse.error || "Failed to get users from Dahua via connector");
+    
+    const usersData = JSON.parse(usersResponse.body || "{}");
+    const batch = usersData?.params?.Users || usersData?.error?.detail?.Users || [];
+    users.push(...batch.filter(Boolean));
+  }
+  return users;
 }
 
 // ==========================================
@@ -332,8 +781,9 @@ app.post("/api/dahua/sync-users", async (req, res) => {
 
     return res.json({ count: insertedOrUpdatedCount, message: `Synced ${insertedOrUpdatedCount} users from Dahua device to MySQL database.` });
   } catch (err) {
-    console.error("Dahua user sync error:", err.message);
-    return res.status(502).json({ error: `Dahua user sync failed: ${err.message}` });
+    const message = errorMessage(err, "The Dahua device returned an invalid response or the MySQL operation failed.");
+    console.error("Dahua user sync error:", err);
+    return res.status(502).json({ error: `Dahua user sync failed: ${message}` });
   }
 });
 
@@ -341,33 +791,62 @@ app.post("/api/dahua/sync-attendance", async (req, res) => {
   try {
     const limit = Number(req.body?.limit || 1000);
     const query = `/cgi-bin/recordFinder.cgi?action=find&name=AccessControlCardRec&count=${limit}`;
-    const records = parseDahuaRows(await requestDahuaWithDigest(query));
 
-    const payload = records.map((record) => ({
-      person_id: firstValue(record, ["UserID", "userID", "CardNo"]),
-      name: firstValue(record, ["CardName", "Name", "name"]) || null,
-      event: mapDahuaAttendanceEvent(record),
-      point: firstValue(record, ["AttendancePoint", "Point", "point"]),
-      method: mapDahuaAttendanceMethod(firstValue(record, ["Method", "method"])),
-      device_time: normalizeDahuaDeviceTime(firstValue(record, ["CreateTime", "Time", "time"])),
-    })).filter((record) => record.device_time && record.person_id);
+    let records;
+    if (USE_LOCAL_CONNECTOR) {
+      const result = await requestDahuaGetViaConnector(query);
+      records = parseDahuaRows(result);
+    } else {
+      records = parseDahuaRows(await requestDahuaWithDigest(query));
+    }
 
-    if (!payload.length) return res.json({ count: 0, message: "No attendance records were returned." });
+    const settingsRow = await pool.query("SELECT * FROM settings ORDER BY id LIMIT 1");
+    const settings = settingsRow[0]?.[0] || null;
+
+    const payload = dedupeDahuaAttendanceByPersonDay(
+      records.map((record) => ({
+        person_id: firstValue(record, ["UserID", "userID", "CardNo"]),
+        name: firstValue(record, ["CardName", "Name", "name"]) || null,
+        event: mapDahuaAttendanceEvent(record),
+        point: firstValue(record, ["AttendancePoint", "Point", "point"]),
+        method: mapDahuaAttendanceMethod(firstValue(record, ["Method", "method"])),
+        device_time: normalizeDahuaDeviceTime(firstValue(record, ["CreateTime", "Time", "time"])),
+      })),
+      settings
+    ).filter((record) => record.device_time && record.person_id);
+
+    if (!payload.length) return res.json({ count: 0, message: "No attendance records were returned after deduplication." });
 
     let insertedCount = 0;
+    const insertedAttendance = [];
     for (const record of payload) {
       try {
-        const formattedTime = new Date(record.device_time).toISOString().slice(0, 19).replace('T', ' ');
+        const formattedTime = record.device_time;
         const [result] = await pool.query(
           "INSERT IGNORE INTO attendance (person_id, name, event, point, method, device_time) VALUES (?, ?, ?, ?, ?, ?)",
           [record.person_id, record.name, record.event, record.point, record.method, formattedTime]
         );
-        if (result.affectedRows > 0) insertedCount += 1;
+        if (result.affectedRows > 0) {
+          insertedCount += 1;
+          insertedAttendance.push({
+            person_id: record.person_id,
+            name: record.name,
+            event: record.event,
+            method: record.method,
+            device_time: formattedTime,
+          });
+        }
       } catch (err) {
         if (err.code !== 'ER_DUP_ENTRY') console.error("Insert attendance error:", err.message);
       }
     }
-    return res.json({ count: insertedCount, message: insertedCount ? `Inserted ${insertedCount} new attendance scan(s) into MySQL.` : "No new attendance records were found." });
+
+    if (insertedAttendance.length) {
+      const payrollResult = await generatePayrollPeriodsFromAttendance(insertedAttendance);
+      console.log(`[Payroll] Auto-generated after Dahua sync: created=${payrollResult.created}, updated=${payrollResult.updated}`);
+    }
+
+    return res.json({ count: insertedCount, message: insertedCount ? `Inserted ${insertedCount} deduplicated attendance scan(s) into MySQL.` : "No new attendance records were found after deduplication." });
   } catch (err) {
     console.error("Dahua attendance sync error:", err.message);
     return res.status(502).json({ error: `Dahua attendance sync failed: ${err.message}` });
@@ -377,9 +856,47 @@ app.post("/api/dahua/sync-attendance", async (req, res) => {
 app.get("/api/device/status", async (req, res) => {
   try {
     const raw = await requestDahuaWithDigest("/cgi-bin/magicBox.cgi?action=getSystemInfo");
-    return res.json({ status: "online", systemInfo: raw });
+    return res.json({
+      status: "online",
+      online: true,
+      deviceIp: DAHUA_DEVICE_IP,
+      devicePort: DAHUA_DEVICE_PORT,
+      systemInfo: raw,
+    });
   } catch (err) {
-    return res.json({ status: "offline", error: err.message });
+    return res.json({
+      status: "offline",
+      online: false,
+      deviceIp: DAHUA_DEVICE_IP,
+      devicePort: DAHUA_DEVICE_PORT,
+      error: err.message,
+    });
+  }
+});
+
+app.post("/api/payroll/rebuild", async (req, res) => {
+  try {
+    const reset = Boolean(req.body?.reset);
+    if (reset) {
+      await pool.query("DELETE FROM payroll_periods");
+    }
+
+    const result = await generatePayrollPeriodsFromAttendance();
+    return res.json({
+      ok: true,
+      reset,
+      created: Number(result.created || 0),
+      updated: Number(result.updated || 0),
+      message: reset
+        ? "Payroll periods were reset and rebuilt from attendance data."
+        : "Payroll periods were rebuilt from attendance data.",
+    });
+  } catch (error) {
+    console.error("[Payroll] Rebuild failed:", error.message);
+    return res.status(500).json({
+      ok: false,
+      error: error.message || "Payroll rebuild failed.",
+    });
   }
 });
 
@@ -547,6 +1064,17 @@ app.post("/api/db/query", async (req, res) => {
         inserted.push({ ...item, id: result.insertId || item.id });
       }
 
+      if (table === "attendance" && inserted.length) {
+        try {
+          const payrollResult = await generatePayrollPeriodsFromAttendance(inserted);
+          if (payrollResult.created || payrollResult.updated) {
+            console.log(`[Payroll] Auto-generated after attendance insert: created=${payrollResult.created}, updated=${payrollResult.updated}`);
+          }
+        } catch (error) {
+          console.error("[Payroll] Auto-generation after attendance insert failed:", error.message);
+        }
+      }
+
       return res.json({ data: single ? inserted[0] : inserted, error: null });
     }
 
@@ -585,6 +1113,60 @@ app.post("/api/db/query", async (req, res) => {
       }
 
       await pool.query(sql, params);
+
+      if (table === "payroll_periods" && itemObj.released === true) {
+        const [releasedRows] = await pool.query(
+          `SELECT pp.*, p.name AS person_name, p.department
+           FROM payroll_periods pp
+           LEFT JOIN persons p ON p.id = pp.person_id
+           WHERE pp.id = ?
+           LIMIT 1`,
+          filters.find((filter) => filter?.column === "id")?.value
+        );
+        const releasedPayroll = releasedRows[0];
+        if (releasedPayroll) {
+          await pool.query(
+            `INSERT INTO payroll_released_history
+              (id, payroll_period_id, person_id, person_name, department, period,
+               days_present, daily_rate, late_penalty, late_count, gross,
+               total_late_deduction, total_deductions, net, detailed_attendance,
+               released, action, released_by, released_at, created_at, updated_at)
+             VALUES
+              (UUID(), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, JSON_ARRAY(), 1,
+               'Released', NULL, NOW(), NOW(), NOW())
+             ON DUPLICATE KEY UPDATE
+               person_id = VALUES(person_id),
+               person_name = VALUES(person_name),
+               department = VALUES(department),
+               period = VALUES(period),
+               days_present = VALUES(days_present),
+               daily_rate = VALUES(daily_rate),
+               late_penalty = VALUES(late_penalty),
+               late_count = VALUES(late_count),
+               gross = VALUES(gross),
+               total_late_deduction = VALUES(total_late_deduction),
+               total_deductions = VALUES(total_deductions),
+               net = VALUES(net),
+               released = VALUES(released),
+               updated_at = NOW()`,
+            [
+              releasedPayroll.id,
+              releasedPayroll.person_id,
+              releasedPayroll.person_name,
+              releasedPayroll.department,
+              releasedPayroll.period,
+              releasedPayroll.days_present,
+              releasedPayroll.daily_rate,
+              releasedPayroll.late_penalty,
+              releasedPayroll.late_count,
+              releasedPayroll.gross,
+              releasedPayroll.total_late_deduction,
+              releasedPayroll.total_deductions,
+              releasedPayroll.net,
+            ]
+          );
+        }
+      }
       return res.json({ data: payloadData, error: null });
     }
 
@@ -704,19 +1286,34 @@ if (AUTO_SYNC_ATTENDANCE_MINUTES > 0) {
     try {
       const query = `/cgi-bin/recordFinder.cgi?action=find&name=AccessControlCardRec&count=1000`;
       const records = parseDahuaRows(await requestDahuaWithDigest(query));
-      for (const record of records) {
-        const pId = firstValue(record, ["UserID", "userID", "CardNo"]);
-        const dTime = normalizeDahuaDeviceTime(firstValue(record, ["CreateTime", "Time", "time"]));
+
+      const settingsRow = await pool.query("SELECT * FROM settings ORDER BY id LIMIT 1");
+      const settings = settingsRow[0]?.[0] || null;
+      const deduplicated = dedupeDahuaAttendanceByPersonDay(
+        records.map((record) => ({
+          person_id: firstValue(record, ["UserID", "userID", "CardNo"]),
+          name: firstValue(record, ["CardName", "Name", "name"]) || null,
+          event: mapDahuaAttendanceEvent(record),
+          point: firstValue(record, ["AttendancePoint", "Point", "point"]),
+          method: mapDahuaAttendanceMethod(firstValue(record, ["Method", "method"])),
+          device_time: normalizeDahuaDeviceTime(firstValue(record, ["CreateTime", "Time", "time"])),
+        })),
+        settings
+      );
+
+      for (const record of deduplicated) {
+        const pId = record.person_id;
+        const dTime = record.device_time;
         if (!pId || !dTime) continue;
-        const formattedTime = new Date(dTime).toISOString().slice(0, 19).replace('T', ' ');
+        const formattedTime = dTime;
         await pool.query(
           "INSERT IGNORE INTO attendance (person_id, name, event, point, method, device_time) VALUES (?, ?, ?, ?, ?, ?)",
           [
             pId,
-            firstValue(record, ["CardName", "Name", "name"]) || null,
-            mapDahuaAttendanceEvent(record),
-            firstValue(record, ["AttendancePoint", "Point", "point"]),
-            mapDahuaAttendanceMethod(firstValue(record, ["Method", "method"])),
+            record.name,
+            record.event,
+            record.point,
+            record.method,
             formattedTime,
           ]
         );
@@ -746,4 +1343,7 @@ app.use((req, res) => {
 
 app.listen(PORT, () => {
   console.log(`Server running at port ${PORT}`);
+  setTimeout(() => {
+    regeneratePayrollPeriodsIfNeeded();
+  }, 4000);
 });

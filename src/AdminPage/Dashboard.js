@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useRef, useMemo, Fragment } from "react";
-import { supabase } from "../supabaseClient";
+import { supabase } from "../mysqlClient";
 import Swal from "sweetalert2";
 import { FiTrendingUp, FiUsers, FiClock, FiDownload, FiChevronLeft, FiChevronRight } from "react-icons/fi";
 import { determineAttendanceStatus } from "./attendanceUtils";
@@ -1023,7 +1023,6 @@ export default function Dashboard() {
                 <th className="py-3 px-3">Employee ID</th>
                 <th className="py-3 px-3">Employee Name</th>
                 <th className="py-3 px-3">Department / Work Hours</th>
-                <th className="py-3 px-3">Location</th>
                 <th className="py-3 px-3">Attendance Status</th>
                 <th className="py-3 px-3">Attendance Method</th>
               </tr>
@@ -1031,7 +1030,7 @@ export default function Dashboard() {
             <tbody>
               {filteredTodayEntries.length === 0 ? (
                 <tr>
-                  <td colSpan={7} className="p-6 text-center text-gray-500">
+                  <td colSpan={6} className="p-6 text-center text-gray-500">
                     No attendance recorded today
                   </td>
                 </tr>
@@ -1104,10 +1103,6 @@ export default function Dashboard() {
                         <div className="text-xs text-gray-400 mt-1">{getWorkHoursLabel(r)}</div>
                       </td>
 
-                      {/* Location */}
-                      <td className="py-3 px-3 text-xs text-slate-900 break-words max-w-[220px]">
-                        {r.point ? r.point : <span className="text-gray-400">—</span>}
-                      </td>
 
                       {/* Attendance Status */}
                       <td className="py-3 px-3">

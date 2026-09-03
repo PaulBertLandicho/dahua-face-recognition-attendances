@@ -4,7 +4,7 @@
 import React, { useEffect, useState } from "react";
 import Swal from "sweetalert2";
 import { FiCalendar, FiTrash2, FiX } from "react-icons/fi";
-import { supabase } from "../supabaseClient";
+import { supabase } from "../mysqlClient";
 
 // Global HolidayManager for all departments
 export default function HolidayManagerGlobal({

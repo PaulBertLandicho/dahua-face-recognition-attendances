@@ -1,5 +1,5 @@
 // Lightweight helpers to fetch common data from Supabase.
-import { supabase, SUPABASE_CONFIGURED } from '../supabaseClient';
+import { supabase, SUPABASE_CONFIGURED } from '../mysqlClient';
 
 async function fetchViaRest(path) {
   const urlBase = process.env.REACT_APP_SUPABASE_URL;

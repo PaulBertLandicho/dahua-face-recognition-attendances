@@ -16,11 +16,16 @@ class QueryBuilder {
     this.maybeSingleRow = false;
     this.payloadData = null;
     this.countOption = null;
+    this.returning = false;
   }
 
   select(columns = "*", options = {}) {
-    this.action = "select";
     this.selectedColumns = columns;
+    if (["insert", "update", "upsert"].includes(this.action)) {
+      this.returning = true;
+    } else {
+      this.action = "select";
+    }
     if (options && options.count) this.countOption = options.count;
     return this;
   }
@@ -145,6 +150,7 @@ class QueryBuilder {
           single: this.singleRow,
           maybeSingle: this.maybeSingleRow,
           count: this.countOption,
+          returning: this.returning,
         }),
       });
 

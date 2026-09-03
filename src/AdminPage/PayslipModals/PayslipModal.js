@@ -9,7 +9,7 @@ import {
   FiTrendingDown,
 } from "react-icons/fi";
 import Icon from "../../components/Icon";
-import { supabase } from "../../supabaseClient";
+import { supabase } from "../../mysqlClient";
 import { generatePayslipPdf } from "./generatePayslipPdf";
 import { hasHolidayPayEligibility } from "../../utils/holidayPayEligibility";
 

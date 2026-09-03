@@ -9,7 +9,7 @@ import { hasHolidayPayEligibility } from "../utils/holidayPayEligibility";
 import * as XLSX from "xlsx";
 import { FiSearch, FiEye, FiDownload, FiPrinter } from "react-icons/fi";
 
-import { supabase } from "../supabaseClient";
+import { supabase } from "../mysqlClient";
 
 export default function PayrollPage() {
   const [persons, setPersons] = useState([]);
@@ -51,7 +51,7 @@ export default function PayrollPage() {
         (function() {
           const cutoff = new Date();
           cutoff.setMonth(cutoff.getMonth() - 6);
-          return supabase.from("attendance").select("*").gte('device_time', cutoff.toISOString());
+          return supabase.from("attendance").select("id, person_id, name, event, method, device_time, status, archived").gte('device_time', cutoff.toISOString());
         })(),
         supabase
           .from("persons")
@@ -60,19 +60,25 @@ export default function PayrollPage() {
           ),
         supabase.from("department_rates").select("*"),
         supabase.from("settings").select("*").eq("id", 1).maybeSingle(),
-        supabase.from("payroll_periods").select("*"),
-        supabase.from("holidays").select("*"),
+        supabase.from("payroll_periods").select("*").limit(5000),
+        supabase.from("holidays").select("*").limit(5000),
       ]);
 
-      const attData = attRes.data || [];
-      const personsData = personsRes.data || [];
+      const attData = Array.isArray(attRes.data) ? attRes.data : [];
+      const personsData = Array.isArray(personsRes.data) ? personsRes.data : [];
       const deptData = deptRes.data || [];
       const settingsData = settingsRes.data || {};
       const holidaysData = holidaysRes.data || [];
+      if (attRes.error) console.error("Payroll attendance query failed:", attRes.error);
+      if (personsRes.error) console.error("Payroll persons query failed:", personsRes.error);
+      if (settingsRes.error) console.error("Payroll settings query failed:", settingsRes.error);
       // Ensure payrollDb is always a clean array with no null/undefined entries
       const payrollDb = Array.isArray(payrollRes.data)
         ? payrollRes.data.filter(Boolean)
         : [];
+      const payrollDbByKey = new Map(
+        payrollDb.map((row) => [`${row.person_id}|${row.period}`, row])
+      );
 
       setPersons(personsData);
       setDeptRates(deptData);
@@ -85,7 +91,7 @@ export default function PayrollPage() {
       personsData.forEach((person) => {
         // Get all attendance for this person (include both time-in and time-out)
         const personAttendance = attData.filter(
-          (a) => a.person_id === person.id,
+          (a) => String(a.person_id) === String(person.id),
         );
         // Sort attendance by date
         const sortedAttendance = [...personAttendance].sort(
@@ -236,22 +242,8 @@ export default function PayrollPage() {
               Number(basePayroll.cashAdvance || 0) +
               totalLateDeduction;
             const net = basePayroll.gross - totalDeductions;
-            // Find if this period exists in DB (defensive & avoid duplicates)
-            let dbRow = null;
-            try {
-              const { data: existing, error: selErr } = await supabase
-                .from("payroll_periods")
-                .select("*")
-                .eq("person_id", person.id)
-                .eq("period", period)
-                .limit(1)
-                .maybeSingle();
-              if (selErr)
-                console.error("Error checking payroll_periods", selErr);
-              if (existing) dbRow = existing;
-            } catch (e) {
-              console.error("Error querying payroll_periods", e);
-            }
+            // Reuse the payroll rows fetched above instead of making another remote query.
+            let dbRow = payrollDbByKey.get(`${person.id}|${period}`) || null;
 
             if (dbRow && !dbRow.released) {
               const payload = {
@@ -312,21 +304,17 @@ export default function PayrollPage() {
                       "Failed to insert payroll_periods row",
                       insertError || upsertErr,
                     );
-                    return null;
+                    dbRow = { id: null, released: false };
+                  } else {
+                    dbRow = inserted;
                   }
-                  dbRow = inserted;
                 } else {
                   dbRow = upserted;
                 }
               } catch (e) {
                 console.error("Error upserting/inserting payroll_periods", e);
-                return null;
+                dbRow = { id: null, released: false };
               }
-            }
-
-            // Extra safety: if dbRow is still somehow null, skip this entry
-            if (!dbRow) {
-              return null;
             }
 
             return {
@@ -342,8 +330,8 @@ export default function PayrollPage() {
                 net,
               },
               attendance,
-              released: !!dbRow.released,
-              dbId: dbRow.id,
+              released: !!dbRow?.released,
+              dbId: dbRow?.id || null,
               // Compute absent count for the period (weekdays only, exclude holidays), up to today
               absentCount: (() => {
                 try {

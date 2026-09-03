@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { supabase } from "../supabaseClient";
+import { supabase } from "../mysqlClient";
 import {
   FaEye,
   FaEyeSlash,
@@ -41,7 +41,7 @@ export default function AdminLogin() {
         const user = session.user;
         const role = user?.user_metadata?.role || user?.app_metadata?.role || user?.role;
         if (role === "secretary") {
-          navigate("/");
+          navigate("/admin/attendance");
         } else {
           navigate("/admin/dashboard");
         }

@@ -3,7 +3,7 @@ import * as faceapi from "face-api.js/build/commonjs/index.js";
 import Swal from "sweetalert2";
 import { FiCamera, FiLoader, FiCircle, FiUser, FiSearch, FiRefreshCw, FiAlertTriangle, FiSun, FiMoon, FiClock } from "react-icons/fi";
 import Icon from "../components/Icon";
-import { supabase } from "../supabaseClient";
+import { supabase } from "../mysqlClient";
 import { recordAttendanceForPerson, autoGenerateMorningOut } from "../AdminPage/attendanceUtils";
 import {
   toFloat32Array,
@@ -300,6 +300,8 @@ export default function CameraPlayer({
   });
 
   const getCurrentLocationPoint = useCallback(async () => {
+    return buildLocationResult(null, "disabled", "Browser location access is disabled.");
+
     const now = Date.now();
 
     if (typeof window !== "undefined" && window.isSecureContext === false) {
@@ -1355,7 +1357,7 @@ if (uniqueParts.length) {
           // (Assumes recordAttendanceForPerson does not update registration_photo for existing persons)
           (async () => {
             const locationResult = await refreshCurrentLocation();
-            if (locationResult.status !== "ok") {
+            if (locationResult.status !== "ok" && locationResult.status !== "disabled") {
               const warnKey = `${locationResult.status}:${locationResult.message}`;
               const nowMs = Date.now();
               if (!lastLocationWarningRef.current.key || lastLocationWarningRef.current.key !== warnKey || nowMs - lastLocationWarningRef.current.ts > 10000) {
@@ -1377,7 +1379,7 @@ if (uniqueParts.length) {
               settings,
               scanPayload: {
                 ...scanPayload,
-                point: locationResult.point,
+                point: locationResult.status === "disabled" ? null : locationResult.point,
               },
               method: "face-scan",
             });

@@ -32,6 +32,42 @@ Those requirements need a persistent host on the same network or a secure VPN.
 Keep `SUPABASE_SERVICE_KEY`, Dahua credentials, and other backend secrets only
 on that backend host, never in Vercel `REACT_APP_*` variables.
 
+## cPanel deployment with Dahua
+
+The cPanel Node.js application must have these environment variables configured:
+
+```text
+DB_HOST=localhost
+DB_PORT=3306
+DB_USER=<cpanel-mysql-user>
+DB_PASSWORD=<cpanel-mysql-password>
+DB_NAME=<cpanel-mysql-database>
+DAHUA_DEVICE_IP=<device-ip-reachable-from-the-connector>
+DAHUA_DEVICE_PORT=80
+DAHUA_USERNAME=admin
+DAHUA_PASSWORD=<dahua-password>
+DAHUA_REQUEST_TIMEOUT_MS=30000
+```
+
+The server loads `.env.local` after `.env`, and `.env.local` overrides values
+from `.env`. Put machine-specific cPanel database settings in `.env.local` when
+the connector runs outside cPanel. Remote MySQL access must be enabled by the
+hosting provider, and `DB_HOST` must be the provider's MySQL hostname, not
+necessarily `localhost`.
+
+Set `REACT_APP_BACKEND_URL` to the public HTTPS URL of the cPanel Node.js
+application before building the frontend. If the frontend and API share the
+same cPanel domain, leave it unset and the frontend uses relative `/api/*`
+paths. For a local connector, set `REACT_APP_DAHUA_CONNECTOR_URL` to its URL
+before building; the connector must run on a computer or server that can reach
+the Dahua LAN. A cPanel server cannot fetch a private `192.168.x.x`, `10.x.x.x`,
+or `172.16.x.x` device unless it is connected to that LAN or VPN.
+
+After changing `REACT_APP_*` values, run `npm run build` and deploy the new
+`build` directory. Ensure the cPanel MySQL database has been created from the
+SQL files in `migrations/` and that the cPanel Node.js application has been
+restarted after changing backend variables.
+
 This project was bootstrapped with [Create React App](https://github.com/facebook/create-react-app).
 
 ## Available Scripts

@@ -1,6 +1,6 @@
 // React Query `useInfiniteQuery` hook example for Supabase cursor pagination
 import { useInfiniteQuery } from '@tanstack/react-query';
-import { supabase } from '../supabaseClient';
+import { supabase } from '../mysqlClient';
 import { fetchAttendancePage } from './supabasePagination';
 
 export function useAttendancesInfinite({ pageSize = 30, initialFilters = [] } = {}) {

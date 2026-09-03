@@ -49,7 +49,7 @@ React Query (useInfiniteQuery) example usage (in your component):
 
 import { useInfiniteQuery } from 'react-query';
 import { fetchAttendancePage } from 'src/utils/supabasePagination';
-import supabase from '../supabaseClient';
+import supabase from '../mysqlClient';
 
 function useAttendancesInfinite(pageSize = 20) {
   return useInfiniteQuery(
