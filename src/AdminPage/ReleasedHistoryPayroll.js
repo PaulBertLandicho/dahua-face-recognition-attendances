@@ -3,7 +3,7 @@ import * as XLSX from "xlsx";
 import { supabase } from "../mysqlClient";
 import PayslipModal from "./PayslipModals/PayslipModal";
 import { getDetailedAttendance } from "./attendanceDetails";
-import { calculatePayroll } from "./Payroll";
+
 import { FiDownload, FiSearch } from "react-icons/fi";
 
 export default function ReleasedHistoryPayroll() {
@@ -24,18 +24,28 @@ export default function ReleasedHistoryPayroll() {
 
   useEffect(() => {
     async function fetchReleased() {
-      // Select only necessary payroll fields and join limited person info to reduce data transfer
-      const { data } = await supabase
-        .from("payroll_periods")
-        .select(
-          "id, person_id, period, released, daily_rate, late_penalty, gross, net, days_present, person:persons(id,name,department)",
-        )
-        .eq("released", true)
-        .order("period", { ascending: false })
+      // Fetch from payroll_released_history instead of payroll_periods
+      const { data, error } = await supabase
+        .from("payroll_released_history")
+        .select("*")
+        .order("released_at", { ascending: false })
         .limit(2000);
-      setReleasedPayrolls(data || []);
+        
+      if (error) {
+        console.error("Error fetching released payrolls:", error);
+      }
 
-      // Fetch activity logs to get action type (Released or Advance Release)
+      const mappedData = (data || []).map((row) => ({
+        ...row,
+        person: {
+          id: row.person_id,
+          name: row.person_name,
+          department: row.department,
+        },
+      }));
+      setReleasedPayrolls(mappedData);
+
+      // Fetch activity logs to get action type if needed, though released_action is also available
       try {
         const { data: logs } = await supabase
           .from("payroll_activity_logs")
@@ -157,49 +167,42 @@ export default function ReleasedHistoryPayroll() {
     let fullPayroll = null;
     if (payroll.period && person) {
       // Parse period string: yyyy-mm-dd_to_yyyy-mm-dd
-      const [start, end] = payroll.period.split("_to_");
+
       const { data: attendance } = await supabase
         .from("attendance")
-        .select("id, event, device_time, photo, status, method")
+        .select("id, person_id, event, device_time, photo, status, method, archived")
         .eq("person_id", payroll.person_id)
-        .gte("device_time", start)
-        .lte("device_time", end)
+        .eq("archived", 0)
         .order("device_time", { ascending: true });
+      
       detailedAttendance = getDetailedAttendance(
         attendance || [],
         payroll.person_id,
         settings || {},
       );
-      // Recalculate payroll using the same logic as PayrollPage
-      const basePayroll = calculatePayroll(
-        attendance || [],
-        [person],
-        deptRates || [],
-        settings || {},
-      )[0];
-      const lateCount = detailedAttendance
-        .map((rec) => rec.lateDetails || [])
-        .flat().length;
-      const latePenalty = Number(person.late_penalty || 0);
-      const lateCountLimit = Number(settings.late_count_limit || 5);
-      const totalLateDeduction =
-        lateCount >= lateCountLimit ? lateCount * latePenalty : 0;
-      const totalDeductions =
-        basePayroll.sss +
-        basePayroll.pag_ibig +
-        basePayroll.philhealth +
-        basePayroll.cashAdvance +
-        totalLateDeduction;
-      const net = basePayroll.gross - totalDeductions;
+
+      const deptRate = (deptRates || []).find((d) => (d.department || "").toLowerCase() === (person.department || "").toLowerCase()) || {};
+
+      // Map the saved snake_case DB row to camelCase for the PayslipModal
       fullPayroll = {
-        ...basePayroll,
-        lateCount,
-        lateCountLimit,
-        totalLateDeduction,
-        totalDeductions,
-        net,
+        ...payroll,
+        dailyRate: Number(payroll.daily_rate || 0),
+        daysPresent: Number(payroll.days_present || 0),
+        gross: Number(payroll.gross || 0),
+        net: Number(payroll.net || 0),
+        lateCount: Number(payroll.late_count || 0),
+        lateCountLimit: Number(settings?.late_count_limit || 5),
+        totalLateDeduction: Number(payroll.total_late_deduction || 0),
+        totalDeductions: Number(payroll.total_deductions || 0),
+        sss: person.sss ? Number(deptRate.sss || 0) : 0,
+        pag_ibig: person.pag_ibig ? Number(deptRate.pag_ibig || 0) : 0,
+        philhealth: person.philhealth ? Number(deptRate.philhealth || 0) : 0,
+        cashAdvance: Number(person.cash_advance || 0),
+        otHours: 0, // You can extend this if OT is saved in history later
+        settings: settings || {}
       };
     }
+    
     setModalData({
       loading: false,
       person,
@@ -207,7 +210,7 @@ export default function ReleasedHistoryPayroll() {
       settings,
       payroll: fullPayroll,
     });
-    setSelected(payroll);
+    setSelected(fullPayroll);
   };
 
   // Export to Excel
@@ -430,7 +433,7 @@ export default function ReleasedHistoryPayroll() {
                       </td>
                       <td className="py-3.5 px-3.5 whitespace-nowrap">
                         <span className="inline-flex items-center px-2.5 py-0.5 rounded-lg text-xs font-semibold bg-[#237227]/10 text-[#237227] border border-[#237227]/20">
-                          {activityLogsMap[p.id] || "Released"}
+                          {p.released_action || activityLogsMap[p.payroll_period_id || p.id] || "Released"}
                         </span>
                       </td>
                     </tr>

@@ -166,6 +166,23 @@ export default function Dashboard() {
   const absentCardRef = useRef(null);
   const tooltipHideTimerRef = useRef(null);
   const [photoModal, setPhotoModal] = useState({ visible: false, src: "", title: "" });
+  const showToast = (title, icon = "success") => {
+    Swal.fire({
+      toast: true,
+      position: "top-end",
+      icon,
+      title,
+      showConfirmButton: false,
+      timer: 2500,
+      timerProgressBar: true,
+      iconColor: icon === "success" ? "#237227" : undefined,
+      customClass: {
+        popup: "!rounded-2xl !shadow-[0_12px_30px_rgba(0,0,0,0.12)] !border !border-gray-200 !px-4 !py-3 !bg-white font-sans",
+        title: "!text-sm !font-semibold !text-gray-800 !m-0 !leading-tight",
+        timerProgressBar: "!bg-[#237227]",
+      },
+    });
+  };
 
   useEffect(() => {
     let mounted = true;
@@ -273,16 +290,27 @@ export default function Dashboard() {
           }
         } catch (e) {}
 
+        const actionType = isAdvanceRelease ? "Advance Release" : "Period Released";
+        
         await supabase.from("payroll_activity_logs").insert([
           {
             payroll_period_id: id,
             person_id: personId,
             person_name: personName,
             released_by: releasedBy,
-            action: isAdvanceRelease ? "Advance Release" : "Period Released",
+            action: actionType,
             timestamp: new Date().toISOString(),
           },
         ]);
+        
+        // Update the auto-generated history row from the trigger to accurately reflect action and user
+        await supabase
+          .from("payroll_released_history")
+          .update({
+            action: actionType,
+            released_by: releasedBy
+          })
+          .eq("payroll_period_id", id);
 
         try {
           if (settings && settings.auto_create_next_period) {
@@ -327,7 +355,7 @@ export default function Dashboard() {
         } catch (e) { console.error('auto create next period failed', e); }
       } catch (e) { console.error('logging payroll release failed', e); }
 
-      Swal.fire("Released", "Payroll released successfully.", "success");
+      showToast(isAdvanceRelease ? "Payroll advance released successfully!" : "Payroll released successfully!");
     } catch (err) {
       console.error(err);
       Swal.fire("Error", err.message || String(err), "error");

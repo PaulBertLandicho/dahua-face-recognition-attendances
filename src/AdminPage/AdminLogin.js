@@ -15,7 +15,7 @@ export default function AdminLogin() {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
-  const [remember, setRemember] = useState(false);
+
   const navigate = useNavigate();
 
   const handleLogin = async (e) => {
@@ -119,26 +119,7 @@ export default function AdminLogin() {
             </div>
           </div>
 
-          <div className="flex justify-between items-center mt-1">
-            <label className="inline-flex items-center text-gray-700 text-sm cursor-pointer">
-              <input
-                type="checkbox"
-                checked={remember}
-                onChange={(e) => setRemember(e.target.checked)}
-                className="mr-2 cursor-pointer rounded border-gray-300 text-[#237227] accent-[#237227] focus:ring-0 focus:!ring-0 focus:!ring-offset-0 focus:!outline-none focus:!shadow-none focus:!border-gray-300 !shadow-none !outline-none"
-              />
-              Remember me
-            </label>
-            <button
-              type="button"
-              onClick={() => {
-                // placeholder: implement forgot password flow
-              }}
-              className="bg-transparent hover:!bg-transparent border-none text-[#237227] hover:text-[#1a541c] text-sm cursor-pointer p-0 !shadow-none hover:!shadow-none !transform-none hover:!transform-none hover:!translate-y-0 hover:underline focus:outline-none"
-            >
-              Forgot password?
-            </button>
-          </div>
+
 
           {error && <div className="text-red-600 text-center text-sm">{error}</div>}
 

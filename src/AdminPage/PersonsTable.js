@@ -17,169 +17,6 @@ import { determineAttendanceStatus } from "./attendanceUtils";
 import { syncDahuaUsers } from "../utils/dahuaApi";
 
 export default function PersonsTable() {
-  const adminLastLocationRef = useRef({ point: "Location unavailable", ts: 0 });
-
-  const buildLocationResult = (point, status, message) => ({ point, status, message });
-
-  const requestBrowserLocation = () => new Promise((resolve) => {
-    navigator.geolocation.getCurrentPosition(
-      resolve,
-      (error) => resolve({ error }),
-      {
-        enableHighAccuracy: true,
-        timeout: 25000,
-        maximumAge: 0,
-      },
-    );
-  });
-
-  const getCurrentLocationPoint = async () => {
-    return buildLocationResult(null, "disabled", "Browser location access is disabled.");
-
-    // Legacy location lookup is intentionally bypassed.
-    // eslint-disable-next-line no-unreachable
-    const now = Date.now();
-    if (adminLastLocationRef.current?.point && now - (adminLastLocationRef.current.ts || 0) < 60 * 1000) {
-      return buildLocationResult(adminLastLocationRef.current.point, "ok", "Using cached location.");
-    }
-
-    if (typeof window !== "undefined" && window.isSecureContext === false) {
-      return buildLocationResult(
-        "Location unavailable",
-        "insecure-context",
-        "Location requires HTTPS or localhost. Open the app over a secure connection.",
-      );
-    }
-
-    if (typeof navigator === "undefined" || !navigator.geolocation) {
-      return buildLocationResult(
-        "Location unavailable",
-        "unsupported",
-        "This device or browser does not support location services.",
-      );
-    }
-
-    try {
-      if (navigator.permissions && navigator.permissions.query) {
-        const permission = await navigator.permissions.query({ name: "geolocation" });
-        if (permission.state === "denied") {
-          return buildLocationResult(
-            "Location unavailable",
-            "permission-denied",
-            "Browser location permission is denied. Allow location for this site in the browser settings and retry.",
-          );
-        }
-      }
-    } catch (e) {}
-
-    let lastError = null;
-    let locationResult = null;
-    for (let attempt = 0; attempt < 3; attempt += 1) {
-      const result = await requestBrowserLocation();
-      if (result && !result.error) {
-        const position = result;
-          const latNum = Number(position.coords.latitude || 0);
-          const lngNum = Number(position.coords.longitude || 0);
-          const lat = latNum.toFixed(6);
-          const lng = lngNum.toFixed(6);
-          const accuracy = Number(position.coords.accuracy || 0);
-
-          try {
-            const reverseUrl = `https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${encodeURIComponent(lat)}&lon=${encodeURIComponent(lng)}&zoom=18&addressdetails=1`;
-            const res = await fetch(reverseUrl, {
-              headers: {
-                Accept: "application/json",
-                "Accept-Language": "en",
-              },
-            });
-            if (res.ok) {
-              const data = await res.json();
-              const addr = data?.address || {};
-              const placeParts = [
-                addr.road || addr.neighbourhood || addr.suburb || addr.village || addr.town || addr.city || addr.municipality,
-                addr.city || addr.town || addr.village || addr.municipality,
-                addr.state || addr.region || addr.province,
-                addr.country,
-              ].filter(Boolean);
-
-              const uniqueParts = [...new Set(placeParts)];
-              if (uniqueParts.length) {
-                locationResult = buildLocationResult(uniqueParts.join(", "), "ok", accuracy && accuracy > 250 ? `Location detected, but GPS accuracy is about ${Math.round(accuracy)} meters.` : "Location detected.");
-                break;
-              }
-              if (data?.display_name) {
-                locationResult = buildLocationResult(String(data.display_name), "ok", accuracy && accuracy > 250 ? `Location detected, but GPS accuracy is about ${Math.round(accuracy)} meters.` : "Location detected.");
-                break;
-              }
-            }
-          } catch (e) {
-            // Fallback handled below when reverse geocoding fails.
-          }
-
-          if (!locationResult) {
-            locationResult = buildLocationResult(
-              `Coordinates: ${lat}, ${lng}`,
-              "ok",
-              accuracy && accuracy > 250 ? `Location detected, but GPS accuracy is about ${Math.round(accuracy)} meters.` : "Location detected.",
-            );
-          }
-
-          if (accuracy && accuracy > 300 && attempt < 2) {
-            lastError = { code: "LOW_ACCURACY", message: `GPS accuracy is too coarse (${Math.round(accuracy)} meters). Retrying.` };
-            locationResult = null;
-            continue;
-          }
-          break;
-      }
-
-      lastError = result?.error || result || lastError;
-      if (lastError?.code === 1) {
-        locationResult = buildLocationResult(
-          "Location unavailable",
-          "permission-denied",
-          "Browser location permission is denied. Allow location for this site in the browser settings and retry.",
-        );
-        break;
-      }
-      if (attempt < 2) {
-        continue;
-      }
-    }
-
-    if (!locationResult) {
-      if (lastError?.code === 2) {
-        locationResult = buildLocationResult(
-          "Location unavailable",
-          "position-unavailable",
-          "The device could not determine a GPS or network location. Move to an open area and try again.",
-        );
-      } else if (lastError?.code === 3) {
-        locationResult = buildLocationResult(
-          "Location unavailable",
-          "timeout",
-          "Location request timed out. Try again with better signal or wait a few seconds.",
-        );
-      } else if (lastError?.code === "LOW_ACCURACY") {
-        locationResult = buildLocationResult(
-          "Location unavailable",
-          "position-unavailable",
-          lastError.message,
-        );
-      } else {
-        locationResult = buildLocationResult(
-          "Location unavailable",
-          "unavailable",
-          "Location could not be determined on this device.",
-        );
-      }
-    }
-
-    if (locationResult.status === "ok" && locationResult.point && locationResult.point !== "Location unavailable") {
-      adminLastLocationRef.current = { point: locationResult.point, ts: now };
-    }
-    return locationResult;
-  };
-
   const [search, setSearch] = useState("");
   const [departmentFilter, setDepartmentFilter] = useState("");
   const [sortKey] = useState("created_at");
@@ -201,9 +38,8 @@ export default function PersonsTable() {
   const [newCashAmount, setNewCashAmount] = useState("");
   const [newCashNote, setNewCashNote] = useState("");
   const [actionLoading, setActionLoading] = useState(false);
-  const [locLoading, setLocLoading] = useState(false);
   const editPhotoInputRef = useRef(null);
-  const [adminModal, setAdminModal] = useState({ visible: false, person: null, event: "time-in", datetime: "", photo: null, note: "", point: null, locationStatus: null, locationMessage: "" });
+  const [adminModal, setAdminModal] = useState({ visible: false, person: null, event: "time-in", datetime: "", photo: null, note: "" });
 
   useEffect(() => {
     async function fetchPersons() {
@@ -622,8 +458,98 @@ export default function PersonsTable() {
     });
   };
 
+  const handleRestore = async (person) => {
+    const { error: err } = await supabase
+      .from("persons")
+      .update({ archived: false })
+      .eq("id", person.id);
+
+    if (err) {
+      Swal.fire("Error", err.message, "error");
+    } else {
+      setPersons((prev) =>
+        prev.map((p) => (p.id === person.id ? { ...p, archived: false } : p))
+      );
+      Swal.fire({
+        toast: true,
+        position: "top-end",
+        icon: "success",
+        title: `${person.name || person.id} restored to active successfully!`,
+        showConfirmButton: false,
+        timer: 2500,
+        timerProgressBar: true,
+        iconColor: "#237227",
+        customClass: {
+          popup: "!rounded-2xl !shadow-[0_12px_30px_rgba(0,0,0,0.12)] !border !border-gray-200 !px-4 !py-3 !bg-white font-sans",
+          title: "!text-sm !font-semibold !text-gray-800 !m-0 !leading-tight",
+          timerProgressBar: "!bg-[#237227]",
+        },
+      });
+    }
+  };
+
+  const handleDeletePerson = async (person) => {
+    const result = await Swal.fire({
+      title: "Delete Person?",
+      html: `<div style='margin-bottom:12px;'>Are you sure you want to <b>permanently delete</b> <b>${
+        person.name || person.id
+      }</b> from MySQL database?</div>`,
+      icon: "warning",
+      width: "400px",
+      padding: "1.75rem",
+      showCancelButton: true,
+      confirmButtonText: "Delete",
+      cancelButtonText: "Cancel",
+      buttonsStyling: false,
+      customClass: {
+        popup: "!rounded-3xl !shadow-[0_24px_60px_rgba(0,0,0,0.15)] !border !border-gray-100 font-sans",
+        title: "!text-xl !font-bold !text-gray-800 !mt-2",
+        htmlContainer: "!text-sm !text-gray-600",
+        icon: "!scale-90 !my-2",
+        actions: "!flex !items-center !justify-center !gap-3 !mt-5 !w-full",
+        confirmButton: "!bg-red-600 hover:!bg-red-700 !text-white !font-semibold !rounded-xl !px-6 !py-2.5 !text-sm !border-none cursor-pointer !m-0 !shadow-none !transform-none",
+        cancelButton: "!bg-white !text-gray-700 !font-semibold !rounded-xl !px-6 !py-2.5 !text-sm !border !border-gray-300 cursor-pointer !m-0 !shadow-none !transform-none",
+      },
+    });
+
+    if (!result.isConfirmed) return;
+
+    try {
+      const { error: delErr } = await supabase
+        .from("persons")
+        .delete()
+        .eq("id", person.id);
+      if (delErr) throw delErr;
+
+      setPersons((prev) => prev.filter((p) => p.id !== person.id));
+      Swal.fire({
+        toast: true,
+        position: "top-end",
+        icon: "success",
+        title: `${person.name || person.id} deleted permanently!`,
+        showConfirmButton: false,
+        timer: 2500,
+        timerProgressBar: true,
+        iconColor: "#237227",
+        customClass: {
+          popup: "!rounded-2xl !shadow-[0_12px_30px_rgba(0,0,0,0.12)] !border !border-gray-200 !px-4 !py-3 !bg-white font-sans",
+          title: "!text-sm !font-semibold !text-gray-800 !m-0 !leading-tight",
+          timerProgressBar: "!bg-[#237227]",
+        },
+      });
+    } catch (err) {
+      Swal.fire({
+        icon: "error",
+        title: "Delete Failed",
+        text: err.message || "Could not delete person from database.",
+        confirmButtonText: "OK",
+      });
+    }
+  };
+
   // Admin: record attendance on behalf of a person (customize attendance)
-  const handleAdminAttendance = async (person) => {
+  // Admin: record attendance on behalf of a person (customize attendance)
+  const handleAdminAttendance = (person) => {
     if (!person || !person.id) return;
     const now = new Date();
     const pad = (n) => String(n).padStart(2, "0");
@@ -637,37 +563,10 @@ export default function PersonsTable() {
       datetime: localIso,
       photo: null,
       note: "",
-      point: null,
-      locationStatus: "fetching",
-      locationMessage: "Fetching current location...",
     });
-    const locationResult = await getCurrentLocationPoint();
-    setAdminModal((s) => ({
-      ...s,
-      point: locationResult.point,
-      locationStatus: locationResult.status,
-      locationMessage: locationResult.message,
-    }));
-  };
-
-  // eslint-disable-next-line no-unused-vars
-  const handleRefreshAdminLocation = async () => {
-    setAdminModal((s) => ({
-      ...s,
-      locationStatus: "fetching",
-      locationMessage: "Fetching current location...",
-    }));
-    const locationResult = await getCurrentLocationPoint();
-    setAdminModal((s) => ({
-      ...s,
-      point: locationResult.point,
-      locationStatus: locationResult.status,
-      locationMessage: locationResult.message,
-    }));
   };
 
   // Admin attendance modal handlers
-  
   const submitAdminAttendance = async () => {
     if (!adminModal.visible || !adminModal.person) return;
     const person = adminModal.person;
@@ -684,19 +583,11 @@ export default function PersonsTable() {
         .eq("id", 1)
         .maybeSingle();
 
-      const iso = new Date(dtStr).toISOString();
-      const hhmm = new Date(dtStr).toTimeString().slice(0, 5);
-      const locationResult = adminModal.point ? { point: adminModal.point, status: adminModal.locationStatus || "ok", message: adminModal.locationMessage || "" } : await getCurrentLocationPoint();
-      if (locationResult.status !== "ok" && locationResult.status !== "disabled") {
-        setAdminModal((s) => ({ ...s, point: locationResult.point, locationStatus: locationResult.status, locationMessage: locationResult.message }));
-        Swal.fire(
-          "Location unavailable",
-          locationResult.message || "Please enable location and try again.",
-          locationResult.status === "permission-denied" ? "error" : "warning",
-        );
-        return;
-      }
-      const locationPoint = locationResult.status === "disabled" ? null : locationResult.point;
+      const pad = (n) => String(n).padStart(2, "0");
+      const selectedDate = new Date(dtStr);
+      const formattedTime = `${selectedDate.getFullYear()}-${pad(selectedDate.getMonth() + 1)}-${pad(selectedDate.getDate())} ${pad(selectedDate.getHours())}:${pad(selectedDate.getMinutes())}:${pad(selectedDate.getSeconds() || 0)}`;
+      const hhmm = `${pad(selectedDate.getHours())}:${pad(selectedDate.getMinutes())}`;
+
       let status = "on-time";
       try {
         status = determineAttendanceStatus(hhmm, adminModal.event, settingsData || {}, false);
@@ -708,9 +599,8 @@ export default function PersonsTable() {
         department: person.department,
         event: adminModal.event,
         method: "admin-entry",
-        device_time: iso,
+        device_time: formattedTime,
         status,
-        point: locationPoint,
         photo: adminModal.photo || null,
       };
 
@@ -719,17 +609,13 @@ export default function PersonsTable() {
 
       // refresh presenceMap for the day
       try {
-        const dt = new Date(iso);
-        const start = new Date(dt);
-        start.setHours(0, 0, 0, 0);
-        const end = new Date(dt);
-        end.setHours(23, 59, 59, 999);
+        const ymd = `${selectedDate.getFullYear()}-${pad(selectedDate.getMonth() + 1)}-${pad(selectedDate.getDate())}`;
         const { data: atts, error: attErr } = await supabase
           .from("attendance")
           .select("person_id, event, device_time")
           .eq("person_id", person.id)
-          .gte("device_time", start.toISOString())
-          .lte("device_time", end.toISOString());
+          .gte("device_time", `${ymd} 00:00:00`)
+          .lte("device_time", `${ymd} 23:59:59`);
         if (!attErr && Array.isArray(atts)) {
           const pmap = {};
           pmap[person.id] = { morning: false, afternoon: false, firstScan: null };
@@ -766,7 +652,7 @@ export default function PersonsTable() {
           timerProgressBar: "!bg-[#237227]",
         },
       });
-      setAdminModal({ visible: false, person: null, event: "time-in", datetime: "", photo: null, note: "", point: null, locationStatus: null, locationMessage: "" });
+      setAdminModal({ visible: false, person: null, event: "time-in", datetime: "", photo: null, note: "" });
     } catch (err) {
       console.error(err);
       Swal.fire({
@@ -1316,7 +1202,14 @@ export default function PersonsTable() {
                     >
                       Edit
                     </button>
-                    {!p.archived && (
+                    {p.archived ? (
+                      <button
+                        onClick={() => handleRestore(p)}
+                        className="flex-1 py-1.5 px-3 rounded-md bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold transition-colors cursor-pointer border-none focus:outline-none"
+                      >
+                        Restore
+                      </button>
+                    ) : (
                       <button
                         onClick={() => handleArchive(p)}
                         className="flex-1 py-1.5 px-3 rounded-md bg-white border border-gray-300 text-gray-700 text-xs font-semibold transition-colors cursor-pointer focus:outline-none"
@@ -1333,6 +1226,12 @@ export default function PersonsTable() {
                       Customize Attendance
                     </button>
                   )}
+                  <button
+                    onClick={() => handleDeletePerson(p)}
+                    className="w-full py-1.5 px-3 rounded-md bg-red-50 hover:bg-red-100 text-red-600 text-xs font-semibold transition-colors cursor-pointer border border-red-200 focus:outline-none"
+                  >
+                    Delete
+                  </button>
                 </div>
               </div>
             );
@@ -1758,61 +1657,6 @@ export default function PersonsTable() {
                   className="w-full py-2.5 px-3.5 rounded-xl border border-gray-200 bg-white text-gray-900 outline-none focus:border-[#237227] focus:ring-0 text-sm"
                 />
               </div>
-
-              {/* Row 3: Location (Full Width) */}
-              <div className="col-span-1 sm:col-span-2">
-                <label className="block text-xs font-semibold text-gray-700 mb-1.5">
-                  Location
-                </label>
-                <div className="flex gap-2 items-center">
-                  <div
-                    className="flex-1 py-2.5 px-3.5 bg-gray-50 rounded-xl border border-gray-200 min-h-[42px] text-xs text-gray-800 overflow-hidden text-ellipsis whitespace-nowrap"
-                    title={adminModal.point || ""}
-                  >
-                    {adminModal.point ? (
-                      adminModal.point
-                    ) : (
-                      <span className="text-gray-400">—</span>
-                    )}
-                  </div>
-                  <button
-                    type="button"
-                    onClick={async () => {
-                      try {
-                        setLocLoading(true);
-                        const locationResult = await getCurrentLocationPoint();
-                        setAdminModal((s) => ({
-                          ...s,
-                          point: locationResult.point,
-                          locationStatus: locationResult.status,
-                          locationMessage: locationResult.message,
-                        }));
-                      } catch (e) {
-                        setAdminModal((s) => ({
-                          ...s,
-                          point: null,
-                          locationStatus: "unavailable",
-                          locationMessage:
-                            "Location could not be determined on this device.",
-                        }));
-                      } finally {
-                        setLocLoading(false);
-                      }
-                    }}
-                    className="py-2.5 px-4 rounded-xl border border-gray-300 bg-white cursor-pointer font-semibold text-xs text-gray-700 whitespace-nowrap"
-                    disabled={locLoading}
-                  >
-                    {locLoading ? "..." : "Refresh"}
-                  </button>
-                </div>
-                {adminModal.locationMessage &&
-                  adminModal.locationStatus &&
-                  adminModal.locationStatus !== "ok" && (
-                    <div className="mt-1.5 text-amber-700 text-xs leading-relaxed">
-                      {adminModal.locationMessage}
-                    </div>
-                  )}
-              </div>
             </div>
 
             {/* Modal Actions */}
@@ -1826,7 +1670,6 @@ export default function PersonsTable() {
                     datetime: "",
                     photo: null,
                     note: "",
-                    point: null,
                   })
                 }
                 className="py-2.5 px-6 rounded-xl text-sm font-semibold border border-gray-300 bg-white text-gray-700 transition-colors cursor-pointer focus:outline-none"

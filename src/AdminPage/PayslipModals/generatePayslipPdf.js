@@ -272,7 +272,7 @@ export function drawPayslipOnDoc(
         ? Number(gross)
         : Number(grossToShow || 0);
     const deductionsAmount = Number(totalDeductions || 0);
-    const netPay = Math.round((grossAmount - deductionsAmount) * 100) / 100;
+    const netPay = Math.max(0, Math.round((grossAmount - deductionsAmount) * 100) / 100);
     drawLinedField("Net Pay:", formatCurrency(netPay), true);
   } catch (e) {
     // ignore net pay rendering errors

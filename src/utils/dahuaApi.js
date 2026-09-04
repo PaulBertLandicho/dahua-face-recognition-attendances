@@ -125,10 +125,17 @@ export async function syncDahuaAttendance(limit = 100) {
   });
 }
 
-export async function deleteDahuaAttendance(personId, deviceTime) {
+export async function deleteDahuaAttendance(personId, deviceTime, dbId = null) {
   return fetchDahuaApi("/api/dahua/attendance", {
     method: "DELETE",
-    body: JSON.stringify({ personId, deviceTime }),
+    body: JSON.stringify({ personId, deviceTime, dbId }),
+  });
+}
+
+export async function deleteDahuaPerson(personId, hardDelete = false) {
+  return fetchDahuaApi("/api/dahua/person", {
+    method: "DELETE",
+    body: JSON.stringify({ personId, hardDelete }),
   });
 }
 

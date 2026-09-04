@@ -5,7 +5,7 @@ import { getAttendanceStatus } from "./attendanceUtils";
 import * as XLSX from "xlsx";
 import Swal from "sweetalert2";
 import { syncDahuaAttendance, deleteDahuaAttendance } from "../utils/dahuaApi";
-import { attendanceDateKey, attendanceTimestamp, formatAttendanceDateTime, parseAttendanceTime, updateAttendanceClock } from "../utils/attendanceTime";
+import { attendanceDateKey, attendanceTimestamp, formatAttendanceDateTime, parseAttendanceTime } from "../utils/attendanceTime";
 import {
   FiSearch,
   FiDownload,
@@ -31,6 +31,7 @@ export default function AttendanceTable() {
   const [error, setError] = useState(null);
   const [currentPage, setCurrentPage] = useState(1);
   const itemsPerPage = 10;
+  const [selectedRecords, setSelectedRecords] = useState(new Set());
 
   useEffect(() => {
     setCurrentPage(1);
@@ -205,122 +206,133 @@ export default function AttendanceTable() {
 
   const handleEdit = async (rec) => {
     try {
+      const pad = (n) => String(n).padStart(2, "0");
       const d = rec.device_time ? parseAttendanceTime(rec.device_time).date : new Date();
-      const pad = (n) => String(n).padStart(2, '0');
+      const defaultDate = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
       const defaultTime = `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
 
       const { value: formValues } = await Swal.fire({
-        title: 'Edit Attendance',
+        title: "Edit Attendance",
         html: `
           <div style="text-align: left; margin-top: 1.25rem;">
-            <!-- Time Field (Full Width) -->
-            <div style="margin-bottom: 1rem;">
+            <!-- 2-Column Grid for Date and Time -->
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.85rem; margin-bottom: 1rem;">
+              <div>
+                <label style="display: block; font-size: 0.85rem; font-weight: 600; color: #374151; margin-bottom: 0.35rem;">
+                  Date
+                </label>
+                <input 
+                  id="swal-date" 
+                  type="date"
+                  value="${defaultDate}" 
+                  style="display: block; width: 100%; padding: 0.65rem 0.85rem; font-size: 0.95rem; border: 1.5px solid #d1d5db; border-radius: 0.75rem; outline: none; box-sizing: border-box; background: #ffffff; color: #1f2937; cursor: pointer; transition: all 0.15s ease;"
+                  onfocus="this.style.borderColor='#237227'; this.style.outline='none'; this.style.boxShadow='0 0 0 1px #237227';"
+                  onblur="this.style.borderColor='#d1d5db'; this.style.outline='none'; this.style.boxShadow='none';"
+                />
+              </div>
+              <div>
+                <label style="display: block; font-size: 0.85rem; font-weight: 600; color: #374151; margin-bottom: 0.35rem;">
+                  Time
+                </label>
+                <input 
+                  id="swal-time" 
+                  type="time"
+                  step="1"
+                  value="${defaultTime}" 
+                  style="display: block; width: 100%; padding: 0.65rem 0.85rem; font-size: 0.95rem; border: 1.5px solid #d1d5db; border-radius: 0.75rem; outline: none; box-sizing: border-box; background: #ffffff; color: #1f2937; cursor: pointer; transition: all 0.15s ease;"
+                  onfocus="this.style.borderColor='#237227'; this.style.outline='none'; this.style.boxShadow='0 0 0 1px #237227';"
+                  onblur="this.style.borderColor='#d1d5db'; this.style.outline='none'; this.style.boxShadow='none';"
+                />
+              </div>
+            </div>
+
+            <!-- Full Width Event Field -->
+            <div style="margin-bottom: 0.5rem;">
               <label style="display: block; font-size: 0.85rem; font-weight: 600; color: #374151; margin-bottom: 0.35rem;">
-                Time
+                Attendance Event
               </label>
-              <input 
-                id="swal-time" 
-                type="time"
-                step="1"
-                value="${defaultTime}" 
+              <select 
+                id="swal-event" 
                 style="display: block; width: 100%; padding: 0.65rem 0.85rem; font-size: 0.95rem; border: 1.5px solid #d1d5db; border-radius: 0.75rem; outline: none; box-sizing: border-box; background: #ffffff; color: #1f2937; cursor: pointer; transition: all 0.15s ease;"
                 onfocus="this.style.borderColor='#237227'; this.style.outline='none'; this.style.boxShadow='0 0 0 1px #237227';"
                 onblur="this.style.borderColor='#d1d5db'; this.style.outline='none'; this.style.boxShadow='none';"
-              />
-            </div>
-
-            <!-- 2-Column Grid for Event and Status -->
-            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.85rem; margin-bottom: 0.5rem;">
-              <!-- Column 1: Event Field -->
-              <div>
-                <label style="display: block; font-size: 0.85rem; font-weight: 600; color: #374151; margin-bottom: 0.35rem;">
-                  Attendance Event
-                </label>
-                <select 
-                  id="swal-event" 
-                  style="display: block; width: 100%; padding: 0.65rem 0.85rem; font-size: 0.95rem; border: 1.5px solid #d1d5db; border-radius: 0.75rem; outline: none; box-sizing: border-box; background: #ffffff; color: #1f2937; cursor: pointer; transition: all 0.15s ease;"
-                  onfocus="this.style.borderColor='#237227'; this.style.outline='none'; this.style.boxShadow='0 0 0 1px #237227';"
-                  onblur="this.style.borderColor='#d1d5db'; this.style.outline='none'; this.style.boxShadow='none';"
-                >
-                  <option value="time-in" ${rec.event === 'time-in' ? 'selected' : ''}>Time In</option>
-                  <option value="time-out" ${rec.event === 'time-out' ? 'selected' : ''}>Time Out</option>
-                </select>
-              </div>
-
-              <!-- Column 2: Status Field -->
-              <div>
-                <label style="display: block; font-size: 0.85rem; font-weight: 600; color: #374151; margin-bottom: 0.35rem;">
-                  Attendance Status
-                </label>
-                <select 
-                  id="swal-status" 
-                  style="display: block; width: 100%; padding: 0.65rem 0.85rem; font-size: 0.95rem; border: 1.5px solid #d1d5db; border-radius: 0.75rem; outline: none; box-sizing: border-box; background: #ffffff; color: #1f2937; cursor: pointer; transition: all 0.15s ease;"
-                  onfocus="this.style.borderColor='#237227'; this.style.outline='none'; this.style.boxShadow='0 0 0 1px #237227';"
-                  onblur="this.style.borderColor='#d1d5db'; this.style.outline='none'; this.style.boxShadow='none';"
-                >
-                  <option value="on-time" ${rec.status === 'on-time' ? 'selected' : ''}>on-time</option>
-                  <option value="late" ${rec.status === 'late' ? 'selected' : ''}>late</option>
-                  <option value="overtime" ${rec.status === 'overtime' ? 'selected' : ''}>overtime</option>
-                </select>
-              </div>
+              >
+                <option value="time-in" ${rec.event === "time-in" ? "selected" : ""}>Time In</option>
+                <option value="time-out" ${rec.event === "time-out" ? "selected" : ""}>Time Out</option>
+              </select>
             </div>
           </div>
         `,
         focusConfirm: false,
         showCancelButton: true,
-        confirmButtonText: 'Save',
-        confirmButtonColor: '#237227',
-        cancelButtonColor: '#E5E7EB',
+        confirmButtonText: "Save",
+        confirmButtonColor: "#237227",
+        cancelButtonColor: "#E5E7EB",
         customClass: {
-          popup: '!rounded-3xl !shadow-[0_24px_60px_rgba(0,0,0,0.15)] !px-8 !py-8 !max-w-[460px]',
-          title: '!text-gray-800 !text-[1.4rem] !font-bold !mt-1 !mb-0',
-          actions: '!flex !items-center !justify-center !gap-4 !mt-6 !w-full',
-          confirmButton: '!bg-[#237227] hover:!bg-[#1a5a1d] !text-white !font-semibold !rounded-lg !px-7 !py-2.5 !text-sm cursor-pointer !m-0 !min-w-[100px] !transform-none hover:!transform-none focus:!outline-none focus:!ring-0 focus:!shadow-none',
-          cancelButton: '!bg-white !border !border-gray-300 !text-gray-700 !font-semibold !rounded-lg !px-7 !py-2.5 !text-sm cursor-pointer !m-0 !min-w-[100px] !transform-none hover:!transform-none focus:!outline-none focus:!ring-0 focus:!border-gray-300 focus:!shadow-none active:!outline-none active:!shadow-none !outline-none !shadow-none',
+          popup: "!rounded-3xl !shadow-[0_24px_60px_rgba(0,0,0,0.15)] !px-8 !py-8 !max-w-[460px]",
+          title: "!text-gray-800 !text-[1.4rem] !font-bold !mt-1 !mb-0",
+          actions: "!flex !items-center !justify-center !gap-4 !mt-6 !w-full",
+          confirmButton: "!bg-[#237227] hover:!bg-[#1a5a1d] !text-white !font-semibold !rounded-lg !px-7 !py-2.5 !text-sm cursor-pointer !m-0 !min-w-[100px] !transform-none hover:!transform-none focus:!outline-none focus:!ring-0 focus:!shadow-none",
+          cancelButton: "!bg-white !border !border-gray-300 !text-gray-700 !font-semibold !rounded-lg !px-7 !py-2.5 !text-sm cursor-pointer !m-0 !min-w-[100px] !transform-none hover:!transform-none focus:!outline-none focus:!ring-0 focus:!border-gray-300 focus:!shadow-none active:!outline-none active:!shadow-none !outline-none !shadow-none",
         },
         buttonsStyling: false,
         didOpen: () => {
-          const timeInput = document.getElementById('swal-time');
-          if (timeInput) {
-            timeInput.addEventListener('click', () => {
-              try {
-                if (typeof timeInput.showPicker === 'function') {
-                  timeInput.showPicker();
-                }
-              } catch (err) {}
-            });
-          }
+          ["swal-date", "swal-time"].forEach((id) => {
+            const el = document.getElementById(id);
+            if (el) {
+              el.addEventListener("click", () => {
+                try {
+                  if (typeof el.showPicker === "function") el.showPicker();
+                } catch (err) {}
+              });
+            }
+          });
         },
         preConfirm: () => {
-          const timeVal = document.getElementById('swal-time').value.trim();
-          const eventVal = document.getElementById('swal-event').value;
-          const statusVal = document.getElementById('swal-status').value;
-          if (!timeVal) { Swal.showValidationMessage('Time is required'); return false; }
+          const dateVal = document.getElementById("swal-date").value.trim();
+          const timeVal = document.getElementById("swal-time").value.trim();
+          const eventVal = document.getElementById("swal-event").value;
+
+          if (!dateVal) {
+            Swal.showValidationMessage("Date is required");
+            return false;
+          }
+          if (!timeVal) {
+            Swal.showValidationMessage("Time is required");
+            return false;
+          }
           const fullTime = timeVal.length === 5 ? `${timeVal}:00` : timeVal;
-          return { time: fullTime, event: eventVal, status: statusVal };
-        }
+          return { date: dateVal, time: fullTime, event: eventVal };
+        },
       });
+
       if (!formValues) return;
-      const { time, event, status } = formValues;
-      const [h, m, s] = time.split(':').map(Number);
-      const updatedTime = updateAttendanceClock(rec.device_time, `${String(h || 0).padStart(2, '0')}:${String(m || 0).padStart(2, '0')}:${String(s || 0).padStart(2, '0')}`);
-      const { error } = await supabase.from('attendance').update({ device_time: updatedTime, event, status }).eq('id', rec.id);
+      const { date, time, event } = formValues;
+      const updatedTime = `${date} ${time}`;
+
+      const { error } = await supabase
+        .from("attendance")
+        .update({ device_time: updatedTime, event })
+        .eq("id", rec.id);
+
       if (error) {
         Swal.fire({
-          title: 'Error',
+          title: "Error",
           text: error.message,
-          icon: 'error',
-          confirmButtonText: 'OK',
+          icon: "error",
+          confirmButtonText: "OK",
           customClass: {
-            popup: '!rounded-3xl !shadow-[0_24px_60px_rgba(0,0,0,0.15)] !px-8 !py-8 !max-w-[380px]',
-            confirmButton: '!bg-red-500 hover:!bg-red-600 !text-white !font-semibold !rounded-lg !px-8 !py-2.5 !text-sm',
+            popup: "!rounded-3xl !shadow-[0_24px_60px_rgba(0,0,0,0.15)] !px-8 !py-8 !max-w-[380px]",
+            confirmButton: "!bg-red-500 hover:!bg-red-600 !text-white !font-semibold !rounded-lg !px-8 !py-2.5 !text-sm",
           },
           buttonsStyling: false,
         });
         return;
       }
-      setRecords((prev) => prev.map((r) => (r.id === rec.id ? { ...r, device_time: updatedTime, event, status } : r)));
-      showToast('Attendance updated successfully!');
+      setRecords((prev) =>
+        prev.map((r) => (r.id === rec.id ? { ...r, device_time: updatedTime, event } : r))
+      );
+      showToast("Attendance updated successfully!");
     } catch (e) {
       console.error('handleEdit failed', e);
       Swal.fire({
@@ -427,7 +439,7 @@ export default function AttendanceTable() {
     if (!confirm.isConfirmed) return;
 
     try {
-      const data = await deleteDahuaAttendance(rec.person_id, rec.device_time);
+      const data = await deleteDahuaAttendance(rec.person_id, rec.device_time, rec.id);
 
       if (data && data.error) {
         throw new Error(data.error);
@@ -452,6 +464,67 @@ export default function AttendanceTable() {
         },
         buttonsStyling: false,
       });
+    }
+  };
+
+  const handleBatchDeleteFromDahua = async () => {
+    if (selectedRecords.size === 0) return;
+    
+    const confirm = await Swal.fire({
+      title: `Delete ${selectedRecords.size} records from Dahua?`,
+      text: "This permanently deletes the matching attendance records from the Dahua device and this website.",
+      icon: "warning",
+      showCancelButton: true,
+      confirmButtonText: "Delete from Dahua",
+      confirmButtonColor: "#dc2626",
+      cancelButtonColor: "#ffffff",
+      customClass: {
+        popup: "!rounded-3xl !shadow-[0_24px_60px_rgba(0,0,0,0.15)] !px-8 !py-8 !max-w-[380px]",
+        title: "!text-gray-800 !text-[1.35rem] !font-bold !mt-2",
+        actions: "!flex !items-center !justify-center !gap-4 !mt-6 !w-full",
+        confirmButton: "!bg-[#dc2626] hover:!bg-red-700 !text-white !font-semibold !rounded-lg !px-6 !py-2.5 !text-sm cursor-pointer !m-0 !min-w-[100px]",
+        cancelButton: "!bg-white !border !border-gray-300 !text-gray-700 !font-semibold !rounded-lg !px-6 !py-2.5 !text-sm cursor-pointer !m-0 !min-w-[100px]",
+      },
+      buttonsStyling: false,
+    });
+    if (!confirm.isConfirmed) return;
+
+    Swal.fire({
+      title: "Deleting...",
+      html: `Deleting ${selectedRecords.size} record(s) from Dahua and database...`,
+      allowOutsideClick: false,
+      didOpen: () => {
+        Swal.showLoading();
+      }
+    });
+
+    let successCount = 0;
+    let failCount = 0;
+    
+    const recordsToDelete = Array.from(selectedRecords).map(id => records.find(r => r.id === id)).filter(Boolean);
+
+    for (const rec of recordsToDelete) {
+      try {
+        const data = await deleteDahuaAttendance(rec.person_id, rec.device_time, rec.id);
+        if (data && data.error) throw new Error(data.error);
+
+        const { error: dbError } = await supabase.from("attendance").delete().eq("id", rec.id);
+        if (dbError) throw new Error(dbError.message || "Could not delete the website record.");
+        
+        successCount++;
+        setRecords((prev) => prev.filter((record) => record.id !== rec.id));
+      } catch (err) {
+        failCount++;
+        console.error("Failed to delete record:", rec.id, err);
+      }
+    }
+    
+    setSelectedRecords(new Set());
+    
+    if (failCount > 0) {
+      Swal.fire("Delete completed with errors", `Successfully deleted ${successCount} records. Failed to delete ${failCount} records.`, "warning");
+    } else {
+      showToast(`Successfully deleted ${successCount} record(s) from Dahua!`);
     }
   };
 
@@ -509,6 +582,24 @@ export default function AttendanceTable() {
   const totalPages = Math.ceil(totalRecords / itemsPerPage) || 1;
   const startIndex = (currentPage - 1) * itemsPerPage;
   const currentRecords = activeRecords.slice(startIndex, startIndex + itemsPerPage);
+
+  const handleToggleSelectAll = (e) => {
+    if (e.target.checked) {
+      const allIds = activeRecords.map(r => r.id);
+      setSelectedRecords(new Set(allIds));
+    } else {
+      setSelectedRecords(new Set());
+    }
+  };
+
+  const handleToggleSelect = (id) => {
+    setSelectedRecords(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
 
   const columns = [
     { key: "photo", label: "Photo" },
@@ -706,6 +797,14 @@ export default function AttendanceTable() {
           >
             {Icons.download} Export Excel
           </button>
+          {selectedRecords.size > 0 && (
+            <button
+              onClick={handleBatchDeleteFromDahua}
+              className="inline-flex items-center gap-1.5 py-2 px-4 rounded-md text-[0.85rem] font-semibold cursor-pointer whitespace-nowrap bg-red-600 hover:bg-red-700 text-white shadow-[0_1px_4px_rgba(220,38,38,0.2)] border-none outline-none focus:outline-none"
+            >
+              Delete Selected from Dahua ({selectedRecords.size})
+            </button>
+          )}
           <button
             onClick={handleSyncDahuaAttendance}
             disabled={syncingDahua}
@@ -722,6 +821,14 @@ export default function AttendanceTable() {
           <table className="w-full border-collapse text-[0.875rem] min-w-[1200px]">
             <thead>
               <tr>
+                <th className="sticky top-0 z-10 bg-white text-black font-bold py-3.5 px-3.5 text-center border-b-2 border-gray-200 w-12">
+                  <input 
+                    type="checkbox" 
+                    onChange={handleToggleSelectAll} 
+                    checked={activeRecords.length > 0 && selectedRecords.size === activeRecords.length}
+                    className="cursor-pointer rounded border-gray-300 text-[#237227] focus:ring-[#237227]"
+                  />
+                </th>
                 {columns.map((col) => (
                   <th key={col.key} className="sticky top-0 z-10 bg-white text-black font-bold py-3.5 px-3.5 text-left border-b-2 border-gray-200 tracking-wide uppercase text-xs whitespace-nowrap">
                     {col.label}
@@ -747,6 +854,14 @@ export default function AttendanceTable() {
                   
                   return (
                     <tr key={row.id} className="odd:bg-white even:bg-[#f9fafb]">
+                      <td className="py-[13px] px-3.5 border-b border-[#edf2ee] text-center align-middle w-12">
+                        <input 
+                          type="checkbox"
+                          checked={selectedRecords.has(row.id)}
+                          onChange={() => handleToggleSelect(row.id)}
+                          className="cursor-pointer rounded border-gray-300 text-[#237227] focus:ring-[#237227]"
+                        />
+                      </td>
                       {columns.map((col) => {
                         if (col.key === "photo") {
                           return (

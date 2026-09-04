@@ -547,11 +547,9 @@ export default function PayslipModal({
   const adjustedGrossPay =
     Math.round((standardPayAmount + otPay + totalHolidayPay) * 100) / 100;
   const adjustedNetPay =
-    Math.round((adjustedGrossPay - totalDeductions) * 100) / 100;
+    Math.max(0, Math.round((adjustedGrossPay - totalDeductions) * 100) / 100);
 
-  const totalLateOccurrences = detailedAttendance
-    .map((rec) => (rec.lateDetails ? rec.lateDetails.length : 0))
-    .reduce((sum, n) => sum + n, 0);
+
 
   const allLateDetails = detailedAttendance
     .map((rec) =>
@@ -964,10 +962,7 @@ export default function PayslipModal({
           </h3>
           <table className="w-full border-collapse mb-6 text-[0.95rem]">
             <tbody>
-              <tr className="bg-gray-50">
-                <td className="py-2.5 px-2 border-b border-gray-200 text-gray-800">Total Late Occurrences</td>
-                <td className="py-2.5 px-2 border-b border-gray-200 text-gray-800">{totalLateOccurrences} occurrence(s)</td>
-              </tr>
+
               <tr className="bg-white">
                 <td className="py-2.5 px-2 border-b border-gray-200 text-gray-800">Late Count</td>
                 <td className="py-2.5 px-2 border-b border-gray-200 text-gray-800">{payroll.lateCount} occurrence(s)</td>

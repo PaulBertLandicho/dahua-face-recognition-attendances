@@ -295,7 +295,8 @@ export default function AdminSettings() {
                   name="afternoon_start"
                   value={settings.afternoon_start}
                   onChange={handleChange}
-                  className="w-full px-4 py-3 text-base rounded-2xl border border-gray-300 bg-white text-gray-800 outline-none focus:outline-none focus:ring-0 focus:border-[#237227] box-border cursor-pointer"
+                  disabled
+                  className="w-full px-4 py-3 text-base rounded-2xl border border-gray-300 bg-gray-100 text-gray-500 outline-none box-border cursor-not-allowed"
                 />
               </div>
               <div className="mb-5">

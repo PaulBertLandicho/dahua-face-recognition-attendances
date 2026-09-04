@@ -31,7 +31,6 @@ const DAHUA_DEVICE_PORT = Number(process.env.DAHUA_DEVICE_PORT || 80);
 const DAHUA_USERNAME = process.env.DAHUA_USERNAME || "admin";
 const DAHUA_PASSWORD = process.env.DAHUA_PASSWORD || "";
 const DAHUA_REQUEST_TIMEOUT_MS = Number(process.env.DAHUA_REQUEST_TIMEOUT_MS || 30000);
-const DAHUA_TIMEZONE = process.env.DAHUA_TIMEZONE || "Asia/Manila";
 const AUTO_SYNC_ATTENDANCE_MINUTES = Number(process.env.AUTO_SYNC_ATTENDANCE_MINUTES || 0);
 
 // Dahua Local Connector Configuration (optional, for network isolation fix)
@@ -66,7 +65,6 @@ const pool = mysql.createPool({
   waitForConnections: true,
   connectionLimit: 10,
   queueLimit: 0,
-  dateStrings: true,
 });
 
 process.on("uncaughtException", (err) => {
@@ -268,45 +266,30 @@ function errorMessage(error, fallback = "Unknown error") {
 function normalizeDahuaDeviceTime(value) {
   if (!value) return null;
   const text = String(value).trim();
-  const localMatch = text.match(/^(\d{4})[-/](\d{2})[-/](\d{2})[ T](\d{2}):(\d{2})(?::(\d{2}))?/);
-  if (localMatch && !/[zZ]|[+-]\d{2}:?\d{2}$/.test(text)) {
-    return `${localMatch[1]}-${localMatch[2]}-${localMatch[3]} ${localMatch[4]}:${localMatch[5]}:${localMatch[6] || "00"}`;
-  }
+  const pad = (n) => String(n).padStart(2, "0");
 
+  // Handle unix timestamps (seconds or milliseconds)
   const numeric = Number(text);
-  const date = /^\d{10,13}$/.test(text) ? new Date(text.length === 10 ? numeric * 1000 : numeric) : new Date(text);
-  if (Number.isNaN(date.getTime())) return null;
-
-  try {
-    const parts = new Intl.DateTimeFormat("en-CA", {
-      timeZone: DAHUA_TIMEZONE,
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit",
-      hour: "2-digit",
-      minute: "2-digit",
-      second: "2-digit",
-      hourCycle: "h23",
-    }).formatToParts(date).reduce((result, part) => {
-      if (part.type !== "literal") result[part.type] = part.value;
-      return result;
-    }, {});
-    return `${parts.year}-${parts.month}-${parts.day} ${parts.hour}:${parts.minute}:${parts.second}`;
-  } catch (error) {
-    return date.toISOString().slice(0, 19).replace("T", " ");
+  if (/^\d{10,13}$/.test(text)) {
+    const ms = text.length === 10 ? numeric * 1000 : numeric;
+    const d = new Date(ms);
+    if (Number.isNaN(d.getTime())) return null;
+    // Format using LOCAL time (not UTC) to match device timezone
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
   }
-}
 
-function parseDahuaAttendanceTime(value) {
-  const text = String(value || "").trim();
-  const localMatch = text.match(/^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})(?::(\d{2}))?/);
-  if (localMatch && !/[zZ]|[+-]\d{2}:?\d{2}$/.test(text)) {
-    return new Date(Date.UTC(
-      Number(localMatch[1]), Number(localMatch[2]) - 1, Number(localMatch[3]),
-      Number(localMatch[4]), Number(localMatch[5]), Number(localMatch[6] || 0)
-    ));
+  // For string timestamps like "2026-09-04 08:15:23" — extract components directly
+  // to avoid timezone shifts from Date parsing
+  const normalizedText = text.replace(/[\/]/g, "-");
+  const match = normalizedText.match(/(\d{4})-(\d{1,2})-(\d{1,2})[T\s](\d{1,2}):(\d{2}):(\d{2})/);
+  if (match) {
+    return `${match[1]}-${pad(match[2])}-${pad(match[3])} ${pad(match[4])}:${match[5]}:${match[6]}`;
   }
-  return new Date(text);
+
+  // Fallback: try parsing and format using local time components
+  const parsed = new Date(normalizedText);
+  if (Number.isNaN(parsed.getTime())) return null;
+  return `${parsed.getFullYear()}-${pad(parsed.getMonth() + 1)}-${pad(parsed.getDate())} ${pad(parsed.getHours())}:${pad(parsed.getMinutes())}:${pad(parsed.getSeconds())}`;
 }
 
 function mapDahuaAttendanceEvent(record) {
@@ -338,46 +321,71 @@ function dedupeDahuaAttendanceByPersonDay(records, settings = null) {
   const morningStart = parseHHMMToMinutes(settings?.morning_start || "08:00", 8 * 60);
   const morningEnd = parseHHMMToMinutes(settings?.morning_end || "11:59", 11 * 60 + 59);
   const afternoonStart = parseHHMMToMinutes(settings?.afternoon_start || "13:00", 13 * 60);
-  const afternoonEnd = parseHHMMToMinutes(settings?.afternoon_end || "17:00", 17 * 60);
+
+  // Helper: extract HH:MM minutes from a local time string "YYYY-MM-DD HH:MM:SS"
+  function minutesFromLocalTime(deviceTime) {
+    const match = String(deviceTime).match(/(\d{2}):(\d{2}):(\d{2})$/);
+    if (match) return Number(match[1]) * 60 + Number(match[2]);
+    // Fallback for unexpected formats
+    const d = new Date(deviceTime);
+    return Number.isNaN(d.getTime()) ? -1 : d.getHours() * 60 + d.getMinutes();
+  }
+
+  // Helper: extract date portion "YYYY-MM-DD" from a local time string
+  function dateFromLocalTime(deviceTime) {
+    const match = String(deviceTime).match(/^(\d{4}-\d{2}-\d{2})/);
+    return match ? match[1] : null;
+  }
 
   const byPersonDay = new Map();
   for (const record of safeRecords) {
-    const date = parseDahuaAttendanceTime(record.device_time);
-    if (Number.isNaN(date.getTime())) continue;
+    const dateStr = dateFromLocalTime(record.device_time);
+    if (!dateStr) continue;
+    const mins = minutesFromLocalTime(record.device_time);
+    if (mins < 0) continue;
 
-    const dateKey = `${record.person_id}|${date.toISOString().slice(0, 10)}`;
+    // Assign event by time window (matches the MySQL trigger logic)
+    let event;
+    if (mins >= morningStart && mins <= morningEnd) {
+      event = "time-in";
+    } else if (mins >= afternoonStart) {
+      event = "time-out";
+    } else {
+      // Outside both windows — skip this record
+      continue;
+    }
+
+    const dateKey = `${record.person_id}|${dateStr}`;
     const bucket = byPersonDay.get(dateKey) || [];
     bucket.push({
       ...record,
-      _storedTime: parseDahuaAttendanceTime(record.device_time).getTime(),
-      _minutes: date.getUTCHours() * 60 + date.getUTCMinutes(),
-      event: String(record.event || "").toLowerCase() === "time-out" ? "time-out" : "time-in",
+      _dateStr: dateStr,
+      _minutes: mins,
+      event,
     });
     byPersonDay.set(dateKey, bucket);
   }
 
   const finalRecords = [];
   for (const bucket of byPersonDay.values()) {
+    // Morning In: FIRST scan in the morning window (earliest time)
     const morningInCandidates = bucket
-      .filter((record) => record.event === "time-in" && record._minutes >= morningStart && record._minutes <= morningEnd)
-      .sort((a, b) => a._storedTime - b._storedTime);
+      .filter((record) => record.event === "time-in")
+      .sort((a, b) => a._minutes - b._minutes);
 
+    // Afternoon Out: LAST scan in the afternoon window (latest time)
     const afternoonOutCandidates = bucket
-      .filter((record) => {
-        const isAfternoonOut = record.event === "time-out" && record._minutes >= afternoonStart && record._minutes <= afternoonEnd;
-        const isLateOut = record.event === "time-out" && record._minutes > afternoonEnd && record._minutes <= 23 * 60 + 59;
-        return isAfternoonOut || isLateOut;
-      })
-      .sort((a, b) => a._storedTime - b._storedTime);
+      .filter((record) => record.event === "time-out")
+      .sort((a, b) => a._minutes - b._minutes);
 
     const morningIn = morningInCandidates[0];
-    const afternoonOut = afternoonOutCandidates[0];
+    const afternoonOut = afternoonOutCandidates.length ? afternoonOutCandidates[afternoonOutCandidates.length - 1] : null;
 
     if (morningIn) finalRecords.push(morningIn);
     if (afternoonOut) finalRecords.push(afternoonOut);
   }
 
-  return finalRecords.sort((a, b) => a._storedTime - b._storedTime);
+  return finalRecords;
 }
 
 async function getSettingsRow() {
@@ -388,7 +396,7 @@ async function getSettingsRow() {
 async function generatePayrollPeriodsFromAttendance(attendanceRows = []) {
   if (!Array.isArray(attendanceRows) || !attendanceRows.length) {
     const [allAttendance] = await pool.query(
-      "SELECT * FROM attendance WHERE archived = 0 OR archived IS NULL ORDER BY device_time ASC"
+      "SELECT * FROM attendance WHERE archived = 0 ORDER BY device_time ASC"
     );
     attendanceRows = allAttendance;
   }
@@ -414,34 +422,45 @@ async function generatePayrollPeriodsFromAttendance(attendanceRows = []) {
     if (!person) continue;
 
     const [rows] = await pool.query(
-      "SELECT * FROM attendance WHERE person_id = ? AND (archived = 0 OR archived IS NULL) ORDER BY device_time ASC",
+      "SELECT * FROM attendance WHERE person_id = ? AND archived = 0 ORDER BY device_time ASC",
       [personId]
     );
     if (!rows.length) continue;
 
-    const earliestDate = parseDahuaAttendanceTime(rows[0].device_time);
-    const latestDate = parseDahuaAttendanceTime(rows[rows.length - 1].device_time);
+    const [historyRows] = await pool.query(
+      "SELECT period FROM payroll_released_history WHERE person_id = ?",
+      [personId]
+    );
+    const releasedPeriods = new Set(historyRows.map(r => r.period));
+
+    const earliestDate = new Date(rows[0].device_time);
+    const latestDate = new Date(rows[rows.length - 1].device_time);
     let cursor = new Date(earliestDate);
-    cursor.setUTCHours(0, 0, 0, 0);
+    cursor.setHours(0, 0, 0, 0);
 
     while (cursor <= latestDate) {
       const periodEnd = new Date(cursor);
-      periodEnd.setUTCDate(periodEnd.getUTCDate() + periodDays - 1);
-      periodEnd.setUTCHours(23, 59, 59, 999);
+      periodEnd.setDate(periodEnd.getDate() + periodDays - 1);
+      periodEnd.setHours(23, 59, 59, 999);
 
       const periodStartYmd = cursor.toISOString().slice(0, 10);
       const periodEndYmd = periodEnd.toISOString().slice(0, 10);
       const periodKey = `${periodStartYmd}_to_${periodEndYmd}`;
 
+      if (releasedPeriods.has(periodKey)) {
+        cursor.setDate(cursor.getDate() + periodDays);
+        continue;
+      }
+
       const periodAttendance = rows.filter((record) => {
-        const dt = parseDahuaAttendanceTime(record.device_time);
+        const dt = new Date(record.device_time);
         return dt >= cursor && dt <= periodEnd;
       });
 
       if (periodAttendance.length) {
         const uniqueDates = new Set(
           periodAttendance
-            .map((record) => parseDahuaAttendanceTime(record.device_time).toISOString().slice(0, 10))
+            .map((record) => new Date(record.device_time).toISOString().slice(0, 10))
             .filter(Boolean)
         );
 
@@ -452,20 +471,26 @@ async function generatePayrollPeriodsFromAttendance(attendanceRows = []) {
         const afternoonEnd = Number((settings?.afternoon_end || "17:00").split(":")[0] || 17) * 60 + Number((settings?.afternoon_end || "17:00").split(":")[1] || 0);
 
         let lateCount = 0;
+        let daysPresent = 0;
+        
         for (const dateKey of uniqueDates) {
-          const byDate = periodAttendance.filter((record) => parseDahuaAttendanceTime(record.device_time).toISOString().slice(0, 10) === dateKey);
-          byDate.sort((a, b) => parseDahuaAttendanceTime(a.device_time) - parseDahuaAttendanceTime(b.device_time));
-          const morningRecord = byDate.find((record) => parseDahuaAttendanceTime(record.device_time).getUTCHours() < 12) || null;
-          if (morningRecord) {
-            const dt = parseDahuaAttendanceTime(morningRecord.device_time);
-            const minutes = dt.getUTCHours() * 60 + dt.getUTCMinutes();
-            if (minutes > morningStart + morningGrace) lateCount += 1;
-          }
-          const afternoonRecord = [...byDate].reverse().find((record) => parseDahuaAttendanceTime(record.device_time).getUTCHours() >= 12) || null;
-          if (afternoonRecord) {
-            const dt = parseDahuaAttendanceTime(afternoonRecord.device_time);
-            const minutes = dt.getUTCHours() * 60 + dt.getUTCMinutes();
-            if (minutes > afternoonEnd + afternoonGrace) lateCount += 1;
+          const byDate = periodAttendance.filter((record) => new Date(record.device_time).toISOString().slice(0, 10) === dateKey);
+          byDate.sort((a, b) => new Date(a.device_time) - new Date(b.device_time));
+          const morningRecord = byDate.find((record) => new Date(record.device_time).getHours() < 12) || null;
+          const afternoonRecord = [...byDate].reverse().find((record) => new Date(record.device_time).getHours() >= 12) || null;
+
+          // Only count the day as present if they have BOTH morning in and afternoon out
+          if (morningRecord && afternoonRecord) {
+            daysPresent += 1;
+            
+            // Only apply late penalties for days they are actually paid for
+            const morningDt = new Date(morningRecord.device_time);
+            const morningMinutes = morningDt.getHours() * 60 + morningDt.getMinutes();
+            if (morningMinutes > morningStart + morningGrace) lateCount += 1;
+            
+            const afternoonDt = new Date(afternoonRecord.device_time);
+            const afternoonMinutes = afternoonDt.getHours() * 60 + afternoonDt.getMinutes();
+            if (afternoonMinutes > afternoonEnd + afternoonGrace) lateCount += 1;
           }
         }
 
@@ -481,11 +506,13 @@ async function generatePayrollPeriodsFromAttendance(attendanceRows = []) {
         const philhealth = Number(rate.philhealth ?? 0);
         const cashAdvance = Number(person.cash_advance ?? 0);
 
-        const daysPresent = uniqueDates.size;
         const totalLateDeduction = lateCount * latePenalty;
         const totalDeductions = sss + pagIbig + philhealth + cashAdvance + totalLateDeduction;
         const gross = dailyRate * daysPresent;
-        const net = gross - totalDeductions;
+        let net = gross - totalDeductions;
+        
+        // Prevent negative net pay
+        if (net < 0) net = 0;
 
         const payload = {
           person_id: person.id,
@@ -539,7 +566,7 @@ async function generatePayrollPeriodsFromAttendance(attendanceRows = []) {
         }
       }
 
-      cursor.setUTCDate(cursor.getUTCDate() + periodDays);
+      cursor.setDate(cursor.getDate() + periodDays);
     }
   }
 
@@ -779,11 +806,88 @@ app.post("/api/dahua/sync-users", async (req, res) => {
       insertedOrUpdatedCount += 1;
     }
 
-    return res.json({ count: insertedOrUpdatedCount, message: `Synced ${insertedOrUpdatedCount} users from Dahua device to MySQL database.` });
   } catch (err) {
     const message = errorMessage(err, "The Dahua device returned an invalid response or the MySQL operation failed.");
     console.error("Dahua user sync error:", err);
     return res.status(502).json({ error: `Dahua user sync failed: ${message}` });
+  }
+});
+
+async function deleteDahuaUserOnDevice(personId) {
+  if (!personId) return false;
+  const targetIdStr = String(personId).trim();
+
+  try {
+    const finderQuery = `/cgi-bin/recordFinder.cgi?action=find&name=AccessUser&count=1000`;
+    let finderBody = "";
+
+    if (USE_LOCAL_CONNECTOR) {
+      finderBody = await requestDahuaGetViaConnector(finderQuery);
+    } else {
+      finderBody = await requestDahuaWithDigest(finderQuery);
+    }
+
+    let targetRecNo = null;
+    if (finderBody) {
+      const records = parseDahuaRows(finderBody);
+      const match = records.find(
+        (r) =>
+          r &&
+          (String(r.UserID) === targetIdStr ||
+            String(r.UserID) === String(Number(targetIdStr)))
+      );
+      if (match && match.RecNo) {
+        targetRecNo = match.RecNo;
+      }
+    }
+
+    if (targetRecNo) {
+      const removeQuery = `/cgi-bin/recordUpdater.cgi?action=remove&name=AccessUser&recno=${targetRecNo}`;
+      console.log(`[Dahua User Force Delete] Found RecNo ${targetRecNo} for UserID ${targetIdStr}, Sending: ${removeQuery}`);
+
+      if (USE_LOCAL_CONNECTOR) {
+        const resText = await requestDahuaGetViaConnector(removeQuery);
+        console.log(`[Dahua User Force Delete Result]:`, resText);
+      } else {
+        const body = await requestDahuaWithDigest(removeQuery);
+        console.log(`[Dahua User Force Delete Direct Result]:`, body);
+      }
+    } else {
+      console.warn(`[Dahua User Force Delete] Could not find AccessUser record for UserID ${targetIdStr} on Dahua device.`);
+    }
+
+    return true;
+  } catch (err) {
+    console.warn(`[Dahua User Force Delete Error]:`, err.message);
+    return false;
+  }
+}
+
+app.delete("/api/dahua/person", async (req, res) => {
+  const { personId, hardDelete } = req.body || {};
+  if (!personId) {
+    return res.status(400).json({ error: "personId is required." });
+  }
+  try {
+    // 1. Force delete user from Dahua physical device
+    try {
+      console.log(`[Dahua Person Force Delete] Requesting authenticated deletion of user ${personId} from physical Dahua device...`);
+      await deleteDahuaUserOnDevice(personId);
+      console.log(`[Dahua Person Force Delete] Successfully requested deletion of user ${personId} on physical Dahua device.`);
+    } catch (dahuaErr) {
+      console.warn(`[Dahua Person Force Delete] Physical device deletion warning for user ${personId}:`, dahuaErr.message);
+    }
+
+    // 2. Perform DB deletion (or archive if hardDelete is false)
+    if (hardDelete) {
+      await pool.query("DELETE FROM persons WHERE id = ?", [personId]);
+    } else {
+      await pool.query("UPDATE persons SET archived = 1 WHERE id = ?", [personId]);
+    }
+
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
   }
 });
 
@@ -821,6 +925,7 @@ app.post("/api/dahua/sync-attendance", async (req, res) => {
     const insertedAttendance = [];
     for (const record of payload) {
       try {
+        // device_time is already in "YYYY-MM-DD HH:MM:SS" local format from normalizeDahuaDeviceTime
         const formattedTime = record.device_time;
         const [result] = await pool.query(
           "INSERT IGNORE INTO attendance (person_id, name, event, point, method, device_time) VALUES (?, ?, ?, ?, ?, ?)",
@@ -901,17 +1006,100 @@ app.post("/api/payroll/rebuild", async (req, res) => {
 });
 
 app.delete("/api/dahua/attendance", async (req, res) => {
-  const { personId, deviceTime } = req.body || {};
+  const { personId, deviceTime, dbId } = req.body || {};
   if (!personId || !deviceTime) {
     return res.status(400).json({ error: "personId and deviceTime are required." });
   }
   try {
-    const formattedTime = new Date(deviceTime).toISOString().slice(0, 19).replace('T', ' ');
-    await pool.query(
-      "DELETE FROM attendance WHERE person_id = ? AND device_time = ?",
-      [personId, formattedTime]
-    );
+    const formattedLocalTime = normalizeDahuaDeviceTime(deviceTime);
+    const targetTimestampSec = Math.floor(new Date(deviceTime).getTime() / 1000);
+    
+    // 1. Force delete from Dahua physical device
+    try {
+      const query = `/cgi-bin/recordFinder.cgi?action=find&name=AccessControlCardRec&count=10000`;
+      let bodyText = "";
+      
+      if (USE_LOCAL_CONNECTOR) {
+        const response = await requestDahuaViaConnector("GET", query);
+        bodyText = response?.body || "";
+      } else {
+        bodyText = await requestDahuaWithDigest(query);
+      }
+
+      if (bodyText) {
+        const records = parseDahuaRows(bodyText);
+        
+        // Find matching record on Dahua device by unix timestamp or formatted local time
+        const match = records.find((r) => {
+          const rRecNo = r.RecNo;
+          if (!rRecNo) return false;
+          
+          const rPerson = firstValue(r, ["UserID", "userID", "CardNo"]);
+          const rTimeRaw = firstValue(r, ["CreateTime", "Time", "time"]);
+          if (!rTimeRaw) return false;
+
+          // Check person match (if person ID is populated on record)
+          if (rPerson && String(rPerson) !== String(personId)) {
+            return false;
+          }
+
+          // Epoch timestamp comparison (robust against timezone/string formatting differences)
+          const rSec = Number(rTimeRaw);
+          if (!isNaN(rSec) && rSec > 1000000000) {
+            if (Math.abs(rSec - targetTimestampSec) <= 3) return true;
+          }
+
+          // String local time comparison fallback
+          const rNormalized = normalizeDahuaDeviceTime(rTimeRaw);
+          if (rNormalized && formattedLocalTime && rNormalized === formattedLocalTime) {
+            return true;
+          }
+
+          return false;
+        });
+
+        if (match && match.RecNo) {
+          console.log(`[Dahua Force Delete] Found matching record on physical device (RecNo: ${match.RecNo})`);
+          const removeQuery = `/cgi-bin/recordUpdater.cgi?action=remove&name=AccessControlCardRec&recno=${match.RecNo}`;
+          if (USE_LOCAL_CONNECTOR) {
+            await requestDahuaViaConnector("GET", removeQuery);
+          } else {
+            await requestDahuaWithDigest(removeQuery);
+          }
+          console.log(`[Dahua Force Delete] Successfully removed RecNo ${match.RecNo} from physical device.`);
+        } else {
+          console.warn(`[Dahua Force Delete] Could not find matching physical record on device for user=${personId}, time=${deviceTime}`);
+        }
+      }
+    } catch (dahuaErr) {
+      console.warn("[Dahua Force Delete] Device deletion warning:", dahuaErr.message);
+      // Do not throw here so local database delete still succeeds
+    }
+
+    // 2. Delete from local database (by dbId if provided, or by person_id & device_time)
+    if (dbId) {
+      await pool.query("DELETE FROM attendance WHERE id = ?", [dbId]);
+    } else {
+      await pool.query(
+        "DELETE FROM attendance WHERE person_id = ? AND device_time = ?",
+        [personId, formattedLocalTime || deviceTime]
+      );
+    }
+    
     res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ==========================================
+// ==========================================
+// PAYROLL REGENERATION API ROUTE
+// ==========================================
+app.post("/api/payroll/regenerate", async (req, res) => {
+  try {
+    const result = await generatePayrollPeriodsFromAttendance();
+    res.json({ message: "Payroll regenerated successfully", ...result });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -1036,10 +1224,17 @@ app.post("/api/db/query", async (req, res) => {
       const items = Array.isArray(payloadData) ? payloadData : [payloadData];
       if (items.length === 0) return res.json({ data: [], error: null });
 
+      const crypto = require('crypto');
       const inserted = [];
       for (const item of items) {
         if (!item) continue;
         const itemObj = { ...item };
+        
+        // Auto-generate UUID if missing
+        if (!itemObj.id) {
+          itemObj.id = crypto.randomUUID();
+        }
+
         if (itemObj.descriptor && typeof itemObj.descriptor === "object") {
           itemObj.descriptor = JSON.stringify(itemObj.descriptor);
         }
@@ -1062,17 +1257,6 @@ app.post("/api/db/query", async (req, res) => {
           values
         );
         inserted.push({ ...item, id: result.insertId || item.id });
-      }
-
-      if (table === "attendance" && inserted.length) {
-        try {
-          const payrollResult = await generatePayrollPeriodsFromAttendance(inserted);
-          if (payrollResult.created || payrollResult.updated) {
-            console.log(`[Payroll] Auto-generated after attendance insert: created=${payrollResult.created}, updated=${payrollResult.updated}`);
-          }
-        } catch (error) {
-          console.error("[Payroll] Auto-generation after attendance insert failed:", error.message);
-        }
       }
 
       return res.json({ data: single ? inserted[0] : inserted, error: null });
@@ -1113,60 +1297,6 @@ app.post("/api/db/query", async (req, res) => {
       }
 
       await pool.query(sql, params);
-
-      if (table === "payroll_periods" && itemObj.released === true) {
-        const [releasedRows] = await pool.query(
-          `SELECT pp.*, p.name AS person_name, p.department
-           FROM payroll_periods pp
-           LEFT JOIN persons p ON p.id = pp.person_id
-           WHERE pp.id = ?
-           LIMIT 1`,
-          filters.find((filter) => filter?.column === "id")?.value
-        );
-        const releasedPayroll = releasedRows[0];
-        if (releasedPayroll) {
-          await pool.query(
-            `INSERT INTO payroll_released_history
-              (id, payroll_period_id, person_id, person_name, department, period,
-               days_present, daily_rate, late_penalty, late_count, gross,
-               total_late_deduction, total_deductions, net, detailed_attendance,
-               released, action, released_by, released_at, created_at, updated_at)
-             VALUES
-              (UUID(), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, JSON_ARRAY(), 1,
-               'Released', NULL, NOW(), NOW(), NOW())
-             ON DUPLICATE KEY UPDATE
-               person_id = VALUES(person_id),
-               person_name = VALUES(person_name),
-               department = VALUES(department),
-               period = VALUES(period),
-               days_present = VALUES(days_present),
-               daily_rate = VALUES(daily_rate),
-               late_penalty = VALUES(late_penalty),
-               late_count = VALUES(late_count),
-               gross = VALUES(gross),
-               total_late_deduction = VALUES(total_late_deduction),
-               total_deductions = VALUES(total_deductions),
-               net = VALUES(net),
-               released = VALUES(released),
-               updated_at = NOW()`,
-            [
-              releasedPayroll.id,
-              releasedPayroll.person_id,
-              releasedPayroll.person_name,
-              releasedPayroll.department,
-              releasedPayroll.period,
-              releasedPayroll.days_present,
-              releasedPayroll.daily_rate,
-              releasedPayroll.late_penalty,
-              releasedPayroll.late_count,
-              releasedPayroll.gross,
-              releasedPayroll.total_late_deduction,
-              releasedPayroll.total_deductions,
-              releasedPayroll.net,
-            ]
-          );
-        }
-      }
       return res.json({ data: payloadData, error: null });
     }
 
@@ -1305,7 +1435,7 @@ if (AUTO_SYNC_ATTENDANCE_MINUTES > 0) {
         const pId = record.person_id;
         const dTime = record.device_time;
         if (!pId || !dTime) continue;
-        const formattedTime = dTime;
+        // device_time is already in "YYYY-MM-DD HH:MM:SS" local format from normalizeDahuaDeviceTime
         await pool.query(
           "INSERT IGNORE INTO attendance (person_id, name, event, point, method, device_time) VALUES (?, ?, ?, ?, ?, ?)",
           [
@@ -1314,7 +1444,7 @@ if (AUTO_SYNC_ATTENDANCE_MINUTES > 0) {
             record.event,
             record.point,
             record.method,
-            formattedTime,
+            dTime,
           ]
         );
       }

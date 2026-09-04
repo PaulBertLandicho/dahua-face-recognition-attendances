@@ -470,35 +470,7 @@ export default function PayrollPage() {
     return String(period);
   }
 
-  // Helper: Check if period has ended based on work-hour settings
-  function isPeriodEndedNow(period, settings) {
-    if (!period) return false;
-    const s = String(period).trim();
-    const matches = Array.from(s.matchAll(/(\d{4}[-/]\d{2}[-/]\d{2})/g)).map(m => m[1]);
-    if (!matches.length) return false;
-    const endStr = matches[matches.length - 1].replace(/\//g, '-');
-    const end = new Date(endStr);
-    if (Number.isNaN(end.getTime())) return false;
-    const now = new Date();
-    // If the period end is today, compare to afternoon end time if available
-    if (end.getFullYear() === now.getFullYear() && end.getMonth() === now.getMonth() && end.getDate() === now.getDate()) {
-      try {
-        const hhmm = (settings && settings.afternoon_end) || null;
-        if (hhmm) {
-          const parts = String(hhmm).split(":").map(Number);
-          const h = Number.isFinite(parts[0]) ? parts[0] : 17;
-          const m = Number.isFinite(parts[1]) ? parts[1] : 0;
-          const endOfPeriod = new Date(end.getFullYear(), end.getMonth(), end.getDate(), h, m, 0, 0);
-          return now >= endOfPeriod;
-        }
-      } catch (e) {}
-      const endOfDay = new Date(end.getFullYear(), end.getMonth(), end.getDate(), 23, 59, 59, 999);
-      return now >= endOfDay;
-    }
-    // For non-today end dates, use end-of-day comparison
-    const endOfDay = new Date(end.getFullYear(), end.getMonth(), end.getDate(), 23, 59, 59, 999);
-    return endOfDay <= now;
-  }
+
 
   // OPEN PAYSLIP for a period
   const handleShowPayslip = (payrollPeriod) => {
@@ -517,141 +489,7 @@ export default function PayrollPage() {
     setShowPayslip(true);
   };
 
-  // RELEASE PAYROLL (by DB id) — works with filtered/sorted lists
-  const handleReleasePayroll = async (dbId) => {
-    const idx = payrollPeriods.findIndex((p) => p.dbId === dbId);
-    if (idx === -1) return;
-    const period = payrollPeriods[idx];
-    if (!period || !period.dbId) return;
-    
-    // Determine if this is an advance release (period hasn't ended yet)
-    const periodHasEnded = isPeriodEndedNow(period.period, settings);
-    const isAdvanceRelease = !periodHasEnded;
-    
-    try {
-      // Update released flag in Supabase
-      const { error: updateErr } = await supabase
-        .from("payroll_periods")
-        .update({ released: true })
-        .eq("id", period.dbId);
-      if (updateErr) throw updateErr;
 
-      setPayrollPeriods((prev) =>
-        prev.map((p) => (p.dbId === dbId ? { ...p, released: true } : p)),
-      );
-
-      // Determine who released this payroll
-      let releasedBy = "admin";
-      try {
-        const sessionStr = localStorage.getItem("sb-session");
-        if (sessionStr) {
-          const session = JSON.parse(sessionStr);
-          if (session && session.user && session.user.email) {
-            releasedBy = session.user.email;
-          }
-        }
-      } catch (e) {}
-
-      // Log activity with accurate action type
-      try {
-        await supabase.from("payroll_activity_logs").insert([
-          {
-            payroll_period_id: period.dbId,
-            person_id: period.person?.id || null,
-            person_name: period.person?.name || null,
-            released_by: releasedBy,
-            action: isAdvanceRelease ? "Advance Release" : "Period Released",
-            timestamp: new Date().toISOString(),
-          },
-        ]);
-      } catch (err) {
-        Swal.fire("Failed to log payroll release", err.message || err, "error");
-      }
-
-      // Optionally auto-create the next payroll period
-      try {
-        if (settings && settings.auto_create_next_period) {
-          const periodDays = Number(settings.payroll_period_days) || 15;
-          const [, endStr] = (period.period || "").split("_to_");
-          if (endStr) {
-            const endDate = new Date(endStr);
-            const nextStart = new Date(endDate);
-            nextStart.setDate(nextStart.getDate() + 1);
-            const nextEnd = new Date(nextStart);
-            nextEnd.setDate(nextEnd.getDate() + periodDays - 1);
-            const nextPeriodStr = `${nextStart.toISOString().slice(0, 10)}_to_${nextEnd
-              .toISOString()
-              .slice(0, 10)}`;
-
-            const payload = {
-              person_id: period.person.id,
-              period: nextPeriodStr,
-              days_present: 0,
-              daily_rate: Number(period.person.daily_rate || 0),
-              late_penalty: Number(period.person.late_penalty || 0),
-              late_count: 0,
-              gross: 0,
-              total_late_deduction: 0,
-              total_deductions: 0,
-              net: 0,
-              released: false,
-            };
-
-            // Upsert to avoid duplicates (onConflict person_id+period)
-            let created = null;
-            try {
-              const { data: upserted, error: upsertErr } = await supabase
-                .from("payroll_periods")
-                .upsert([payload], { onConflict: ["person_id", "period"] })
-                .select()
-                .single();
-              if (upsertErr) {
-                const { data: inserted, error: insertErr } = await supabase
-                  .from("payroll_periods")
-                  .insert([payload])
-                  .select()
-                  .single();
-                if (insertErr) throw insertErr;
-                created = inserted;
-              } else {
-                created = upserted;
-              }
-            } catch (e) {
-              console.error("Failed to create next payroll_periods row", e);
-            }
-
-            if (created && created.id) {
-              setPayrollPeriods((prev) => [
-                ...prev,
-                {
-                  personId: period.person.id,
-                  person: period.person,
-                  period: nextPeriodStr,
-                  payroll: {
-                    daysPresent: 0,
-                    dailyRate: Number(payload.daily_rate || 0),
-                    lateCount: 0,
-                    lateCountLimit: Number(settings.late_count_limit || 5),
-                    totalLateDeduction: 0,
-                    totalDeductions: 0,
-                    net: 0,
-                  },
-                  attendance: [],
-                  released: false,
-                  dbId: created.id,
-                },
-              ]);
-            }
-          }
-        }
-      } catch (e) {
-        console.error("Error during auto-create next payroll period", e);
-      }
-    } catch (e) {
-      console.error("Error releasing payroll", e);
-      Swal.fire("Failed to release payroll", e.message || e, "error");
-    }
-  };
 
   const handleClosePayslip = () => {
     setShowPayslip(false);
@@ -1123,19 +961,18 @@ export default function PayrollPage() {
                 <th className="sticky top-0 z-10 bg-white text-black font-bold p-3.5 text-left border-b-2 border-gray-200 tracking-wide uppercase text-xs whitespace-nowrap">Late Count</th>
                 <th className="sticky top-0 z-10 bg-white text-black font-bold p-3.5 text-left border-b-2 border-gray-200 tracking-wide uppercase text-xs whitespace-nowrap">Absent</th>
                 <th className="sticky top-0 z-10 bg-white text-black font-bold p-3.5 text-left border-b-2 border-gray-200 tracking-wide uppercase text-xs whitespace-nowrap">Payslip</th>
-                <th className="sticky top-0 z-10 bg-white text-black font-bold p-3.5 text-left border-b-2 border-gray-200 tracking-wide uppercase text-xs whitespace-nowrap">Advance Release</th>
               </tr>
             </thead>
             <tbody>
               {currentRecords.length === 0 ? (
                 <tr>
-                  <td colSpan={11} className="text-center py-16 px-5 text-gray-500 text-base">
+                  <td colSpan={10} className="text-center py-16 px-5 text-gray-500 text-base">
                     No payroll records found.
                   </td>
                 </tr>
               ) : (
                 currentRecords.map((p, idx) => {
-                  const { person, period, payroll, released } = p;
+                  const { person, period, payroll } = p;
                   return (
                     <tr key={person.id + period} className="even:bg-[#f9fafb] odd:bg-white">
                       <td className="py-3.5 px-3 border-b border-gray-200 text-gray-800 font-mono">
@@ -1164,20 +1001,6 @@ export default function PayrollPage() {
                         >
                           {Icons.eye} View
                         </button>
-                      </td>
-                      <td className="py-3.5 px-3 border-b border-gray-200 text-gray-800">
-                        {released ? (
-                          <span className="text-[#556156] font-semibold">
-                            ✔ Released
-                          </span>
-                        ) : (
-                          <button
-                            onClick={() => handleReleasePayroll(p.dbId)}
-                            className="inline-flex items-center justify-center gap-1.5 py-1.5 px-3 rounded-md text-[0.85rem] font-semibold cursor-pointer tracking-[0.01em] whitespace-nowrap bg-white text-[#237227] border border-[#237227] shadow-[0_1px_2px_rgba(0,0,0,0.03)] transition-all duration-200"
-                          >
-                            Advance Release Payroll
-                          </button>
-                        )}
                       </td>
                     </tr>
                   );
