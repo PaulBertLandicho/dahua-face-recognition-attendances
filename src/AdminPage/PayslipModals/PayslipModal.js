@@ -471,39 +471,20 @@ export default function PayslipModal({
     daysWorked = Number(payrollDaysPresent) || 0;
     daysWorkedDisplay = `${daysWorked} day(s)`;
   } else if (detailedAttendance.length) {
-    let totalHoursWorked = 0;
-    const lunchStart = parseTimeToMinutes(payroll?.settings?.morning_end || "12:00") || 720;
-    const lunchEnd = parseTimeToMinutes(payroll?.settings?.afternoon_start || "13:00") || 780;
-    const lunchDuration = Math.max(0, lunchEnd - lunchStart);
-    
+    let totalAttendedDays = 0;
     detailedAttendance.forEach((rec) => {
-      if (!rec.morningIn || !rec.afternoonOut) return;
-      const scheduledStart = parseTimeToMinutes(payroll?.settings?.morning_start || "08:00") || 480;
-      const aOut = parseTimeToMinutes(rec.afternoonOut);
-      if (aOut !== null) {
-        const mIn = scheduledStart; // Use scheduled start to avoid double deduction with Late Penalty
-        let workedMinutes = aOut - mIn;
-        if (mIn <= lunchStart && aOut >= lunchEnd) {
-          workedMinutes -= lunchDuration;
-        } else if (mIn <= lunchStart && aOut > lunchStart && aOut < lunchEnd) {
-          workedMinutes -= (aOut - lunchStart);
-        } else if (mIn > lunchStart && mIn < lunchEnd && aOut >= lunchEnd) {
-          workedMinutes -= (lunchEnd - mIn);
-        }
-        
-        // Round to the nearest 15 minutes to handle tiny variations (e.g. clocking out at 4:59 PM)
-        workedMinutes = Math.round(workedMinutes / 15) * 15;
-
-        let standardWorkedMinutes = Math.min(workedMinutes, 480);
-        if (standardWorkedMinutes > 0) {
-          totalHoursWorked += standardWorkedMinutes / 60;
-        }
+      const hasMorning = !!rec.morningIn;
+      const hasAfternoon = !!rec.afternoonOut || !!rec.afternoonIn;
+      if (hasMorning && hasAfternoon) {
+        totalAttendedDays += 1;
+      } else if (hasMorning || hasAfternoon) {
+        totalAttendedDays += 0.5;
       }
     });
-    daysWorked = Math.round((totalHoursWorked / 8) * 1000) / 1000;
-    daysWorkedDisplay = `${totalHoursWorked.toFixed(2)} hrs (${daysWorked} days)`;
+    daysWorked = totalAttendedDays;
+    daysWorkedDisplay = `${daysWorked} day(s)`;
   } else {
-    daysWorked = payroll.daysPresent || 0;
+    daysWorked = Number(payroll?.daysPresent ?? payroll?.days_present ?? 0) || 0;
     daysWorkedDisplay = `${daysWorked} day(s)`;
   }
 

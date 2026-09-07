@@ -155,7 +155,6 @@ export default function PayrollPage() {
             );
 
             // Re-calculate daysPresent to enforce exact hours worked
-            let totalHoursWorked = 0;
             let totalOtHours = 0;
             const parseTime = (timeStr) => {
               if (!timeStr) return null;
@@ -174,14 +173,11 @@ export default function PayrollPage() {
             };
 
             const lunchStart = parseTime(settingsData.morning_end || "12:00") || 720;
-            const lunchEnd = parseTime(settingsData.afternoon_start || "13:00") || 780;
-            const lunchDuration = Math.max(0, lunchEnd - lunchStart);
             const schedAfternoonEnd = parseTime(settingsData.afternoon_end || "17:00") || 1020;
             const schedMorningEnd = lunchStart;
 
             detailed.forEach((rec) => {
               if (!rec.morningIn || !rec.afternoonOut) return;
-              const scheduledStart = parseTime(settingsData.morning_start || "08:00") || 480;
               const aOut = parseTime(rec.afternoonOut);
               const mOut = parseTime(rec.morningOut);
               
@@ -198,28 +194,18 @@ export default function PayrollPage() {
                   totalOtHours += otMins / 60;
                 }
               }
-
-              if (aOut !== null) {
-                const mIn = scheduledStart; // Use scheduled start to avoid double deduction with Late Penalty
-                let workedMinutes = aOut - mIn;
-                if (mIn <= lunchStart && aOut >= lunchEnd) {
-                  workedMinutes -= lunchDuration;
-                } else if (mIn <= lunchStart && aOut > lunchStart && aOut < lunchEnd) {
-                  workedMinutes -= (aOut - lunchStart);
-                } else if (mIn > lunchStart && mIn < lunchEnd && aOut >= lunchEnd) {
-                  workedMinutes -= (lunchEnd - mIn);
-                }
-                
-                // Round to the nearest 15 minutes to handle tiny variations (e.g. clocking out at 4:59 PM)
-                workedMinutes = Math.round(workedMinutes / 15) * 15;
-
-                let standardWorkedMinutes = Math.min(workedMinutes, 480);
-                if (standardWorkedMinutes > 0) {
-                  totalHoursWorked += standardWorkedMinutes / 60;
-                }
+            });
+            let attendedDays = 0;
+            detailed.forEach((rec) => {
+              const hasMorning = !!rec.morningIn;
+              const hasAfternoon = !!rec.afternoonOut || !!rec.afternoonIn;
+              if (hasMorning && hasAfternoon) {
+                attendedDays += 1;
+              } else if (hasMorning || hasAfternoon) {
+                attendedDays += 0.5;
               }
             });
-            basePayroll.daysPresent = Number(Math.round((totalHoursWorked / 8) * 1000) / 1000) || 0;
+            basePayroll.daysPresent = Number(attendedDays) || 0;
             basePayroll.otHours = Number(Math.round(totalOtHours * 100) / 100) || 0;
             
             // Recalculate otPay based on correct exact hours

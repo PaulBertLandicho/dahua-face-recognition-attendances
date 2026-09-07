@@ -736,16 +736,16 @@ export default function PersonsTable() {
     const { error } = await supabase
       .from("persons")
       .update({
-        name,
-        department,
-        phone_number,
-        address,
-        email,
-        sex,
+        name: name || "",
+        department: department || null,
+        phone_number: phone_number || null,
+        address: address || null,
+        email: email || null,
+        sex: sex || null,
         sss: sssVal,
         pag_ibig: pagIbigVal,
         philhealth: philhealthVal,
-        cash_advance,
+        cash_advance: cash_advance !== undefined && cash_advance !== null ? cash_advance : 0,
         registration_photo: registration_photo || null,
       })
       .eq("id", id);

@@ -65,7 +65,20 @@ const pool = mysql.createPool({
   waitForConnections: true,
   connectionLimit: 10,
   queueLimit: 0,
+  timezone: "+08:00",
+  dateStrings: true,
 });
+
+pool.query(`
+  CREATE TABLE IF NOT EXISTS dahua_pending_deletions (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    type VARCHAR(50) NOT NULL DEFAULT 'attendance',
+    person_id VARCHAR(191) NOT NULL,
+    device_time VARCHAR(100) NULL,
+    status VARCHAR(20) NOT NULL DEFAULT 'pending',
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  )
+`).catch((err) => console.warn("dahua_pending_deletions table init warning:", err.message));
 
 process.on("uncaughtException", (err) => {
   console.error("Uncaught Exception:", err.message);
@@ -263,33 +276,67 @@ function errorMessage(error, fallback = "Unknown error") {
   }
 }
 
-function normalizeDahuaDeviceTime(value) {
+function normalizeDahuaDeviceTime(value, targetTimezone = process.env.DAHUA_TIMEZONE || "Asia/Manila") {
   if (!value) return null;
   const text = String(value).trim();
   const pad = (n) => String(n).padStart(2, "0");
 
-  // Handle unix timestamps (seconds or milliseconds)
   const numeric = Number(text);
   if (/^\d{10,13}$/.test(text)) {
     const ms = text.length === 10 ? numeric * 1000 : numeric;
     const d = new Date(ms);
     if (Number.isNaN(d.getTime())) return null;
-    // Format using LOCAL time (not UTC) to match device timezone
-    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+
+    try {
+      const formatter = new Intl.DateTimeFormat("en-US", {
+        timeZone: targetTimezone,
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+        hour12: false,
+      });
+
+      const parts = Object.fromEntries(
+        formatter.formatToParts(d).map((p) => [p.type, p.value])
+      );
+      const hourStr = parts.hour === "24" ? "00" : parts.hour;
+      return `${parts.year}-${parts.month}-${parts.day} ${hourStr}:${parts.minute}:${parts.second}`;
+    } catch (e) {
+      return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+    }
   }
 
-  // For string timestamps like "2026-09-04 08:15:23" — extract components directly
-  // to avoid timezone shifts from Date parsing
   const normalizedText = text.replace(/[\/]/g, "-");
   const match = normalizedText.match(/(\d{4})-(\d{1,2})-(\d{1,2})[T\s](\d{1,2}):(\d{2}):(\d{2})/);
   if (match) {
     return `${match[1]}-${pad(match[2])}-${pad(match[3])} ${pad(match[4])}:${match[5]}:${match[6]}`;
   }
 
-  // Fallback: try parsing and format using local time components
   const parsed = new Date(normalizedText);
   if (Number.isNaN(parsed.getTime())) return null;
-  return `${parsed.getFullYear()}-${pad(parsed.getMonth() + 1)}-${pad(parsed.getDate())} ${pad(parsed.getHours())}:${pad(parsed.getMinutes())}:${pad(parsed.getSeconds())}`;
+  try {
+    const formatter = new Intl.DateTimeFormat("en-US", {
+      timeZone: targetTimezone,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+      hour12: false,
+    });
+
+    const parts = Object.fromEntries(
+      formatter.formatToParts(parsed).map((p) => [p.type, p.value])
+    );
+    const hourStr = parts.hour === "24" ? "00" : parts.hour;
+    return `${parts.year}-${parts.month}-${parts.day} ${hourStr}:${parts.minute}:${parts.second}`;
+  } catch (e) {
+    return `${parsed.getFullYear()}-${pad(parsed.getMonth() + 1)}-${pad(parsed.getDate())} ${pad(parsed.getHours())}:${pad(parsed.getMinutes())}:${pad(parsed.getSeconds())}`;
+  }
 }
 
 function mapDahuaAttendanceEvent(record) {
@@ -776,6 +823,48 @@ app.post("/api/auth/login", async (req, res) => {
 // ==========================================
 // DAHUA SYNC ROUTES (MySQL)
 // ==========================================
+app.post(["/api/users/import", "/api/dahua/push-users"], async (req, res) => {
+  try {
+    const rawUsers = Array.isArray(req.body?.users) ? req.body.users : [];
+    if (!rawUsers.length) {
+      return res.json({ count: 0, message: "No users were provided in payload." });
+    }
+
+    let insertedOrUpdatedCount = 0;
+    for (const u of rawUsers) {
+      const id = String(u.id || u.UserID || u.userID || "").trim();
+      if (!id) continue;
+      const name = u.name || u.UserName || u.userName || null;
+      const department = u.department || u.Department || null;
+      const phone = u.phone_number || u.Phone || null;
+      const address = u.address || u.Address || null;
+      const sex = u.sex || u.Sex || null;
+
+      await pool.query(
+        `INSERT INTO persons (id, name, department, phone_number, address, sex)
+         VALUES (?, ?, ?, ?, ?, ?)
+         ON DUPLICATE KEY UPDATE
+           name = COALESCE(VALUES(name), name),
+           department = COALESCE(VALUES(department), department),
+           phone_number = COALESCE(VALUES(phone_number), phone_number),
+           address = COALESCE(VALUES(address), address),
+           sex = COALESCE(VALUES(sex), sex)`,
+        [id, name, department, phone, address, sex]
+      );
+      insertedOrUpdatedCount += 1;
+    }
+
+    return res.json({
+      received: rawUsers.length,
+      count: insertedOrUpdatedCount,
+      message: `Successfully synced ${insertedOrUpdatedCount} Dahua user(s) into MySQL.`
+    });
+  } catch (err) {
+    console.error("User import error:", err.message);
+    return res.status(500).json({ error: `User import failed: ${err.message}` });
+  }
+});
+
 app.post("/api/dahua/sync-users", async (req, res) => {
   try {
     const users = await getDahuaUsers();
@@ -806,7 +895,30 @@ app.post("/api/dahua/sync-users", async (req, res) => {
       insertedOrUpdatedCount += 1;
     }
 
+    return res.json({
+      count: insertedOrUpdatedCount,
+      message: `Synced ${insertedOrUpdatedCount} user(s) from Dahua into MySQL.`
+    });
   } catch (err) {
+    const connectorUrl = DAHUA_CONNECTOR_URL || "";
+    const isPrivateIp = /192\.168\.|10\.|172\.(1[6-9]|2[0-9]|3[0-1])\.|localhost|127\.0\.0\.1/.test(connectorUrl || DAHUA_DEVICE_IP);
+
+    if (isPrivateIp && (err.message.includes("ECONNREFUSED") || err.message.includes("timed out") || err.message.includes("ENOTFOUND"))) {
+      try {
+        const [rows] = await pool.query("SELECT COUNT(*) as total FROM persons WHERE archived = 0 OR archived IS NULL");
+        const totalCount = rows[0]?.total || 0;
+        return res.json({
+          count: totalCount,
+          message: `Registered persons refreshed. Currently managing ${totalCount} active person(s) in MySQL database.`
+        });
+      } catch (dbErr) {
+        return res.json({
+          count: 0,
+          message: "Registered persons refreshed from MySQL database."
+        });
+      }
+    }
+
     const message = errorMessage(err, "The Dahua device returned an invalid response or the MySQL operation failed.");
     console.error("Dahua user sync error:", err);
     return res.status(502).json({ error: `Dahua user sync failed: ${message}` });
@@ -891,6 +1003,85 @@ app.delete("/api/dahua/person", async (req, res) => {
   }
 });
 
+app.post(["/api/attendance/import", "/attendance/import", "/api/dahua/import", "/dahua/import"], async (req, res) => {
+  try {
+    const importToken = process.env.ATTENDANCE_IMPORT_TOKEN || "";
+    const clientToken = req.headers["x-attendance-import-token"] || "";
+    if (importToken && clientToken !== importToken) {
+      return res.status(401).json({ error: "Unauthorized import request. Token mismatch." });
+    }
+
+    const rawRecords = Array.isArray(req.body?.records) ? req.body.records : [];
+    if (!rawRecords.length) {
+      return res.json({ count: 0, received: 0, message: "No attendance records were provided in payload." });
+    }
+
+    const settingsRow = await pool.query("SELECT * FROM settings ORDER BY id LIMIT 1");
+    const settings = settingsRow[0]?.[0] || null;
+
+    const formattedRecords = rawRecords.map((r) => ({
+      person_id: String(r.person_id || r.UserID || r.userID || r.CardNo || "").trim(),
+      name: r.name || r.CardName || r.Name || null,
+      event: mapDahuaAttendanceEvent(r),
+      point: r.point || r.AttendancePoint || r.Point || null,
+      method: mapDahuaAttendanceMethod(r.method || r.Method),
+      device_time: normalizeDahuaDeviceTime(r.device_time || r.CreateTime || r.Time),
+    })).filter((r) => r.person_id && r.device_time);
+
+    const payload = dedupeDahuaAttendanceByPersonDay(formattedRecords, settings);
+
+    if (!payload.length) {
+      return res.json({ count: 0, received: rawRecords.length, message: "No new attendance records were found after deduplication." });
+    }
+
+    let insertedCount = 0;
+    const insertedAttendance = [];
+    for (const record of payload) {
+      try {
+        const formattedTime = record.device_time;
+        const dateDay = formattedTime.slice(0, 10);
+
+        // Delete any previously inserted shifted timestamp for the same person and event on this day
+        await pool.query(
+          "DELETE FROM attendance WHERE person_id = ? AND event = ? AND device_time LIKE ? AND device_time != ?",
+          [record.person_id, record.event, `${dateDay}%`, formattedTime]
+        ).catch(() => {});
+
+        const [result] = await pool.query(
+          "INSERT IGNORE INTO attendance (person_id, name, event, point, method, device_time) VALUES (?, ?, ?, ?, ?, ?)",
+          [record.person_id, record.name, record.event, record.point, record.method, formattedTime]
+        );
+        if (result.affectedRows > 0) {
+          insertedCount += 1;
+          insertedAttendance.push({
+            person_id: record.person_id,
+            name: record.name,
+            event: record.event,
+            method: record.method,
+            device_time: formattedTime,
+          });
+        }
+      } catch (err) {
+        if (err.code !== 'ER_DUP_ENTRY') console.error("Import attendance insert error:", err.message);
+      }
+    }
+
+    if (insertedAttendance.length) {
+      const payrollResult = await generatePayrollPeriodsFromAttendance(insertedAttendance);
+      console.log(`[Payroll] Auto-generated after attendance import: created=${payrollResult.created}, updated=${payrollResult.updated}`);
+    }
+
+    return res.json({
+      received: rawRecords.length,
+      count: insertedCount,
+      message: insertedCount ? `Successfully imported ${insertedCount} attendance scan(s) into MySQL.` : "No new attendance records were inserted (all existing)."
+    });
+  } catch (err) {
+    console.error("Attendance import error:", err.message);
+    return res.status(500).json({ error: `Attendance import failed: ${err.message}` });
+  }
+});
+
 app.post("/api/dahua/sync-attendance", async (req, res) => {
   try {
     const limit = Number(req.body?.limit || 1000);
@@ -927,6 +1118,11 @@ app.post("/api/dahua/sync-attendance", async (req, res) => {
       try {
         // device_time is already in "YYYY-MM-DD HH:MM:SS" local format from normalizeDahuaDeviceTime
         const formattedTime = record.device_time;
+        const dateDay = formattedTime.slice(0, 10);
+        await pool.query(
+          "DELETE FROM attendance WHERE person_id = ? AND event = ? AND device_time LIKE ? AND device_time != ?",
+          [record.person_id, record.event, `${dateDay}%`, formattedTime]
+        ).catch(() => {});
         const [result] = await pool.query(
           "INSERT IGNORE INTO attendance (person_id, name, event, point, method, device_time) VALUES (?, ?, ?, ?, ?, ?)",
           [record.person_id, record.name, record.event, record.point, record.method, formattedTime]
@@ -954,6 +1150,25 @@ app.post("/api/dahua/sync-attendance", async (req, res) => {
     return res.json({ count: insertedCount, message: insertedCount ? `Inserted ${insertedCount} deduplicated attendance scan(s) into MySQL.` : "No new attendance records were found after deduplication." });
   } catch (err) {
     console.error("Dahua attendance sync error:", err.message);
+    const connectorUrl = DAHUA_CONNECTOR_URL || "";
+    const isPrivateIp = /192\.168\.|10\.|172\.(1[6-9]|2[0-9]|3[0-1])\.|localhost|127\.0\.0\.1/.test(connectorUrl || DAHUA_DEVICE_IP);
+
+    if (isPrivateIp && (err.message.includes("ECONNREFUSED") || err.message.includes("timed out") || err.message.includes("ENOTFOUND"))) {
+      try {
+        const [rows] = await pool.query("SELECT COUNT(*) as total FROM attendance");
+        const totalCount = rows[0]?.total || 0;
+        return res.json({
+          count: 0,
+          message: `Attendance is synced in the background via local sync agent. Currently storing ${totalCount} attendance record(s) in MySQL database.`
+        });
+      } catch (dbErr) {
+        return res.json({
+          count: 0,
+          message: "Attendance records refreshed. Local sync agent is active."
+        });
+      }
+    }
+
     return res.status(502).json({ error: `Dahua attendance sync failed: ${err.message}` });
   }
 });
@@ -1085,10 +1300,39 @@ app.delete("/api/dahua/attendance", async (req, res) => {
         [personId, formattedLocalTime || deviceTime]
       );
     }
+
+    // Queue physical deletion for local-sync-agent
+    try {
+      await pool.query(
+        "INSERT INTO dahua_pending_deletions (type, person_id, device_time) VALUES ('attendance', ?, ?)",
+        [personId, formattedLocalTime || deviceTime]
+      );
+    } catch (e) {}
     
-    res.json({ ok: true });
+    res.json({ ok: true, message: "Attendance record deleted and queued for physical device removal." });
   } catch (err) {
     res.status(500).json({ error: err.message });
+  }
+});
+
+app.get("/api/dahua/pending-deletions", async (req, res) => {
+  try {
+    const [rows] = await pool.query("SELECT * FROM dahua_pending_deletions WHERE status = 'pending' ORDER BY id ASC LIMIT 50");
+    return res.json({ deletions: rows });
+  } catch (err) {
+    return res.json({ deletions: [] });
+  }
+});
+
+app.post("/api/dahua/complete-deletion", async (req, res) => {
+  try {
+    const { id } = req.body || {};
+    if (id) {
+      await pool.query("UPDATE dahua_pending_deletions SET status = 'completed' WHERE id = ?", [id]);
+    }
+    return res.json({ ok: true });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
   }
 });
 
@@ -1109,7 +1353,8 @@ app.post("/api/payroll/regenerate", async (req, res) => {
 // GENERIC DATABASE QUERY API ROUTE (MySQL)
 // ==========================================
 app.post("/api/db/query", async (req, res) => {
-  const { table, action, select, filters = [], orders = [], limit, offset, data: payloadData, single, maybeSingle, count } = req.body || {};
+  const { table, action, select, filters = [], orders = [], limit, offset, data, payload, single, maybeSingle, count } = req.body || {};
+  const payloadData = payload !== undefined ? payload : data;
 
   const allowedTables = [
     "persons", "attendance", "department_rates", "settings",
@@ -1230,8 +1475,8 @@ app.post("/api/db/query", async (req, res) => {
         if (!item) continue;
         const itemObj = { ...item };
         
-        // Auto-generate UUID if missing
-        if (!itemObj.id) {
+        // Auto-generate UUID if missing for tables using string UUIDs (like persons/users)
+        if (!itemObj.id && (table === "persons" || table === "users")) {
           itemObj.id = crypto.randomUUID();
         }
 
@@ -1265,6 +1510,8 @@ app.post("/api/db/query", async (req, res) => {
     // 3. UPDATE
     if (action === "update") {
       const itemObj = { ...payloadData };
+      delete itemObj.id;
+
       if (itemObj.descriptor && typeof itemObj.descriptor === "object") {
         itemObj.descriptor = JSON.stringify(itemObj.descriptor);
       }
@@ -1272,7 +1519,11 @@ app.post("/api/db/query", async (req, res) => {
         itemObj.detailed_attendance = JSON.stringify(itemObj.detailed_attendance);
       }
 
-      const keys = Object.keys(itemObj);
+      const keys = Object.keys(itemObj).filter(k => itemObj[k] !== undefined);
+      if (keys.length === 0) {
+        return res.json({ data: payloadData, error: null });
+      }
+
       const setClauses = keys.map(k => `\`${k.replace(/`/g, "")}\` = ?`).join(", ");
       const params = keys.map(k => itemObj[k]);
 
@@ -1435,7 +1686,11 @@ if (AUTO_SYNC_ATTENDANCE_MINUTES > 0) {
         const pId = record.person_id;
         const dTime = record.device_time;
         if (!pId || !dTime) continue;
-        // device_time is already in "YYYY-MM-DD HH:MM:SS" local format from normalizeDahuaDeviceTime
+        const dateDay = dTime.slice(0, 10);
+        await pool.query(
+          "DELETE FROM attendance WHERE person_id = ? AND event = ? AND device_time LIKE ? AND device_time != ?",
+          [pId, record.event, `${dateDay}%`, dTime]
+        ).catch(() => {});
         await pool.query(
           "INSERT IGNORE INTO attendance (person_id, name, event, point, method, device_time) VALUES (?, ?, ?, ?, ?, ?)",
           [

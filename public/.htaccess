@@ -1,0 +1,23 @@
+# DO NOT REMOVE. CLOUDLINUX PASSENGER CONFIGURATION BEGIN
+PassengerAppRoot "/home/multifac/backend"
+PassengerBaseURI "/"
+PassengerNodejs "/home/multifac/nodevenv/backend/20/bin/node"
+PassengerAppType node
+PassengerStartupFile server.js
+# DO NOT REMOVE. CLOUDLINUX PASSENGER CONFIGURATION END
+
+Options -MultiViews
+<IfModule mod_rewrite.c>
+  RewriteEngine On
+  RewriteBase /
+  RewriteRule ^index\.html$ - [L]
+
+  # Exclude API endpoints and backend routes from SPA index.html rewrite
+  RewriteCond %{REQUEST_URI} !^/api [NC]
+  RewriteCond %{REQUEST_URI} !^/backend [NC]
+
+  RewriteCond %{REQUEST_FILENAME} !-f
+  RewriteCond %{REQUEST_FILENAME} !-d
+  RewriteCond %{REQUEST_FILENAME} !-l
+  RewriteRule ^.*$ /index.html [L]
+</IfModule>

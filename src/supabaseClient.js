@@ -1,7 +1,28 @@
 // src/supabaseClient.js
 // Custom MySQL Client Adapter to completely replace Supabase
 
-const API_BASE = "";
+const API_BASE =
+  typeof process !== "undefined" &&
+  process.env &&
+  process.env.REACT_APP_BACKEND_URL
+    ? String(process.env.REACT_APP_BACKEND_URL).trim().replace(/\/$/, "")
+    : "";
+
+async function safeJsonParse(res) {
+  const text = await res.text().catch(() => "");
+  if (!text || !text.trim()) return {};
+  try {
+    return JSON.parse(text);
+  } catch (e) {
+    return {
+      error: {
+        message: text.includes("<!DOCTYPE") || text.includes("<html")
+          ? `Backend Node.js server is not connected or returning HTML (HTTP ${res.status}). Make sure Node.js is running in cPanel.`
+          : text || `Invalid JSON response from server (HTTP ${res.status}).`
+      }
+    };
+  }
+}
 
 class QueryBuilder {
   constructor(table) {
@@ -104,11 +125,8 @@ class QueryBuilder {
   }
 
   order(column, options = {}) {
-    this.orders.push({
-      column,
-      ascending: options.ascending !== false,
-      nullsFirst: options.nullsFirst || false,
-    });
+    const ascending = options.ascending !== undefined ? options.ascending : true;
+    this.orders.push({ column, ascending });
     return this;
   }
 
@@ -139,14 +157,14 @@ class QueryBuilder {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          table: this.table,
           action: this.action,
-          select: this.selectedColumns,
+          table: this.table,
+          columns: this.selectedColumns,
+          payload: this.payloadData,
           filters: this.filters,
           orders: this.orders,
           limit: this.limitCount,
           offset: this.offsetCount,
-          data: this.payloadData,
           single: this.singleRow,
           maybeSingle: this.maybeSingleRow,
           count: this.countOption,
@@ -154,13 +172,12 @@ class QueryBuilder {
         }),
       });
 
-      if (!res.ok) {
-        const errJson = await res.json().catch(() => ({ error: { message: `HTTP ${res.status}` } }));
-        return { data: null, error: errJson.error || { message: `Request failed with status ${res.status}` } };
+      const parsed = await safeJsonParse(res);
+      if (!res.ok || parsed.error) {
+        return { data: null, error: parsed.error || { message: `Request failed with status ${res.status}` } };
       }
 
-      const result = await res.json();
-      return result;
+      return parsed;
     } catch (err) {
       return { data: null, error: { message: err.message || "Network error" } };
     }
@@ -181,7 +198,7 @@ const auth = {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email, password }),
       });
-      const data = await res.json();
+      const data = await safeJsonParse(res);
       if (!res.ok || data.error) {
         return { data: null, error: data.error || { message: "Invalid login credentials." } };
       }
