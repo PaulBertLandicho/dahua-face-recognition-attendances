@@ -215,16 +215,33 @@ export default function ReleasedHistoryPayroll() {
 
   // Export to Excel
   const handleExportExcel = () => {
-    if (!Array.isArray(sortedPayrollsFinal)) return;
+    if (!Array.isArray(sortedPayrollsFinal) || sortedPayrollsFinal.length === 0) return;
     const exportData = sortedPayrollsFinal.map((row) => ({
-      ID: row.person_id,
-      Name: row.person?.name || "",
+      "Person ID": row.person_id,
+      "Employee Name": row.person?.name || "",
       Department: row.person?.department || "",
-      Period: row.period || "",
-      "Daily Rate": row.daily_rate ?? "",
-      "Late Penalty": row.late_penalty ?? "",
+      "Payroll Period": row.period || "",
+      "Daily Rate (₱)": row.daily_rate ?? "",
+      "Late Penalty (₱)": row.late_penalty ?? "",
+      "Status": row.status || "Released",
     }));
+    if (exportData.length === 0) return;
     const ws = XLSX.utils.json_to_sheet(exportData);
+
+    const colWidths = Object.keys(exportData[0]).map((key) => {
+      let maxLen = key ? String(key).length : 10;
+      exportData.forEach((row) => {
+        const val = row[key];
+        if (val !== undefined && val !== null) {
+          const len = String(val).length;
+          if (len > maxLen) maxLen = len;
+        }
+      });
+      return { wch: Math.max(maxLen + 4, 14) };
+    });
+    ws["!cols"] = colWidths;
+    if (ws["!ref"]) ws["!autofilter"] = { ref: ws["!ref"] };
+
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "Released Payrolls");
     XLSX.writeFile(wb, "released_payrolls.xlsx");
@@ -248,7 +265,7 @@ export default function ReleasedHistoryPayroll() {
   );
 
   return (
-    <div className="released-payroll-history mx-auto p-7 md:p-9 max-w-full bg-white min-h-screen text-gray-800 font-sans">
+    <div className="released-payroll-history mx-auto pt-0 pb-6 px-0 max-w-full bg-white min-h-screen text-gray-800 font-sans">
       <style>{`
         .released-payroll-history input:focus,
         .released-payroll-history select:focus {

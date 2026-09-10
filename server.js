@@ -220,6 +220,40 @@ async function getDahuaUsers(requestedUserIds = null) {
     const batch = usersData?.params?.Users || usersData?.error?.detail?.Users || [];
     users.push(...batch.filter(Boolean));
   }
+
+  // Also fetch enrolled face photos from Dahua AccessFace.list
+  if (users.length > 0) {
+    const allUserIds = users.map((u) => String(u.UserID || u.id)).filter(Boolean);
+    const photoMap = {};
+    for (let i = 0; i < allUserIds.length; i += 10) {
+      const chunk = allUserIds.slice(i, i + 10);
+      try {
+        const faceRes = await requestDahuaJsonWithDigest("/RPC2", "POST", {
+          method: "AccessFace.list",
+          params: { UserIDList: chunk },
+          id: users.length + 100 + i,
+          session: activeSession,
+        });
+        const parsed = JSON.parse(faceRes.body || "{}");
+        const faceList = parsed?.params?.FaceDataList || parsed?.error?.detail?.FaceDataList || [];
+        for (const item of faceList) {
+          if (item && item.UserID && Array.isArray(item.PhotoData) && item.PhotoData.length > 0) {
+            const b64 = item.PhotoData[0];
+            if (b64 && typeof b64 === "string" && b64.length > 50) {
+              photoMap[String(item.UserID)] = b64.startsWith("data:") ? b64 : `data:image/jpeg;base64,${b64}`;
+            }
+          }
+        }
+      } catch (e) {}
+    }
+    for (const u of users) {
+      const uid = String(u.UserID || u.id);
+      if (photoMap[uid]) {
+        u.registration_photo = photoMap[uid];
+      }
+    }
+  }
+
   return users;
 }
 
@@ -265,7 +299,7 @@ function errorMessage(error, fallback = "Unknown error") {
   const connectionError = error?.code === "ECONNREFUSED" ? error : error?.errors?.find((item) => item?.code === "ECONNREFUSED");
   if (connectionError?.code === "ECONNREFUSED") {
     const target = connectionError.address && connectionError.port ? ` ${connectionError.address}:${connectionError.port}` : "";
-    return `MySQL connection was refused${target}. Check DB_HOST, DB_PORT, and that the MySQL service is running.`;
+    return `Database connection was refused${target}. Check DB_HOST, DB_PORT, and that the Database service is running.`;
   }
   if (typeof error === "string" && error.trim()) return error;
   try {
@@ -840,16 +874,19 @@ app.post(["/api/users/import", "/api/dahua/push-users"], async (req, res) => {
       const address = u.address || u.Address || null;
       const sex = u.sex || u.Sex || null;
 
+      const photo = u.registration_photo || null;
+
       await pool.query(
-        `INSERT INTO persons (id, name, department, phone_number, address, sex)
-         VALUES (?, ?, ?, ?, ?, ?)
+        `INSERT INTO persons (id, name, department, phone_number, address, sex, registration_photo)
+         VALUES (?, ?, ?, ?, ?, ?, ?)
          ON DUPLICATE KEY UPDATE
-           name = COALESCE(VALUES(name), name),
-           department = COALESCE(VALUES(department), department),
-           phone_number = COALESCE(VALUES(phone_number), phone_number),
-           address = COALESCE(VALUES(address), address),
-           sex = COALESCE(VALUES(sex), sex)`,
-        [id, name, department, phone, address, sex]
+           name = COALESCE(NULLIF(VALUES(name), ''), name),
+           department = COALESCE(NULLIF(VALUES(department), ''), department),
+           phone_number = COALESCE(NULLIF(VALUES(phone_number), ''), phone_number),
+           address = COALESCE(NULLIF(VALUES(address), ''), address),
+           sex = COALESCE(NULLIF(VALUES(sex), ''), sex),
+           registration_photo = COALESCE(VALUES(registration_photo), registration_photo)`,
+        [id, name, department, phone, address, sex, photo]
       );
       insertedOrUpdatedCount += 1;
     }
@@ -857,7 +894,7 @@ app.post(["/api/users/import", "/api/dahua/push-users"], async (req, res) => {
     return res.json({
       received: rawUsers.length,
       count: insertedOrUpdatedCount,
-      message: `Successfully synced ${insertedOrUpdatedCount} Dahua user(s) into MySQL.`
+      message: `Successfully synced ${insertedOrUpdatedCount} from Dahua user(s).`
     });
   } catch (err) {
     console.error("User import error:", err.message);
@@ -875,6 +912,7 @@ app.post("/api/dahua/sync-users", async (req, res) => {
       phone_number: firstValue(user, ["Phone", "phone", "PhoneNumber"]),
       address: firstValue(user, ["Address", "address"]),
       sex: firstValue(user, ["Sex", "sex"]),
+      registration_photo: user.registration_photo || null,
     })).filter((user) => user.id);
 
     if (!payload.length) return res.json({ count: 0, message: "No users were returned by the Dahua device." });
@@ -882,22 +920,23 @@ app.post("/api/dahua/sync-users", async (req, res) => {
     let insertedOrUpdatedCount = 0;
     for (const u of payload) {
       await pool.query(
-        `INSERT INTO persons (id, name, department, phone_number, address, sex)
-         VALUES (?, ?, ?, ?, ?, ?)
+        `INSERT INTO persons (id, name, department, phone_number, address, sex, registration_photo)
+         VALUES (?, ?, ?, ?, ?, ?, ?)
          ON DUPLICATE KEY UPDATE
-           name = COALESCE(VALUES(name), name),
-           department = COALESCE(VALUES(department), department),
-           phone_number = COALESCE(VALUES(phone_number), phone_number),
-           address = COALESCE(VALUES(address), address),
-           sex = COALESCE(VALUES(sex), sex)`,
-        [u.id, u.name || null, u.department || null, u.phone_number || null, u.address || null, u.sex || null]
+           name = COALESCE(NULLIF(VALUES(name), ''), name),
+           department = COALESCE(NULLIF(VALUES(department), ''), department),
+           phone_number = COALESCE(NULLIF(VALUES(phone_number), ''), phone_number),
+           address = COALESCE(NULLIF(VALUES(address), ''), address),
+           sex = COALESCE(NULLIF(VALUES(sex), ''), sex),
+           registration_photo = COALESCE(VALUES(registration_photo), registration_photo)`,
+        [u.id, u.name || null, u.department || null, u.phone_number || null, u.address || null, u.sex || null, u.registration_photo || null]
       );
       insertedOrUpdatedCount += 1;
     }
 
     return res.json({
       count: insertedOrUpdatedCount,
-      message: `Synced ${insertedOrUpdatedCount} user(s) from Dahua into MySQL.`
+      message: `Synced ${insertedOrUpdatedCount} user(s) from Dahua.`
     });
   } catch (err) {
     const connectorUrl = DAHUA_CONNECTOR_URL || "";
@@ -909,17 +948,17 @@ app.post("/api/dahua/sync-users", async (req, res) => {
         const totalCount = rows[0]?.total || 0;
         return res.json({
           count: totalCount,
-          message: `Registered persons refreshed. Currently managing ${totalCount} active person(s) in MySQL database.`
+          message: `Registered persons refreshed. Currently managing ${totalCount} active person(s).`
         });
       } catch (dbErr) {
         return res.json({
           count: 0,
-          message: "Registered persons refreshed from MySQL database."
+          message: "Registered persons refreshed from database."
         });
       }
     }
 
-    const message = errorMessage(err, "The Dahua device returned an invalid response or the MySQL operation failed.");
+    const message = errorMessage(err, "The Dahua device returned an invalid response or the database operation failed.");
     console.error("Dahua user sync error:", err);
     return res.status(502).json({ error: `Dahua user sync failed: ${message}` });
   }
@@ -1074,7 +1113,7 @@ app.post(["/api/attendance/import", "/attendance/import", "/api/dahua/import", "
     return res.json({
       received: rawRecords.length,
       count: insertedCount,
-      message: insertedCount ? `Successfully imported ${insertedCount} attendance scan(s) into MySQL.` : "No new attendance records were inserted (all existing)."
+      message: insertedCount ? `Successfully imported ${insertedCount} attendance scan(s).` : "No new attendance records were inserted (all existing)."
     });
   } catch (err) {
     console.error("Attendance import error:", err.message);
@@ -1147,7 +1186,7 @@ app.post("/api/dahua/sync-attendance", async (req, res) => {
       console.log(`[Payroll] Auto-generated after Dahua sync: created=${payrollResult.created}, updated=${payrollResult.updated}`);
     }
 
-    return res.json({ count: insertedCount, message: insertedCount ? `Inserted ${insertedCount} deduplicated attendance scan(s) into MySQL.` : "No new attendance records were found after deduplication." });
+    return res.json({ count: insertedCount, message: insertedCount ? `Inserted ${insertedCount} deduplicated attendance scan(s).` : "No new attendance records were found after deduplication." });
   } catch (err) {
     console.error("Dahua attendance sync error:", err.message);
     const connectorUrl = DAHUA_CONNECTOR_URL || "";
@@ -1159,7 +1198,7 @@ app.post("/api/dahua/sync-attendance", async (req, res) => {
         const totalCount = rows[0]?.total || 0;
         return res.json({
           count: 0,
-          message: `Attendance is synced in the background via local sync agent. Currently storing ${totalCount} attendance record(s) in MySQL database.`
+          message: `Attendance is synced in the background via local sync agent. Currently storing ${totalCount} attendance records.`
         });
       } catch (dbErr) {
         return res.json({
@@ -1567,7 +1606,13 @@ app.post("/api/db/query", async (req, res) => {
         const keys = Object.keys(itemObj);
         const cols = keys.map(k => `\`${k.replace(/`/g, "")}\``).join(", ");
         const placeholders = keys.map(() => "?").join(", ");
-        const updateClauses = keys.map(k => `\`${k.replace(/`/g, "")}\` = VALUES(\`${k.replace(/`/g, "")}\`)`).join(", ");
+        const updateClauses = keys.map(k => {
+          const colName = k.replace(/`/g, "");
+          if (table === "persons" && (colName === "department" || colName === "daily_rate" || colName === "late_penalty")) {
+            return `\`${colName}\` = COALESCE(NULLIF(VALUES(\`${colName}\`), ''), \`${colName}\`)`;
+          }
+          return `\`${colName}\` = VALUES(\`${colName}\`)`;
+        }).join(", ");
         const values = keys.map(k => itemObj[k]);
 
         await pool.query(
@@ -1655,8 +1700,13 @@ function startFfmpeg() {
   }
 }
 
+// Disabled 24/7 background RTSP camera video streaming by default to prevent cPanel bandwidth exhaustion (5GB+).
+// Physical Dahua device operates standalone and syncs attendance data via lightweight API calls.
 try {
-  if (RTSP_URL) startFfmpeg();
+  clearHlsArtifacts();
+  if (RTSP_URL && process.env.ENABLE_LIVE_STREAM === "true") {
+    startFfmpeg();
+  }
 } catch (e) {
   console.warn("Skipping ffmpeg on startup:", e.message);
 }
@@ -1717,10 +1767,11 @@ app.use("/hls", express.static(hlsDir, {
 app.get("/health/stream", (req, res) => res.json({ ...streamState }));
 app.get("/health", (req, res) => res.json({ status: "ok" }));
 
-// ==========================================
-// SERVE FRONTEND (React Static Build)
-// ==========================================
-app.use(express.static(path.join(__dirname, "public")));
+// Serve Frontend with static caching to reduce unnecessary bandwidth downloads
+app.use(express.static(path.join(__dirname, "public"), {
+  maxAge: "1d",
+  etag: true,
+}));
 
 app.use((req, res) => {
   res.sendFile(path.join(__dirname, "public", "index.html"));

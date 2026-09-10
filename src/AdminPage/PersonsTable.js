@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef } from "react";
+import { useEffect, useState } from "react";
 import { supabase } from "../mysqlClient";
 import Swal from "sweetalert2";
 import * as XLSX from "xlsx";
@@ -25,10 +25,9 @@ export default function PersonsTable() {
 
   const [persons, setPersons] = useState([]);
   const [photoModal, setPhotoModal] = useState({ visible: false, src: "", title: "" });
-  const [payrollMap, setPayrollMap] = useState({});
-  const [payrollGrossMap, setPayrollGrossMap] = useState({});
   const [presenceMap, setPresenceMap] = useState({});
   const [departments, setDepartments] = useState([]);
+  const [deptRatesList, setDeptRatesList] = useState([]);
   const [syncingDahuaUsers, setSyncingDahuaUsers] = useState(false);
   const [error, setError] = useState(null);
   const [showEditModal, setShowEditModal] = useState(false);
@@ -38,7 +37,6 @@ export default function PersonsTable() {
   const [newCashAmount, setNewCashAmount] = useState("");
   const [newCashNote, setNewCashNote] = useState("");
   const [actionLoading, setActionLoading] = useState(false);
-  const editPhotoInputRef = useRef(null);
   const [adminModal, setAdminModal] = useState({ visible: false, person: null, event: "time-in", datetime: "", photo: null, note: "" });
 
   useEffect(() => {
@@ -56,47 +54,36 @@ export default function PersonsTable() {
         const list = data || [];
         setPersons(list);
 
-        // Fetch latest payroll/net for these persons
+        // Fetch department rates list
+        try {
+          const { data: deptData, error: deptErr } = await supabase
+            .from("department_rates")
+            .select("*");
+          if (!deptErr && Array.isArray(deptData)) {
+            setDeptRatesList(deptData);
+            const uniq = Array.from(
+              new Set(deptData.map((d) => d.department).filter(Boolean)),
+            );
+            setDepartments(uniq);
+          }
+        } catch (e) {
+          // ignore department fetch errors
+        }
+
+        // Fetch today's attendance for presence
         try {
           const ids = list.map((p) => p.id).filter(Boolean);
           if (ids.length) {
-            const [activeRes, historyRes] = await Promise.all([
-              supabase
-                .from("payroll_periods")
-                .select("person_id, net, gross, period")
-                .in("person_id", ids)
-                .order("period", { ascending: false }),
-              supabase
-                .from("payroll_released_history")
-                .select("person_id, net, gross, period")
-                .in("person_id", ids)
-                .order("period", { ascending: false }),
-            ]);
-
-            const payrolls = [
-              ...(Array.isArray(activeRes.data) ? activeRes.data : []),
-              ...(Array.isArray(historyRes.data) ? historyRes.data : []),
-            ];
-            const map = {};
-            const gmap = {};
-            for (const pr of payrolls) {
-              if (!map[pr.person_id]) map[pr.person_id] = pr.net || 0;
-              if (!gmap[pr.person_id]) gmap[pr.person_id] = pr.gross || 0;
-            }
-            setPayrollMap(map);
-            setPayrollGrossMap(gmap);
-            // Fetch today's attendance for presence
-            try {
-              const start = new Date();
-              start.setHours(0, 0, 0, 0);
-              const end = new Date();
-              end.setHours(23, 59, 59, 999);
-              const { data: atts, error: attErr } = await supabase
-                .from("attendance")
-                .select("person_id, event, device_time")
-                .in("person_id", ids)
-                .gte("device_time", start.toISOString())
-                .lte("device_time", end.toISOString());
+            const start = new Date();
+            start.setHours(0, 0, 0, 0);
+            const end = new Date();
+            end.setHours(23, 59, 59, 999);
+            const { data: atts, error: attErr } = await supabase
+              .from("attendance")
+              .select("person_id, event, device_time")
+              .in("person_id", ids)
+              .gte("device_time", start.toISOString())
+              .lte("device_time", end.toISOString());
               if (!attErr && Array.isArray(atts)) {
                 const pmap = {};
                 atts.forEach((r) => {
@@ -129,30 +116,11 @@ export default function PersonsTable() {
                   pmap[k].present = !!(pmap[k].morning || pmap[k].afternoon);
                 });
                 setPresenceMap(pmap);
-                // fetch department rates list (for edit dropdown)
-                try {
-                  const { data: deptData, error: deptErr } = await supabase
-                    .from("department_rates")
-                    .select("department");
-                  if (!deptErr && Array.isArray(deptData)) {
-                    const uniq = Array.from(
-                      new Set(
-                        deptData.map((d) => d.department).filter(Boolean),
-                      ),
-                    );
-                    setDepartments(uniq);
-                  }
-                } catch (e) {
-                  // ignore department fetch errors
-                }
               }
-            } catch (e) {
-              // ignore attendance fetch errors
             }
+          } catch (e) {
+            // ignore attendance fetch errors
           }
-        } catch (e) {
-          // ignore payroll fetch errors
-        }
       } catch (err) {
         setError(err.message || "Failed to load persons.");
       }
@@ -493,7 +461,7 @@ export default function PersonsTable() {
       title: "Delete Person?",
       html: `<div style='margin-bottom:12px;'>Are you sure you want to <b>permanently delete</b> <b>${
         person.name || person.id
-      }</b> from MySQL database?</div>`,
+      }</b> from database?</div>`,
       icon: "warning",
       width: "400px",
       padding: "1.75rem",
@@ -705,16 +673,6 @@ export default function PersonsTable() {
     setEditPerson(null);
   };
 
-  const handleEditPhotoChange = (e) => {
-    const file = e.target.files && e.target.files[0];
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onload = () => {
-      setEditPerson((p) => ({ ...p, registration_photo: reader.result }));
-    };
-    reader.readAsDataURL(file);
-  };
-
   const handleEditModalSave = async (e) => {
     e.preventDefault();
     if (!editPerson || !editPerson.id) return;
@@ -733,11 +691,27 @@ export default function PersonsTable() {
     const sssVal = editPerson.sss ? String(editPerson.sss).trim() : null;
     const pagIbigVal = editPerson.pag_ibig ? String(editPerson.pag_ibig).trim() : null;
     const philhealthVal = editPerson.philhealth ? String(editPerson.philhealth).trim() : null;
+    // Determine daily_rate and late_penalty based on assigned department
+    let newDailyRate = null;
+    let newLatePenalty = null;
+    const cleanDept = (department || "").trim();
+    if (cleanDept) {
+      const matchedDept = deptRatesList.find(
+        (d) => (d.department || "").trim().toLowerCase() === cleanDept.toLowerCase()
+      );
+      if (matchedDept) {
+        newDailyRate = matchedDept.daily_rate !== undefined && matchedDept.daily_rate !== null ? matchedDept.daily_rate : null;
+        newLatePenalty = matchedDept.late_penalty !== undefined && matchedDept.late_penalty !== null ? matchedDept.late_penalty : null;
+      }
+    }
+
     const { error } = await supabase
       .from("persons")
       .update({
         name: name || "",
-        department: department || null,
+        department: cleanDept || null,
+        daily_rate: newDailyRate,
+        late_penalty: newLatePenalty,
         phone_number: phone_number || null,
         address: address || null,
         email: email || null,
@@ -774,7 +748,9 @@ export default function PersonsTable() {
             ? {
                 ...p,
                 name,
-                department,
+                department: cleanDept || null,
+                daily_rate: newDailyRate,
+                late_penalty: newLatePenalty,
                 phone_number,
                 address,
                 email,
@@ -888,7 +864,6 @@ export default function PersonsTable() {
           <p class="text-sm text-gray-600 mb-1">
             Fetching enrolled users from <span class="font-semibold text-gray-800">DHI-ASA3213GL-MW</span>
           </p>
-          <p class="text-xs text-gray-400">Saving and updating records in MySQL database...</p>
         </div>
       `,
       allowOutsideClick: false,
@@ -926,7 +901,7 @@ export default function PersonsTable() {
               <span>${count} user${count === 1 ? "" : "s"} synced</span>
             </div>
             <p class="text-sm text-gray-600 leading-relaxed max-w-xs">
-              Synced from Dahua terminal to MySQL database successfully.
+              Synced from Dahua terminal successfully.
             </p>
           </div>
         `,
@@ -975,31 +950,47 @@ export default function PersonsTable() {
   };
 
   const handleExportExcel = () => {
-    if (!Array.isArray(sortedPersons)) return;
+    if (!Array.isArray(sortedPersons) || sortedPersons.length === 0) return;
     const exportData = sortedPersons.map((row) => ({
-      ID: row.id,
-      Name: row.name || "",
+      "Person ID": row.id,
+      "Full Name": row.name || "",
       Department: row.department || "",
-      Phone: row.phone_number || "",
+      "Phone Number": row.phone_number || "",
       Address: row.address || "",
       Email: row.email || "",
-      Sex: row.sex || "",
-      RegisteredAt: row.created_at
+      Gender: row.sex || "",
+      "Registered At": row.created_at
         ? new Date(row.created_at).toLocaleString()
         : "",
-      SSS: row.sss || "",
-      Pag_ibig: row.pag_ibig || "",
-      PhilHealth: row.philhealth || "",
-      Cash_Advance: row.cash_advance || "",
+      "SSS No.": row.sss || "",
+      "Pag-IBIG No.": row.pag_ibig || "",
+      "PhilHealth No.": row.philhealth || "",
+      "Cash Advance (₱)": row.cash_advance || 0,
     }));
+    if (exportData.length === 0) return;
     const ws = XLSX.utils.json_to_sheet(exportData);
+
+    const colWidths = Object.keys(exportData[0]).map((key) => {
+      let maxLen = key ? String(key).length : 10;
+      exportData.forEach((row) => {
+        const val = row[key];
+        if (val !== undefined && val !== null) {
+          const len = String(val).length;
+          if (len > maxLen) maxLen = len;
+        }
+      });
+      return { wch: Math.max(maxLen + 4, 14) };
+    });
+    ws["!cols"] = colWidths;
+    if (ws["!ref"]) ws["!autofilter"] = { ref: ws["!ref"] };
+
     const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, "Persons");
+    XLSX.utils.book_append_sheet(wb, ws, "Registered Persons");
     XLSX.writeFile(wb, "persons.xlsx");
   };
 
   return (
-    <div className="mx-auto p-7 md:p-9 max-w-full bg-white min-h-screen text-gray-800 font-sans">
+    <div className="mx-auto pt-0 pb-6 px-0 max-w-full bg-white min-h-screen text-gray-800 font-sans">
       {error && (
         <div
           role="alert"
@@ -1106,15 +1097,24 @@ export default function PersonsTable() {
               .slice(0, 2)
               .join("")
               .toUpperCase();
-            // Compute display amount: prefer explicit daily_rate, then payroll gross, then net
-            const displayAmount = Number(
-              p.daily_rate ??
-                payrollGrossMap[p.id] ??
-                p.gross ??
-                payrollMap[p.id] ??
-                p.net ??
-                0,
-            );
+            const hasDepartment = Boolean(p.department && p.department.trim());
+            // If person is not assigned a department, daily rate is 0.00
+            // If assigned, derive from person daily_rate or department rate
+            let displayDailyRate = 0;
+            if (hasDepartment) {
+              const matchedDept = deptRatesList.find(
+                (d) => (d.department || "").trim().toLowerCase() === p.department.trim().toLowerCase()
+              );
+              if (p.daily_rate !== null && p.daily_rate !== undefined && p.daily_rate !== "" && Number(p.daily_rate) > 0) {
+                displayDailyRate = Number(p.daily_rate);
+              } else if (matchedDept && matchedDept.daily_rate !== null && matchedDept.daily_rate !== undefined && Number(matchedDept.daily_rate) > 0) {
+                displayDailyRate = Number(matchedDept.daily_rate);
+              } else {
+                displayDailyRate = 0;
+              }
+            } else {
+              displayDailyRate = 0;
+            }
             return (
               <div
                 key={p.id}
@@ -1186,7 +1186,7 @@ export default function PersonsTable() {
                   )}
                   <div className="text-xs font-semibold text-[#237227] mt-1">
                     Daily Rate (₱): ₱
-                    {displayAmount.toLocaleString(undefined, {
+                    {displayDailyRate.toLocaleString(undefined, {
                       minimumFractionDigits: 2,
                       maximumFractionDigits: 2,
                     })}
@@ -1249,42 +1249,40 @@ export default function PersonsTable() {
             <form onSubmit={handleEditModalSave}>
               <div className="mb-4">
                 <label className="block text-xs font-semibold text-gray-700 mb-2">
-                  Registration Photo
+                  Enrolled Dahua Face Photo
                 </label>
-                <div className="flex items-center gap-3 flex-wrap">
+                <div className="flex items-center gap-3.5 flex-wrap">
                   {editPerson.registration_photo ? (
-                    <img
-                      src={editPerson.registration_photo}
-                      alt="person"
-                      className="w-[88px] h-[88px] object-cover rounded-xl border-2 border-emerald-500/20 shadow-md cursor-pointer"
-                      onClick={() =>
-                        openPhotoModal(
-                          editPerson.registration_photo,
-                          editPerson.name || editPerson.id,
-                        )
-                      }
-                    />
+                    <div className="flex items-center gap-3">
+                      <img
+                        src={editPerson.registration_photo}
+                        alt="person"
+                        className="w-[84px] h-[84px] object-cover rounded-xl border-2 border-[#237227]/30 shadow-md cursor-pointer hover:opacity-90 transition-opacity"
+                        onClick={() =>
+                          openPhotoModal(
+                            editPerson.registration_photo,
+                            editPerson.name || editPerson.id,
+                          )
+                        }
+                        title="Click to view full photo"
+                      />
+                      <div className="text-xs text-gray-500">
+                        <span className="font-semibold text-gray-700 block mb-0.5">Device Synchronized</span>
+                        <span>Synced directly from Dahua terminal. Click image to enlarge.</span>
+                      </div>
+                    </div>
                   ) : (
-                    <span className="text-gray-400 text-sm">No photo</span>
+                    <div className="flex items-center gap-3">
+                      <div className="w-[84px] h-[84px] rounded-xl bg-gray-100 border border-dashed border-gray-300 flex flex-col items-center justify-center text-gray-400 p-2 text-center text-xs">
+                        No Photo
+                      </div>
+                      <div className="text-xs text-gray-500">
+                        <span className="font-medium text-gray-700 block mb-0.5">Not Enrolled on Device</span>
+                        <span>Enrolling a face on the Dahua terminal will automatically sync it here.</span>
+                      </div>
+                    </div>
                   )}
-                  <button
-                    type="button"
-                    onClick={() =>
-                      editPhotoInputRef.current &&
-                      editPhotoInputRef.current.click()
-                    }
-                    className="inline-flex items-center justify-center gap-1.5 py-2 px-4 rounded-md text-sm font-semibold border border-[#237227] bg-white text-[#237227] shadow-sm cursor-pointer"
-                  >
-                    Upload New Photo
-                  </button>
                 </div>
-                <input
-                  ref={editPhotoInputRef}
-                  type="file"
-                  accept="image/*"
-                  className="hidden"
-                  onChange={handleEditPhotoChange}
-                />
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 items-start">
@@ -1341,6 +1339,27 @@ export default function PersonsTable() {
                           </option>
                         ))}
                   </select>
+                  {(() => {
+                    const selDept = (editPerson.department || "").trim();
+                    if (!selDept) {
+                      return (
+                        <span className="block text-[11px] text-amber-600 mt-1.5 font-medium">
+                          No department assigned — Daily Rate is ₱0.00.
+                        </span>
+                      );
+                    }
+                    const matched = deptRatesList.find(
+                      (d) => (d.department || "").trim().toLowerCase() === selDept.toLowerCase()
+                    );
+                    if (matched && matched.daily_rate) {
+                      return (
+                        <span className="block text-[11px] text-[#237227] mt-1.5 font-medium">
+                          Department Daily Rate: ₱{Number(matched.daily_rate).toFixed(2)} / day
+                        </span>
+                      );
+                    }
+                    return null;
+                  })()}
                 </div>
 
                 <div>

@@ -153,7 +153,7 @@ export default function PersonRegistration({ initialImageUrl = null }) {
   }, [showModal]);
 
   return (
-    <div className="mx-auto p-7 md:p-9 max-w-full bg-white min-h-screen text-gray-800 font-sans">
+    <div className="mx-auto pt-0 pb-6 px-0 max-w-full bg-white min-h-screen text-gray-800 font-sans">
       {/* Header */}
       <div className="mb-8 flex flex-col items-center text-center gap-1.5">
         <h1 className="text-[2rem] md:text-4xl font-extrabold m-0 tracking-tight inline-block text-gray-800">

@@ -124,7 +124,7 @@ export default function AttendanceTable() {
     setSyncingDahua(true);
     Swal.fire({
       title: "Syncing Dahua Logs...",
-      html: "Fetching face recognition and card logs from <b>DHI-ASA3213GL-MW</b> to MySQL database...",
+      html: "Fetching face recognition and card logs from <b>DHI-ASA3213GL-MW</b>",
       allowOutsideClick: false,
       customClass: {
         popup: "!rounded-3xl !shadow-[0_24px_60px_rgba(0,0,0,0.15)] !px-8 !py-8 !max-w-[400px]",
@@ -141,7 +141,7 @@ export default function AttendanceTable() {
       Swal.fire({
         icon: "success",
         title: "Attendance Synced!",
-        html: `<b>${data.count || 0}</b> new attendance scan(s) synced directly to MySQL database.<br/><small style="color:#64748b">${data.message || ""}</small>`,
+        html: `<b>${data.count || 0}</b> new attendance scan(s) synced successfully.<br/><small style="color:#64748b">${data.message || ""}</small>`,
         timer: 3500,
         showConfirmButton: true,
         confirmButtonText: "OK",
@@ -617,23 +617,39 @@ export default function AttendanceTable() {
     const exportData = sortedRecords.map((row) => {
       const person = persons.find((p) => p.id === row.person_id) || {};
       return {
-        Time: row.device_time ? formatDateTime(row.device_time) : "",
-        "Person ID": row.person_id,
-        Name: person.name || "",
+        "Date & Time": row.device_time ? formatDateTime(row.device_time) : "",
+        "Person ID": row.person_id || "",
+        "Employee Name": person.name || "",
         Department: person.department || "",
-        "Attendance Event": row.event,
-        Status: row.status,
-        "Attendance Method": row.method,
+        "Attendance Event": row.event || "",
+        "Attendance Status": getAttendanceStatus(row, settings) || row.status || "",
+        "Attendance Method": row.method || "",
       };
     });
+    if (exportData.length === 0) return;
     const ws = XLSX.utils.json_to_sheet(exportData);
+
+    const colWidths = Object.keys(exportData[0]).map((key) => {
+      let maxLen = key ? String(key).length : 10;
+      exportData.forEach((row) => {
+        const val = row[key];
+        if (val !== undefined && val !== null) {
+          const len = String(val).length;
+          if (len > maxLen) maxLen = len;
+        }
+      });
+      return { wch: Math.max(maxLen + 4, 14) };
+    });
+    ws["!cols"] = colWidths;
+    if (ws["!ref"]) ws["!autofilter"] = { ref: ws["!ref"] };
+
     const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, "Attendance");
+    XLSX.utils.book_append_sheet(wb, ws, "Attendance Records");
     XLSX.writeFile(wb, "attendance_records.xlsx");
   };
 
   return (
-    <div className="attendance-table-root mx-auto py-9 px-7 max-w-full font-sans bg-white min-h-screen text-[#2c382d]">
+    <div className="attendance-table-root mx-auto pt-0 pb-6 px-0 max-w-full font-sans bg-white min-h-screen text-[#2c382d]">
       <style>{`
         .attendance-table-root button,
         .attendance-table-root button:hover,

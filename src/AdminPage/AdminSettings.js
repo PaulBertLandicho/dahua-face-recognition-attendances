@@ -143,7 +143,7 @@ export default function AdminSettings() {
   };
 
   return (
-    <div className="admin-settings-container max-w-[1200px] mx-auto mt-2 mb-10 px-8 py-10 bg-white rounded-[32px] border border-gray-100 text-gray-800 font-sans shadow-none">
+    <div className="admin-settings-container max-w-[1200px] mx-auto mt-0 mb-6 px-4 py-4 bg-white rounded-[32px] border border-gray-100 text-gray-800 font-sans shadow-none">
       <style>{`
         .admin-settings-container,
         .admin-settings-container * {

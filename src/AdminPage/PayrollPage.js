@@ -777,30 +777,45 @@ export default function PayrollPage() {
     );
   };
 
-  // Export to Excel
   const handleExportPayslipExcel = () => {
-    if (!payrollPeriods.length) return;
-    // Export each payroll period as a row
-    const exportData = payrollPeriods.map((p) => {
+    const listToExport = filteredPayrollPeriods.length ? filteredPayrollPeriods : payrollPeriods;
+    if (!listToExport || !listToExport.length) return;
+    const exportData = listToExport.map((p) => {
       const { person, period, payroll } = p;
       return {
-        ID: person.id,
-        Name: person.name,
-        Department: person.department,
-        Period: period,
-        "Daily Rate": person.daily_rate,
-        "Late Penalty": person.late_penalty,
-        "Days Present": payroll.daysPresent,
-        "Late Count": payroll.lateCount,
-        Gross: payroll.gross,
-        "Late Deduction": payroll.totalLateDeduction,
-        "Net Pay": payroll.net,
+        "Person ID": person.id || "",
+        "Employee Name": person.name || "",
+        Department: person.department || "",
+        "Payroll Period": period || "",
+        "Daily Rate (₱)": person.daily_rate ?? 0,
+        "Late Penalty (₱)": person.late_penalty ?? 0,
+        "Days Present": payroll.daysPresent ?? 0,
         "Absent Count": p.absentCount ?? 0,
+        "Late Count": payroll.lateCount ?? 0,
+        "Gross Pay (₱)": payroll.gross ?? 0,
+        "Late Deduction (₱)": payroll.totalLateDeduction ?? 0,
+        "Net Pay (₱)": payroll.net ?? 0,
       };
     });
+    if (exportData.length === 0) return;
     const ws = XLSX.utils.json_to_sheet(exportData);
+
+    const colWidths = Object.keys(exportData[0]).map((key) => {
+      let maxLen = key ? String(key).length : 10;
+      exportData.forEach((row) => {
+        const val = row[key];
+        if (val !== undefined && val !== null) {
+          const len = String(val).length;
+          if (len > maxLen) maxLen = len;
+        }
+      });
+      return { wch: Math.max(maxLen + 4, 14) };
+    });
+    ws["!cols"] = colWidths;
+    if (ws["!ref"]) ws["!autofilter"] = { ref: ws["!ref"] };
+
     const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, "Payroll");
+    XLSX.utils.book_append_sheet(wb, ws, "Payroll Summary");
     XLSX.writeFile(wb, "payroll_summary.xlsx");
   };
 
@@ -845,7 +860,7 @@ export default function PayrollPage() {
   const currentRecords = activeRecords.slice(startIndex, startIndex + itemsPerPage);
 
   return (
-    <div className="payroll-page-container mx-auto py-9 px-7 max-w-full bg-white min-h-screen text-gray-800 font-sans">
+    <div className="payroll-page-container mx-auto pt-0 pb-6 px-0 max-w-full bg-white min-h-screen text-gray-800 font-sans">
       <style>{`
         .payroll-page-container button,
         .payroll-page-container button:hover,

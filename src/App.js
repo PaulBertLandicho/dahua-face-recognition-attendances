@@ -197,7 +197,7 @@ function App() {
                       window.location.href = "/admin";
                     }}
                   />
-                  <div className={`flex-1 p-10 bg-white ${isMobile ? "ml-0" : "ml-[280px]"}`}>
+                  <div className={`flex-1 pt-4 pb-8 px-6 lg:px-8 bg-white ${isMobile ? "ml-0" : "ml-[295px]"}`}>
                     <PersonRegistration />
                   </div>
                 </div>
@@ -217,7 +217,7 @@ function App() {
                       window.location.href = "/admin";
                     }}
                   />
-                  <div className={`flex-1 p-10 bg-white ${isMobile ? "ml-0" : "ml-[280px]"}`}>
+                  <div className={`flex-1 pt-4 pb-8 px-6 lg:px-8 bg-white ${isMobile ? "ml-0" : "ml-[295px]"}`}>
                     <Dashboard />
                   </div>
                 </div>
@@ -247,7 +247,7 @@ function App() {
                       window.location.href = "/admin";
                     }}
                   />
-                  <div className={`flex-1 p-10 bg-white ${isMobile ? "ml-0" : "ml-[280px]"}`}>
+                  <div className={`flex-1 pt-4 pb-8 px-6 lg:px-8 bg-white ${isMobile ? "ml-0" : "ml-[295px]"}`}>
                     <AdminSettings />
                   </div>
                 </div>
@@ -267,7 +267,7 @@ function App() {
                       window.location.href = "/admin";
                     }}
                   />
-                  <div className={`flex-1 p-10 bg-white ${isMobile ? "ml-0" : "ml-[280px]"}`}>
+                  <div className={`flex-1 pt-4 pb-8 px-6 lg:px-8 bg-white ${isMobile ? "ml-0" : "ml-[295px]"}`}>
                     <AttendanceTable />
                   </div>
                 </div>
@@ -287,7 +287,7 @@ function App() {
                       window.location.href = "/admin";
                     }}
                   />
-                  <div className={`flex-1 p-10 bg-white ${isMobile ? "ml-0" : "ml-[280px]"}`}>
+                  <div className={`flex-1 pt-4 pb-8 px-6 lg:px-8 bg-white ${isMobile ? "ml-0" : "ml-[295px]"}`}>
                     <DepartmentRates />
                   </div>
                 </div>
@@ -307,7 +307,7 @@ function App() {
                       window.location.href = "/admin";
                     }}
                   />
-                  <div className={`flex-1 p-10 bg-white ${isMobile ? "ml-0" : "ml-[280px]"}`}>
+                  <div className={`flex-1 pt-4 pb-8 px-6 lg:px-8 bg-white ${isMobile ? "ml-0" : "ml-[295px]"}`}>
                     <PersonsTable />
                   </div>
                 </div>
@@ -327,7 +327,7 @@ function App() {
                       window.location.href = "/admin";
                     }}
                   />
-                  <div className={`flex-1 p-10 bg-white ${isMobile ? "ml-0" : "ml-[280px]"}`}>
+                  <div className={`flex-1 pt-4 pb-8 px-6 lg:px-8 bg-white ${isMobile ? "ml-0" : "ml-[295px]"}`}>
                     <PayrollPage />
                   </div>
                 </div>
@@ -347,7 +347,7 @@ function App() {
                       window.location.href = "/admin";
                     }}
                   />
-                  <div className={`flex-1 p-10 bg-white ${isMobile ? "ml-0" : "ml-[280px]"}`}>
+                  <div className={`flex-1 pt-4 pb-8 px-6 lg:px-8 bg-white ${isMobile ? "ml-0" : "ml-[295px]"}`}>
                     <ReleasedHistoryPayroll />
                   </div>
                 </div>
@@ -367,7 +367,7 @@ function App() {
                       window.location.href = "/admin";
                     }}
                   />
-                  <div className={`flex-1 p-10 bg-white ${isMobile ? "ml-0" : "ml-[280px]"}`}>
+                  <div className={`flex-1 pt-4 pb-8 px-6 lg:px-8 bg-white ${isMobile ? "ml-0" : "ml-[295px]"}`}>
                     <ReleasedPayrollLogs />
                   </div>
                 </div>

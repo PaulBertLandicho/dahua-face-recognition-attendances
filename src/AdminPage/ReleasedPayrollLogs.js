@@ -133,22 +133,38 @@ export default function ReleasedPayrollLogs() {
 
   // Export to Excel
   const handleExportExcel = () => {
-    if (!Array.isArray(sortedLogs)) return;
+    if (!Array.isArray(sortedLogs) || sortedLogs.length === 0) return;
     const exportData = sortedLogs.map((row) => ({
       Timestamp: row.timestamp ? new Date(row.timestamp).toLocaleString() : "",
-      "Payroll Period ID": row.payroll_period_id,
-      "Person Name": row.person_name,
-      "Released By": row.released_by,
-      Action: row.action,
+      "Payroll Period ID": row.payroll_period_id || "",
+      "Employee Name": row.person_name || "",
+      "Released By": row.released_by || "",
+      Action: row.action || "",
     }));
+    if (exportData.length === 0) return;
     const ws = XLSX.utils.json_to_sheet(exportData);
+
+    const colWidths = Object.keys(exportData[0]).map((key) => {
+      let maxLen = key ? String(key).length : 10;
+      exportData.forEach((row) => {
+        const val = row[key];
+        if (val !== undefined && val !== null) {
+          const len = String(val).length;
+          if (len > maxLen) maxLen = len;
+        }
+      });
+      return { wch: Math.max(maxLen + 4, 14) };
+    });
+    ws["!cols"] = colWidths;
+    if (ws["!ref"]) ws["!autofilter"] = { ref: ws["!ref"] };
+
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "Released Payroll Logs");
     XLSX.writeFile(wb, "released_payroll_logs.xlsx");
   };
 
   return (
-    <div className="released-payroll-logs mx-auto p-7 md:p-9 max-w-full bg-white min-h-screen text-gray-800 font-sans">
+    <div className="released-payroll-logs mx-auto pt-0 pb-6 px-0 max-w-full bg-white min-h-screen text-gray-800 font-sans">
       <style>{`
         .released-payroll-logs input:focus {
           border-color: #dce3dd !important;

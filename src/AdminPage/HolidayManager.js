@@ -169,7 +169,7 @@ export default function HolidayManagerGlobal({
   };
 
   return (
-    <div className="holiday-manager-root max-w-[860px] mx-auto bg-[#f8fafc] rounded-3xl p-8 sm:p-10 border border-gray-200 font-sans shadow-none">
+    <div className="holiday-manager-root max-w-[860px] mx-auto bg-[#f8fafc] rounded-3xl p-4 sm:p-6 border border-gray-200 font-sans shadow-none">
       <style>{`
         .holiday-manager-root button,
         .holiday-manager-root button:hover,

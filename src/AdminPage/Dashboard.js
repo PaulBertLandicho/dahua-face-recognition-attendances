@@ -1,8 +1,9 @@
 import React, { useEffect, useState, useRef, useMemo, Fragment } from "react";
 import { supabase } from "../mysqlClient";
 import Swal from "sweetalert2";
-import { FiTrendingUp, FiUsers, FiClock, FiDownload, FiChevronLeft, FiChevronRight } from "react-icons/fi";
-import { determineAttendanceStatus } from "./attendanceUtils";
+import { FiTrendingUp, FiUsers, FiClock, FiDownload, FiChevronLeft, FiChevronRight, FiCalendar } from "react-icons/fi";
+import { determineAttendanceStatus, getAttendanceStatus } from "./attendanceUtils";
+import * as XLSX from "xlsx";
 
 function compactNumber(n) {
   if (n >= 1e9) return (n / 1e9).toFixed(1) + "B";
@@ -152,6 +153,13 @@ function formatPeriod(period) {
 }
 
 export default function Dashboard() {
+  const [currentTime, setCurrentTime] = useState(new Date());
+
+  useEffect(() => {
+    const timer = setInterval(() => setCurrentTime(new Date()), 1000);
+    return () => clearInterval(timer);
+  }, []);
+
   const [attendance, setAttendance] = useState([]);
   const [persons, setPersons] = useState([]);
   const [totalEmployees, setTotalEmployees] = useState(0);
@@ -736,7 +744,7 @@ export default function Dashboard() {
   };
 
   return (
-    <div className="p-6 font-sans dashboard-root">
+    <div className="pt-0 pb-4 px-0 font-sans dashboard-root">
       <style>{`
         .dashboard-root button,
         .dashboard-root button:hover,
@@ -766,8 +774,31 @@ export default function Dashboard() {
           box-shadow: none !important;
         }
       `}</style>
-      <h2 className="m-0 font-bold text-[#000000]">Dashboard</h2>
-      <p className="text-gray-500 mt-1.5">Overview of attendance and payroll</p>
+      <div className="mb-6 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+        <div className="flex flex-col items-start gap-1.5">
+          <h1 className="text-[2.5rem] font-extrabold m-0 tracking-[-0.02em]">
+            <span className="text-[#2c382d]">Dash</span>
+            <span className="text-[#237227]">board</span>
+          </h1>
+          <p className="text-gray-500 m-0">Overview of attendance and payroll</p>
+        </div>
+
+        {/* Realtime Date & Time Widget */}
+        <div className="inline-flex items-center gap-3 py-2 px-4 bg-white rounded-xl border border-[#edf2ee] shadow-[0_2px_8px_rgba(0,0,0,0.04)] text-[#2c382d] self-start sm:self-auto">
+          <div className="w-9 h-9 rounded-lg bg-[#237227]/10 flex items-center justify-center text-[#237227]">
+            <FiClock className="text-lg" />
+          </div>
+          <div className="flex flex-col text-left">
+            <span className="text-sm font-bold text-gray-800 tracking-wide font-mono">
+              {currentTime.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: true })}
+            </span>
+            <span className="text-xs text-gray-500 font-medium flex items-center gap-1">
+              <FiCalendar className="text-[11px] text-[#237227]" />
+              {currentTime.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric", year: "numeric" })}
+            </span>
+          </div>
+        </div>
+      </div>
 
       {/* Stats Grid */}
       <div className="grid grid-cols-[repeat(auto-fit,minmax(220px,1fr))] gap-4 mb-5">
@@ -1017,23 +1048,64 @@ export default function Dashboard() {
             onClick={() => {
               try {
                 const rows = filteredTodayEntries || [];
-                const header = ['person_id', 'name', 'department', 'device_time', 'event', 'status'];
-                const csv = [header.join(',')].concat(rows.map(r => {
-                  const person = r.person || personMap[r.person_id] || {};
-                  const name = (person && person.name) || r.name || '';
-                  const dept = (person && person.department) || r.department || '';
-                  return [r.person_id, `"${name.replace(/"/g, '""')}"`, `"${dept.replace(/"/g, '""')}"`, r.device_time, r.event || '', r.status || ''].join(',');
-                })).join('\n');
-                const blob = new Blob([csv], { type: 'text/csv' });
-                const url = URL.createObjectURL(blob);
-                const a = document.createElement('a');
-                a.href = url;
-                a.download = `today_attendance_${new Date().toISOString().slice(0, 10)}.csv`;
-                document.body.appendChild(a);
-                a.click();
-                a.remove();
-                URL.revokeObjectURL(url);
-              } catch (e) { console.error(e); }
+                if (!rows.length) return;
+                const exportData = rows.map((r) => {
+                  const person = r.person || personMap[r.person_id] || (persons || []).find((p) => String(p.name) === String(r.person_id)) || {};
+                  const name = (person && person.name) || r.name || `Person #${r.person_id}`;
+                  const dept = (person && person.department) || r.department || "";
+                  
+                  let timeStr = "";
+                  try {
+                    if (r.device_time) {
+                      timeStr = new Date(r.device_time).toLocaleString("en-US", {
+                        month: "short",
+                        day: "numeric",
+                        year: "numeric",
+                        hour: "2-digit",
+                        minute: "2-digit",
+                        second: "2-digit",
+                      });
+                    }
+                  } catch (e) {
+                    timeStr = String(r.device_time || "");
+                  }
+
+                  const status = getAttendanceStatus(r, settings || {});
+
+                  return {
+                    "Date & Time": timeStr,
+                    "Employee ID": (person && person.id) || r.person_id || "",
+                    "Employee Name": name,
+                    Department: dept,
+                    "Attendance Event": r.event || "time-in",
+                    "Attendance Status": status || "present",
+                    "Attendance Method": r.method || "face",
+                  };
+                });
+
+                if (exportData.length === 0) return;
+                const ws = XLSX.utils.json_to_sheet(exportData);
+                const colWidths = Object.keys(exportData[0]).map((key) => {
+                  let maxLen = key ? String(key).length : 10;
+                  exportData.forEach((row) => {
+                    const val = row[key];
+                    if (val !== undefined && val !== null) {
+                      const len = String(val).length;
+                      if (len > maxLen) maxLen = len;
+                    }
+                  });
+                  return { wch: Math.max(maxLen + 4, 14) };
+                });
+                ws["!cols"] = colWidths;
+                if (ws["!ref"]) ws["!autofilter"] = { ref: ws["!ref"] };
+
+                const wb = XLSX.utils.book_new();
+                const todayStr = new Date().toISOString().slice(0, 10);
+                XLSX.utils.book_append_sheet(wb, ws, "Today Attendance");
+                XLSX.writeFile(wb, `today_attendance_${todayStr}.xlsx`);
+              } catch (e) {
+                console.error("Export Today Attendance error:", e);
+              }
             }}
             className="flex items-center gap-2 px-3 py-2 rounded-lg border-none bg-[#237227] text-white text-sm cursor-pointer transition-colors"
           >

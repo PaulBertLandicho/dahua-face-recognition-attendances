@@ -210,7 +210,7 @@ export default function DepartmentRates() {
   };
 
   return (
-    <div className="department-rates-container mx-auto py-6 px-5 max-w-full bg-white min-h-screen text-gray-800 font-sans">
+    <div className="department-rates-container mx-auto pt-0 pb-6 px-0 max-w-full bg-white min-h-screen text-gray-800 font-sans">
       <style>{`
         .department-rates-container button,
         .department-rates-container button:hover,
