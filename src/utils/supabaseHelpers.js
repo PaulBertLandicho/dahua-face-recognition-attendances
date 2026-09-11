@@ -51,11 +51,11 @@ export async function getPersons() {
 
 export async function getDepartmentRates() {
   if (SUPABASE_CONFIGURED && supabase) {
-    const { data, error } = await supabase.from('department_rates').select('id,department,daily_rate,late_penalty,sss,pag_ibig,philhealth,ot_rate,regular_holiday_rate,special_holiday_rate');
+    const { data, error } = await supabase.from('department_rates').select('*');
     if (error) throw error;
     return data || [];
   }
-  return fetchViaRest('department_rates?select=id,department,daily_rate,late_penalty,sss,pag_ibig,philhealth,ot_rate,regular_holiday_rate,special_holiday_rate');
+  return fetchViaRest('department_rates?select=*');
 }
 
 export async function getAttendanceForPersonOnDay(personId, dayStartIso, dayEndIso) {

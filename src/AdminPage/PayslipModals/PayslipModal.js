@@ -7,6 +7,7 @@ import {
   FiX,
   FiClock,
   FiTrendingDown,
+  FiBriefcase,
 } from "react-icons/fi";
 import Icon from "../../components/Icon";
 import { supabase } from "../../mysqlClient";
@@ -971,6 +972,27 @@ export default function PayslipModal({
                   </td>
                 </tr>
               ))}
+              <tr className="bg-gray-50 font-medium">
+                <td className="py-2.5 px-2 border-b border-gray-200 text-gray-800 font-semibold">
+                  Monthly Share:
+                </td>
+                <td className="py-2.5 px-2 border-b border-gray-200 text-gray-800 font-semibold">
+                  ₱{deductions.reduce((acc, d) => acc + Number(d.value || 0), 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                </td>
+              </tr>
+              <tr className="bg-green-50/50 font-medium">
+                <td className="py-2.5 px-2 border-b border-gray-200 text-gray-800">
+                  <div className="flex items-center justify-between">
+                    <span className="font-semibold">Employer Share (Total):</span>
+                    <span className="text-[0.68rem] text-[#237227] font-bold uppercase bg-green-100 border border-green-200 px-2 py-0.5 rounded ml-2">
+                      Company Paid
+                    </span>
+                  </div>
+                </td>
+                <td className="py-2.5 px-2 border-b border-gray-200 text-[#237227] font-bold">
+                  ₱{Number(payroll.totalEmployerShare || ((payroll.sss_employer || 0) + (payroll.philhealth_employer || 0) + (payroll.pag_ibig_employer || 0))).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                </td>
+              </tr>
               {cashAdvanceEntries && cashAdvanceEntries.length > 0 && (
                 <>
                   <tr>
@@ -1015,6 +1037,38 @@ export default function PayslipModal({
               maximumFractionDigits: 2,
             })}
           </h3>
+
+          {/* Employer Share (Company Paid Contributions) */}
+          {((payroll.sss_employer || 0) > 0 || (payroll.philhealth_employer || 0) > 0 || (payroll.pag_ibig_employer || 0) > 0 || (payroll.totalEmployerShare || 0) > 0) && (
+            <div className="mt-6 p-4 rounded-xl bg-gray-50 border border-gray-200">
+              <div className="flex items-center justify-between mb-2.5">
+                <span className="text-[0.92rem] font-bold text-gray-700 flex items-center gap-1.5">
+                  <Icon as={FiBriefcase} size={16} color="#237227" ariaLabel="Company Share" />
+                  Employer Contributions (Company Paid)
+                </span>
+                <span className="text-[0.68rem] font-semibold text-gray-500 bg-gray-200 px-2 py-0.5 rounded">
+                  Not deducted from employee salary
+                </span>
+              </div>
+              <div className="grid grid-cols-3 gap-3 text-sm">
+                <div className="flex flex-col bg-white p-2.5 rounded-lg border border-gray-200">
+                  <span className="text-[0.7rem] text-gray-500 font-semibold uppercase tracking-wider">SSS Employer</span>
+                  <span className="font-bold text-gray-800 text-sm mt-0.5">₱{Number(payroll.sss_employer || 0).toFixed(2)}</span>
+                </div>
+                <div className="flex flex-col bg-white p-2.5 rounded-lg border border-gray-200">
+                  <span className="text-[0.7rem] text-gray-500 font-semibold uppercase tracking-wider">PhilHealth Employer</span>
+                  <span className="font-bold text-gray-800 text-sm mt-0.5">₱{Number(payroll.philhealth_employer || 0).toFixed(2)}</span>
+                </div>
+                <div className="flex flex-col bg-white p-2.5 rounded-lg border border-gray-200">
+                  <span className="text-[0.7rem] text-gray-500 font-semibold uppercase tracking-wider">Pag-IBIG Employer</span>
+                  <span className="font-bold text-gray-800 text-sm mt-0.5">₱{Number(payroll.pag_ibig_employer || 0).toFixed(2)}</span>
+                </div>
+              </div>
+              <div className="mt-2 text-right text-xs text-gray-500 font-medium">
+                Total Company Share: <strong className="text-gray-800">₱{Number((payroll.sss_employer || 0) + (payroll.philhealth_employer || 0) + (payroll.pag_ibig_employer || 0)).toFixed(2)}</strong>
+              </div>
+            </div>
+          )}
         </div>
 
         {/* ✅ BUTTONS OUTSIDE PDF */}

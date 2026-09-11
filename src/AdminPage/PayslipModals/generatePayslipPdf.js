@@ -242,6 +242,16 @@ export function drawPayslipOnDoc(
     (person.pag_ibig ? Number(payroll.pag_ibig) : 0) +
     (person.philhealth ? Number(payroll.philhealth) : 0);
   drawLinedField("Monthly Share:", formatCurrency(monthlyShare));
+
+  // Employer Share Total (Company Paid)
+  const employerShareAmount = Number(
+    payroll.totalEmployerShare ||
+      (Number(payroll.sss_employer || 0) +
+        Number(payroll.philhealth_employer || 0) +
+        Number(payroll.pag_ibig_employer || 0))
+  );
+  drawLinedField("Employer Share (Total):", formatCurrency(employerShareAmount));
+
   drawLinedField(
     "Cash Advance:",
     formatCurrency(

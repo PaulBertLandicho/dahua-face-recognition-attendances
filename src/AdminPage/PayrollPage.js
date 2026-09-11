@@ -7,7 +7,7 @@ import { getDetailedAttendance } from "./attendanceDetails";
 import { generateAllPayslipsPdf } from "./PayslipModals/generatePayslipPdf";
 import { hasHolidayPayEligibility } from "../utils/holidayPayEligibility";
 import * as XLSX from "xlsx";
-import { FiSearch, FiEye, FiDownload, FiPrinter } from "react-icons/fi";
+import { FiSearch, FiEye, FiDownload, FiPrinter, FiDollarSign, FiBriefcase, FiUsers } from "react-icons/fi";
 
 import { supabase } from "../mysqlClient";
 
@@ -794,7 +794,16 @@ export default function PayrollPage() {
         "Late Count": payroll.lateCount ?? 0,
         "Gross Pay (₱)": payroll.gross ?? 0,
         "Late Deduction (₱)": payroll.totalLateDeduction ?? 0,
+        "SSS (Employee) (₱)": payroll.sss ?? 0,
+        "Pag-ibig (Employee) (₱)": payroll.pag_ibig ?? 0,
+        "PhilHealth (Employee) (₱)": payroll.philhealth ?? 0,
+        "Total Deductions (₱)": payroll.totalDeductions ?? 0,
         "Net Pay (₱)": payroll.net ?? 0,
+        "SSS (Employer) (₱)": payroll.sss_employer ?? 0,
+        "Pag-ibig (Employer) (₱)": payroll.pag_ibig_employer ?? 0,
+        "PhilHealth (Employer) (₱)": payroll.philhealth_employer ?? 0,
+        "Total Employer Share (₱)": payroll.totalEmployerShare ?? 0,
+        "Total Company Cost (₱)": (Number(payroll.gross || 0) + Number(payroll.totalEmployerShare || 0)),
       };
     });
     if (exportData.length === 0) return;
@@ -852,6 +861,13 @@ export default function PayrollPage() {
         : idB.localeCompare(idA);
     });
 
+  // Summary calculations across current filtered records
+  const totalEmployeesCount = filteredPayrollPeriods.length;
+  const totalNetPayout = filteredPayrollPeriods.reduce((acc, p) => acc + Number(p.payroll?.net || 0), 0);
+  const totalEmployerShare = filteredPayrollPeriods.reduce((acc, p) => acc + Number(p.payroll?.totalEmployerShare || 0), 0);
+  const totalGrossPay = filteredPayrollPeriods.reduce((acc, p) => acc + Number(p.payroll?.gross || 0), 0);
+  const totalCompanyCost = totalGrossPay + totalEmployerShare;
+
   // Pagination logic
   const activeRecords = filteredPayrollPeriods;
   const totalRecords = activeRecords.length;
@@ -892,6 +908,60 @@ export default function PayrollPage() {
           <span className="text-[#2c382d]">Payroll </span>
           <span className="text-[#237227]">Summary</span>
         </h1>
+      </div>
+
+      {/* Executive Summary Cards */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+        <div className="bg-white p-4 rounded-xl border border-[#edf2ee] shadow-[0_1px_4px_rgba(0,0,0,0.04)] flex items-center gap-3.5">
+          <div className="w-12 h-12 rounded-xl bg-green-50 flex items-center justify-center text-[#237227] shrink-0">
+            <FiDollarSign className="text-2xl" />
+          </div>
+          <div>
+            <div className="text-xs font-semibold text-gray-500 uppercase tracking-wide">
+              Total Employee Net Payout
+            </div>
+            <div className="text-xl font-bold text-gray-800">
+              ₱{totalNetPayout.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+            </div>
+            <div className="text-[0.75rem] text-gray-400">
+              {totalEmployeesCount} employee record(s)
+            </div>
+          </div>
+        </div>
+
+        <div className="bg-white p-4 rounded-xl border border-[#edf2ee] shadow-[0_1px_4px_rgba(0,0,0,0.04)] flex items-center gap-3.5">
+          <div className="w-12 h-12 rounded-xl bg-blue-50 flex items-center justify-center text-blue-600 shrink-0">
+            <FiBriefcase className="text-2xl" />
+          </div>
+          <div>
+            <div className="text-xs font-semibold text-gray-500 uppercase tracking-wide">
+              Total Employer Share (Company Paid)
+            </div>
+            <div className="text-xl font-bold text-blue-700">
+              ₱{totalEmployerShare.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+            </div>
+            <div className="text-[0.75rem] text-gray-400">
+              SSS, PhilHealth, Pag-IBIG contributions
+            </div>
+          </div>
+        </div>
+
+        <div className="bg-white p-4 rounded-xl border border-[#edf2ee] shadow-[0_1px_4px_rgba(0,0,0,0.04)] flex items-center gap-3.5">
+          <div className="w-12 h-12 rounded-xl bg-purple-50 flex items-center justify-center text-purple-600 shrink-0">
+            <FiUsers className="text-2xl" />
+          </div>
+          <div>
+            <div className="text-xs font-semibold text-gray-500 uppercase tracking-wide">
+              Total Company Payroll Cost
+            </div>
+            <div className="text-xl font-bold text-purple-800">
+              ₱{totalCompanyCost.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+            </div>
+            <div className="text-[0.75rem] text-gray-400">
+              Gross Salaries + Employer Contributions
+            </div>
+          </div>
+        </div>
       </div>
 
       {/* Filter Bar */}

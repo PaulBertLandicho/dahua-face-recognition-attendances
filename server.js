@@ -78,7 +78,29 @@ pool.query(`
     status VARCHAR(20) NOT NULL DEFAULT 'pending',
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
   )
-`).catch((err) => console.warn("dahua_pending_deletions table init warning:", err.message));
+`).then(() => {
+  // Automatically remove any completed or stale records so the table does not accumulate clutter
+  return pool.query("DELETE FROM dahua_pending_deletions WHERE status = 'completed' OR created_at < NOW() - INTERVAL 2 DAY");
+}).catch((err) => console.warn("dahua_pending_deletions table init warning:", err.message));
+
+// Ensure employer share columns exist in department_rates
+(async () => {
+  try {
+    const [cols] = await pool.query("SHOW COLUMNS FROM department_rates");
+    const colNames = (cols || []).map((c) => c.Field);
+    if (!colNames.includes("sss_employer")) {
+      await pool.query("ALTER TABLE department_rates ADD COLUMN sss_employer DECIMAL(10,2) NOT NULL DEFAULT 0.00 AFTER philhealth");
+    }
+    if (!colNames.includes("pag_ibig_employer")) {
+      await pool.query("ALTER TABLE department_rates ADD COLUMN pag_ibig_employer DECIMAL(10,2) NOT NULL DEFAULT 0.00 AFTER sss_employer");
+    }
+    if (!colNames.includes("philhealth_employer")) {
+      await pool.query("ALTER TABLE department_rates ADD COLUMN philhealth_employer DECIMAL(10,2) NOT NULL DEFAULT 0.00 AFTER pag_ibig_employer");
+    }
+  } catch (e) {
+    console.warn("Employer share columns check warning:", e.message);
+  }
+})();
 
 process.on("uncaughtException", (err) => {
   console.error("Uncaught Exception:", err.message);
@@ -1356,6 +1378,11 @@ app.delete("/api/dahua/attendance", async (req, res) => {
 
 app.get("/api/dahua/pending-deletions", async (req, res) => {
   try {
+    // Automatically purge any completed or old stale rows so the table stays clean
+    await pool.query(
+      "DELETE FROM dahua_pending_deletions WHERE status = 'completed' OR created_at < NOW() - INTERVAL 2 DAY"
+    ).catch(() => {});
+    
     const [rows] = await pool.query("SELECT * FROM dahua_pending_deletions WHERE status = 'pending' ORDER BY id ASC LIMIT 50");
     return res.json({ deletions: rows });
   } catch (err) {
@@ -1367,9 +1394,25 @@ app.post("/api/dahua/complete-deletion", async (req, res) => {
   try {
     const { id } = req.body || {};
     if (id) {
-      await pool.query("UPDATE dahua_pending_deletions SET status = 'completed' WHERE id = ?", [id]);
+      // Automatically delete the pending record once physical device removal is complete
+      await pool.query("DELETE FROM dahua_pending_deletions WHERE id = ?", [id]);
     }
-    return res.json({ ok: true });
+    // Also remove any other completed or old records
+    await pool.query(
+      "DELETE FROM dahua_pending_deletions WHERE status = 'completed' OR created_at < NOW() - INTERVAL 2 DAY"
+    ).catch(() => {});
+
+    return res.json({ ok: true, deleted: true });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// Route to manually clear/truncate the dahua_pending_deletions queue if desired
+app.delete("/api/dahua/pending-deletions/clear", async (req, res) => {
+  try {
+    await pool.query("DELETE FROM dahua_pending_deletions");
+    return res.json({ ok: true, message: "dahua_pending_deletions table cleared successfully." });
   } catch (err) {
     return res.status(500).json({ error: err.message });
   }
@@ -1768,13 +1811,17 @@ app.get("/health/stream", (req, res) => res.json({ ...streamState }));
 app.get("/health", (req, res) => res.json({ status: "ok" }));
 
 // Serve Frontend with static caching to reduce unnecessary bandwidth downloads
-app.use(express.static(path.join(__dirname, "public"), {
+const staticDir = fs.existsSync(path.join(__dirname, "build"))
+  ? path.join(__dirname, "build")
+  : path.join(__dirname, "public");
+
+app.use(express.static(staticDir, {
   maxAge: "1d",
   etag: true,
 }));
 
 app.use((req, res) => {
-  res.sendFile(path.join(__dirname, "public", "index.html"));
+  res.sendFile(path.join(staticDir, "index.html"));
 });
 
 app.listen(PORT, () => {

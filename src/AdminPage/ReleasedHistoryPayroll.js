@@ -197,6 +197,13 @@ export default function ReleasedHistoryPayroll() {
         sss: person.sss ? Number(deptRate.sss || 0) : 0,
         pag_ibig: person.pag_ibig ? Number(deptRate.pag_ibig || 0) : 0,
         philhealth: person.philhealth ? Number(deptRate.philhealth || 0) : 0,
+        sss_employer: person.sss ? Number(deptRate.sss_employer || 0) : 0,
+        pag_ibig_employer: person.pag_ibig ? Number(deptRate.pag_ibig_employer || 0) : 0,
+        philhealth_employer: person.philhealth ? Number(deptRate.philhealth_employer || 0) : 0,
+        totalEmployerShare:
+          (person.sss ? Number(deptRate.sss_employer || 0) : 0) +
+          (person.pag_ibig ? Number(deptRate.pag_ibig_employer || 0) : 0) +
+          (person.philhealth ? Number(deptRate.philhealth_employer || 0) : 0),
         cashAdvance: Number(person.cash_advance || 0),
         otHours: 0, // You can extend this if OT is saved in history later
         settings: settings || {}

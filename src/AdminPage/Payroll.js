@@ -20,11 +20,17 @@ export function calculatePayroll(
           (person.department || "").toLowerCase().trim()
       ) || {};
 
-    // Apply deductions: use department rates when the person has an ID number present
+    // Apply deductions: use department rates when the person has an ID number present (Employee Share)
     const sss = person.sss ? Number(deptRate.sss || 0) : 0;
     const pag_ibig = person.pag_ibig ? Number(deptRate.pag_ibig || 0) : 0;
     const philhealth = person.philhealth ? Number(deptRate.philhealth || 0) : 0;
     const cashAdvance = Number(person.cash_advance || 0);
+
+    // Employer share (paid by company, not deducted from employee)
+    const sss_employer = person.sss ? Number(deptRate.sss_employer || 0) : 0;
+    const pag_ibig_employer = person.pag_ibig ? Number(deptRate.pag_ibig_employer || 0) : 0;
+    const philhealth_employer = person.philhealth ? Number(deptRate.philhealth_employer || 0) : 0;
+    const totalEmployerShare = sss_employer + pag_ibig_employer + philhealth_employer;
 
     // Count only weekdays (exclude Saturday=6 and Sunday=0)
     const daysPresent = personAttendance.filter((d) => {
@@ -72,6 +78,10 @@ export function calculatePayroll(
       sss,
       pag_ibig,
       philhealth,
+      sss_employer,
+      pag_ibig_employer,
+      philhealth_employer,
+      totalEmployerShare,
       cashAdvance,
       totalDeductions: 0, // will be set in PayrollPage
       net: 0, // will be set in PayrollPage
