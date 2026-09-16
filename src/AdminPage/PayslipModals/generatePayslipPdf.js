@@ -15,6 +15,8 @@ export function drawPayslipOnDoc(
     gross = null,
     cashAdvanceEntries = [],
     cashAdvanceTotalInPeriod = 0,
+    expensesEntries = [],
+    expensesTotalInPeriod = 0,
   },
   yOffset = 10,
   scale = 1,
@@ -272,6 +274,28 @@ export function drawPayslipOnDoc(
     y += lineHeight * 0.2;
     doc.setFontSize(10 * (scale || 1));
   }
+
+  drawLinedField(
+    "Expenses / Purchases:",
+    formatCurrency(
+      Number(expensesTotalInPeriod || payroll.expenses || payroll.totalExpenses || 0),
+    ),
+  );
+  // If there are individual expense entries, render a brief breakdown
+  if (Array.isArray(expensesEntries) && expensesEntries.length > 0) {
+    y += lineHeight * 0.2;
+    doc.setFontSize(9 * (scale || 1));
+    doc.text("Expenses / Product Purchases:", left + 12 * (scale || 1), y);
+    y += lineHeight;
+    expensesEntries.forEach((e) => {
+      const label = `${e.item_name || "Expense"}${e.expense_date ? ` (${e.expense_date})` : e.created_at ? ` (${new Date(e.created_at).toLocaleDateString()})` : ""}`;
+      const value = formatCurrency(Number(e.amount || 0));
+      drawLinedField(label, value, false);
+    });
+    y += lineHeight * 0.2;
+    doc.setFontSize(10 * (scale || 1));
+  }
+
   drawLinedField("Total:", formatCurrency(totalDeductions), true);
 
   y += lineHeight;

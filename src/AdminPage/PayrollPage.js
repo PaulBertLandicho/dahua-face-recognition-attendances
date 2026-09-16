@@ -7,7 +7,19 @@ import { getDetailedAttendance } from "./attendanceDetails";
 import { generateAllPayslipsPdf } from "./PayslipModals/generatePayslipPdf";
 import { hasHolidayPayEligibility } from "../utils/holidayPayEligibility";
 import * as XLSX from "xlsx";
-import { FiSearch, FiEye, FiDownload, FiPrinter, FiDollarSign, FiBriefcase, FiUsers } from "react-icons/fi";
+import {
+  FiSearch,
+  FiEye,
+  FiDownload,
+  FiPrinter,
+  FiDollarSign,
+  FiBriefcase,
+  FiUsers,
+  FiPlus,
+  FiTrash2,
+  FiShoppingBag,
+  FiX,
+} from "react-icons/fi";
 
 import { supabase } from "../mysqlClient";
 
@@ -20,6 +32,15 @@ export default function PayrollPage() {
   const [search, setSearch] = useState("");
   const [selected, setSelected] = useState(null);
   const [showPayslip, setShowPayslip] = useState(false);
+
+  // Expenses Modal State
+  const [showExpensesModal, setShowExpensesModal] = useState(false);
+  const [selectedExpensesRecord, setSelectedExpensesRecord] = useState(null);
+  const [newExpItem, setNewExpItem] = useState("");
+  const [newExpAmount, setNewExpAmount] = useState("");
+  const [newExpDate, setNewExpDate] = useState("");
+  const [newExpNote, setNewExpNote] = useState("");
+  const [expActionLoading, setExpActionLoading] = useState(false);
 
   // Add filter, sort, export, and pagination state
   const [departmentFilter, setDepartmentFilter] = useState("");
@@ -46,6 +67,7 @@ export default function PayrollPage() {
         settingsRes,
         payrollRes,
         holidaysRes,
+        expensesRes,
       ] = await Promise.all([
         // Limit attendance to recent records (last 6 months) to reduce egress
         (function() {
@@ -62,6 +84,7 @@ export default function PayrollPage() {
         supabase.from("settings").select("*").eq("id", 1).maybeSingle(),
         supabase.from("payroll_periods").select("*").limit(5000),
         supabase.from("holidays").select("*").limit(5000),
+        supabase.from("expenses").select("*").limit(10000),
       ]);
 
       const attData = Array.isArray(attRes.data) ? attRes.data : [];
@@ -69,6 +92,7 @@ export default function PayrollPage() {
       const deptData = deptRes.data || [];
       const settingsData = settingsRes.data || {};
       const holidaysData = holidaysRes.data || [];
+      const expensesData = Array.isArray(expensesRes.data) ? expensesRes.data : [];
       if (attRes.error) console.error("Payroll attendance query failed:", attRes.error);
       if (personsRes.error) console.error("Payroll persons query failed:", personsRes.error);
       if (settingsRes.error) console.error("Payroll settings query failed:", settingsRes.error);
@@ -221,13 +245,26 @@ export default function PayrollPage() {
             const lateCountLimit = Number(settingsData.late_count_limit || 5);
             const totalLateDeduction =
               lateCount >= lateCountLimit ? lateCount * latePenalty : 0;
+
+            // Calculate expenses for this period
+            const [pStart, pEnd] = (typeof period === "string" ? period.split("_to_") : ["", ""]);
+            const periodExpenses = expensesData.filter((exp) => {
+              if (String(exp.person_id) !== String(person.id)) return false;
+              if (exp.period && exp.period === period) return true;
+              const eDate = exp.expense_date || (exp.created_at ? String(exp.created_at).slice(0, 10) : null);
+              if (eDate && pStart && pEnd && eDate >= pStart && eDate <= pEnd) return true;
+              return false;
+            });
+            const totalExpenses = Math.round(periodExpenses.reduce((acc, curr) => acc + Number(curr.amount || 0), 0) * 100) / 100;
+
             const totalDeductions =
               Number(basePayroll.sss || 0) +
               Number(basePayroll.pag_ibig || 0) +
               Number(basePayroll.philhealth || 0) +
               Number(basePayroll.cashAdvance || 0) +
-              totalLateDeduction;
-            const net = basePayroll.gross - totalDeductions;
+              totalLateDeduction +
+              totalExpenses;
+            const net = Math.max(0, Math.round((basePayroll.gross - totalDeductions) * 100) / 100);
             // Reuse the payroll rows fetched above instead of making another remote query.
             let dbRow = payrollDbByKey.get(`${person.id}|${period}`) || null;
 
@@ -309,12 +346,16 @@ export default function PayrollPage() {
               period,
               payroll: {
                 ...basePayroll,
+                expenses: totalExpenses,
+                expensesEntries: periodExpenses,
                 lateCount,
                 lateCountLimit,
                 totalLateDeduction,
                 totalDeductions,
                 net,
               },
+              expenses: totalExpenses,
+              expensesEntries: periodExpenses,
               attendance,
               released: !!dbRow?.released,
               dbId: dbRow?.id || null,
@@ -457,6 +498,181 @@ export default function PayrollPage() {
   }
 
 
+
+  // Expenses Modal Handlers
+  const handleOpenExpensesModal = (record) => {
+    setSelectedExpensesRecord(record);
+    const [start] = (record.period || "").split("_to_");
+    setNewExpDate(start || new Date().toISOString().slice(0, 10));
+    setNewExpItem("");
+    setNewExpAmount("");
+    setNewExpNote("");
+    setShowExpensesModal(true);
+  };
+
+  const handleCloseExpensesModal = () => {
+    setShowExpensesModal(false);
+    setSelectedExpensesRecord(null);
+    setNewExpItem("");
+    setNewExpAmount("");
+    setNewExpDate("");
+    setNewExpNote("");
+  };
+
+  const handleAddExpense = async (e) => {
+    if (e) e.preventDefault();
+    if (!selectedExpensesRecord) return;
+    if (!newExpItem || !newExpItem.trim()) {
+      Swal.fire("Required", "Please enter the expense / product name.", "warning");
+      return;
+    }
+    const amt = Number(newExpAmount);
+    if (isNaN(amt) || amt <= 0) {
+      Swal.fire("Invalid Amount", "Please enter a valid positive expense amount.", "warning");
+      return;
+    }
+
+    setExpActionLoading(true);
+    try {
+      const expDate = newExpDate || (selectedExpensesRecord.period ? selectedExpensesRecord.period.split("_to_")[0] : new Date().toISOString().slice(0, 10));
+      const payload = {
+        person_id: selectedExpensesRecord.person.id,
+        period: selectedExpensesRecord.period || null,
+        item_name: newExpItem.trim(),
+        amount: amt,
+        expense_date: expDate,
+        note: newExpNote ? newExpNote.trim() : null,
+      };
+
+      const { data: inserted, error } = await supabase
+        .from("expenses")
+        .insert(payload)
+        .select()
+        .single();
+      if (error) throw error;
+
+      // Update local state
+      const newEntry = inserted || { ...payload, id: Date.now() };
+      const currentEntries = selectedExpensesRecord.expensesEntries || [];
+      const updatedEntries = [...currentEntries, newEntry];
+      const updatedTotalExpenses = Math.round(updatedEntries.reduce((s, r) => s + Number(r.amount || 0), 0) * 100) / 100;
+      const baseGross = Number(selectedExpensesRecord.payroll?.gross || 0);
+      const newTotalDeductions = Math.round(((selectedExpensesRecord.payroll?.totalDeductions || 0) + amt) * 100) / 100;
+      const newNet = Math.max(0, Math.round((baseGross - newTotalDeductions) * 100) / 100);
+
+      const updatedRecord = {
+        ...selectedExpensesRecord,
+        expenses: updatedTotalExpenses,
+        expensesEntries: updatedEntries,
+        payroll: {
+          ...selectedExpensesRecord.payroll,
+          expenses: updatedTotalExpenses,
+          expensesEntries: updatedEntries,
+          totalDeductions: newTotalDeductions,
+          net: newNet,
+        },
+      };
+      setSelectedExpensesRecord(updatedRecord);
+
+      // Update in payrollPeriods
+      setPayrollPeriods((prev) =>
+        prev.map((item) => {
+          if (
+            item.person?.id === selectedExpensesRecord.person?.id &&
+            item.period === selectedExpensesRecord.period
+          ) {
+            return updatedRecord;
+          }
+          return item;
+        })
+      );
+
+      // Reset form
+      setNewExpItem("");
+      setNewExpAmount("");
+      setNewExpNote("");
+
+      Swal.fire({
+        icon: "success",
+        title: "Expense Added",
+        text: `₱${amt.toFixed(2)} deducted from ${selectedExpensesRecord.person?.name}'s salary.`,
+        timer: 1800,
+        showConfirmButton: false,
+      });
+    } catch (err) {
+      console.error("Error adding expense:", err);
+      Swal.fire("Error", err.message || "Failed to add expense", "error");
+    } finally {
+      setExpActionLoading(false);
+    }
+  };
+
+  const handleDeleteExpense = async (expenseId) => {
+    const res = await Swal.fire({
+      title: "Delete Expense?",
+      text: "This expense deduction will be removed and added back to the employee's salary.",
+      icon: "warning",
+      showCancelButton: true,
+      confirmButtonColor: "#d33",
+      cancelButtonColor: "#3085d6",
+      confirmButtonText: "Yes, delete",
+    });
+    if (!res.isConfirmed) return;
+
+    try {
+      const { error } = await supabase
+        .from("expenses")
+        .delete()
+        .eq("id", expenseId);
+      if (error) throw error;
+
+      const currentEntries = selectedExpensesRecord.expensesEntries || [];
+      const targetEntry = currentEntries.find((e) => e.id === expenseId);
+      const deductedAmt = Number(targetEntry?.amount || 0);
+      const updatedEntries = currentEntries.filter((e) => e.id !== expenseId);
+      const updatedTotalExpenses = Math.round(updatedEntries.reduce((s, r) => s + Number(r.amount || 0), 0) * 100) / 100;
+      const baseGross = Number(selectedExpensesRecord.payroll?.gross || 0);
+      const newTotalDeductions = Math.max(0, Math.round(((selectedExpensesRecord.payroll?.totalDeductions || 0) - deductedAmt) * 100) / 100);
+      const newNet = Math.max(0, Math.round((baseGross - newTotalDeductions) * 100) / 100);
+
+      const updatedRecord = {
+        ...selectedExpensesRecord,
+        expenses: updatedTotalExpenses,
+        expensesEntries: updatedEntries,
+        payroll: {
+          ...selectedExpensesRecord.payroll,
+          expenses: updatedTotalExpenses,
+          expensesEntries: updatedEntries,
+          totalDeductions: newTotalDeductions,
+          net: newNet,
+        },
+      };
+      setSelectedExpensesRecord(updatedRecord);
+
+      setPayrollPeriods((prev) =>
+        prev.map((item) => {
+          if (
+            item.person?.id === selectedExpensesRecord.person?.id &&
+            item.period === selectedExpensesRecord.period
+          ) {
+            return updatedRecord;
+          }
+          return item;
+        })
+      );
+
+      Swal.fire({
+        icon: "success",
+        title: "Deleted",
+        text: "Expense removed successfully.",
+        timer: 1500,
+        showConfirmButton: false,
+      });
+    } catch (err) {
+      console.error("Error deleting expense:", err);
+      Swal.fire("Error", "Failed to delete expense", "error");
+    }
+  };
 
   // OPEN PAYSLIP for a period
   const handleShowPayslip = (payrollPeriod) => {
@@ -749,6 +965,8 @@ export default function PayrollPage() {
           totalDeductions,
           cashAdvanceEntries,
           cashAdvanceTotalInPeriod,
+          expensesEntries: periodEntry.expensesEntries || [],
+          expensesTotalInPeriod: periodEntry.expenses || payroll.expenses || 0,
           otHours: totalOtHours,
         });
       } catch (err) {
@@ -794,6 +1012,7 @@ export default function PayrollPage() {
         "Late Count": payroll.lateCount ?? 0,
         "Gross Pay (₱)": payroll.gross ?? 0,
         "Late Deduction (₱)": payroll.totalLateDeduction ?? 0,
+        "Expenses (₱)": p.expenses ?? payroll.expenses ?? 0,
         "SSS (Employee) (₱)": payroll.sss ?? 0,
         "Pag-ibig (Employee) (₱)": payroll.pag_ibig ?? 0,
         "PhilHealth (Employee) (₱)": payroll.philhealth ?? 0,
@@ -1031,13 +1250,14 @@ export default function PayrollPage() {
                 <th className="sticky top-0 z-10 bg-white text-black font-bold p-3.5 text-left border-b-2 border-gray-200 tracking-wide uppercase text-xs whitespace-nowrap">Days Present</th>
                 <th className="sticky top-0 z-10 bg-white text-black font-bold p-3.5 text-left border-b-2 border-gray-200 tracking-wide uppercase text-xs whitespace-nowrap">Late Count</th>
                 <th className="sticky top-0 z-10 bg-white text-black font-bold p-3.5 text-left border-b-2 border-gray-200 tracking-wide uppercase text-xs whitespace-nowrap">Absent</th>
+                <th className="sticky top-0 z-10 bg-white text-black font-bold p-3.5 text-left border-b-2 border-gray-200 tracking-wide uppercase text-xs whitespace-nowrap">Expenses (₱)</th>
                 <th className="sticky top-0 z-10 bg-white text-black font-bold p-3.5 text-left border-b-2 border-gray-200 tracking-wide uppercase text-xs whitespace-nowrap">Payslip</th>
               </tr>
             </thead>
             <tbody>
               {currentRecords.length === 0 ? (
                 <tr>
-                  <td colSpan={10} className="text-center py-16 px-5 text-gray-500 text-base">
+                  <td colSpan={11} className="text-center py-16 px-5 text-gray-500 text-base">
                     No payroll records found.
                   </td>
                 </tr>
@@ -1065,6 +1285,20 @@ export default function PayrollPage() {
                       <td className="py-3.5 px-3 border-b border-gray-200 text-gray-800">{payroll.daysPresent}</td>
                       <td className="py-3.5 px-3 border-b border-gray-200 text-gray-800">{payroll.lateCount}</td>
                       <td className="py-3.5 px-3 border-b border-gray-200 text-gray-800">{p.absentCount ?? 0}</td>
+                      <td className="py-3.5 px-3 border-b border-gray-200 text-gray-800">
+                        <div className="flex items-center gap-2">
+                          <span className={`text-sm ${Number(p.expenses || p.payroll?.expenses || 0) > 0 ? "text-red-600 font-semibold" : "text-gray-500 font-medium"}`}>
+                            ₱{Number(p.expenses || p.payroll?.expenses || 0).toFixed(2)}
+                          </span>
+                          <button
+                            onClick={() => handleOpenExpensesModal(p)}
+                            className="py-1 px-2.5 rounded-md border border-[#237227]/30 text-[0.78rem] font-semibold cursor-pointer transition-all duration-200 inline-flex items-center gap-1 bg-[#237227]/10 text-[#237227] hover:bg-[#237227] hover:text-white"
+                            title="Add or manage employee expenses for this period"
+                          >
+                            <FiPlus size={12} /> Add / Manage
+                          </button>
+                        </div>
+                      </td>
                       <td className="py-3.5 px-3 border-b border-gray-200 text-gray-800">
                         <button
                           onClick={() => handleShowPayslip(p)}
@@ -1129,6 +1363,191 @@ export default function PayrollPage() {
           </div>
         </div>
       </div>
+
+      {/* Expenses Management Modal */}
+      {showExpensesModal && selectedExpensesRecord && (
+        <div className="fixed inset-0 w-full h-full bg-black/50 flex justify-center items-center z-[1000] backdrop-blur-[4px]">
+          <div className="bg-white text-gray-800 p-6 md:p-8 rounded-[24px] max-w-[650px] w-[95%] overflow-y-auto max-h-[90%] shadow-[0_20px_40px_rgba(0,0,0,0.2)] border border-gray-200 font-sans">
+            <div className="flex justify-between items-start mb-4 border-b border-gray-100 pb-3">
+              <div>
+                <h2 className="text-xl font-bold text-[#237227] m-0 flex items-center gap-2">
+                  <FiShoppingBag className="text-[#237227]" />
+                  Manage Employee Expenses
+                </h2>
+                <p className="text-sm text-gray-500 m-0 mt-1">
+                  {selectedExpensesRecord.person?.name} • {selectedExpensesRecord.person?.department} (ID: {selectedExpensesRecord.person?.id})
+                </p>
+                <p className="text-xs font-semibold text-[#237227] m-0 mt-0.5">
+                  Period: {formatPeriod(selectedExpensesRecord.period)}
+                </p>
+              </div>
+              <button
+                onClick={handleCloseExpensesModal}
+                className="p-1.5 rounded-lg text-gray-400 hover:text-gray-600 bg-transparent border-none cursor-pointer"
+              >
+                <FiX size={20} />
+              </button>
+            </div>
+
+            {/* Total Expenses Badge */}
+            <div className="bg-red-50/70 border border-red-200 rounded-xl p-3.5 mb-5 flex justify-between items-center">
+              <div>
+                <span className="text-xs font-bold text-red-700 uppercase tracking-wide">
+                  Total Expenses Deducted from Salary
+                </span>
+                <div className="text-2xl font-bold text-red-700 mt-0.5">
+                  ₱{Number(selectedExpensesRecord.expenses || 0).toFixed(2)}
+                </div>
+              </div>
+              <div className="text-right">
+                <span className="text-xs font-medium text-gray-500 block">
+                  Current Net Pay:
+                </span>
+                <span className="text-base font-bold text-[#237227]">
+                  ₱{Number(selectedExpensesRecord.payroll?.net || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                </span>
+              </div>
+            </div>
+
+            {/* Add Expense Form */}
+            <form onSubmit={handleAddExpense} className="bg-gray-50 border border-gray-200 rounded-xl p-4 mb-6">
+              <h3 className="text-xs font-bold uppercase text-gray-700 tracking-wide m-0 mb-3 flex items-center gap-1.5">
+                <FiPlus className="text-[#237227]" />
+                Add New Expense / Product Purchase
+              </h3>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-3">
+                <div>
+                  <label className="block text-xs font-semibold text-gray-600 mb-1">
+                    Item / Product Name *
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="e.g. Uniform, Coffee, Company Goods"
+                    value={newExpItem}
+                    onChange={(e) => setNewExpItem(e.target.value)}
+                    className="w-full py-2 px-3 text-sm rounded-lg border border-gray-300 bg-white outline-none focus:border-[#237227]"
+                    required
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-gray-600 mb-1">
+                    Amount (₱) *
+                  </label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    placeholder="0.00"
+                    value={newExpAmount}
+                    onChange={(e) => setNewExpAmount(e.target.value)}
+                    className="w-full py-2 px-3 text-sm rounded-lg border border-gray-300 bg-white outline-none focus:border-[#237227]"
+                    required
+                  />
+                </div>
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-3">
+                <div>
+                  <label className="block text-xs font-semibold text-gray-600 mb-1">
+                    Expense Date
+                  </label>
+                  <input
+                    type="date"
+                    value={newExpDate}
+                    onChange={(e) => setNewExpDate(e.target.value)}
+                    className="w-full py-2 px-3 text-sm rounded-lg border border-gray-300 bg-white outline-none focus:border-[#237227]"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-gray-600 mb-1">
+                    Note / Remarks
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="Optional remarks"
+                    value={newExpNote}
+                    onChange={(e) => setNewExpNote(e.target.value)}
+                    className="w-full py-2 px-3 text-sm rounded-lg border border-gray-300 bg-white outline-none focus:border-[#237227]"
+                  />
+                </div>
+              </div>
+              <div className="flex justify-end">
+                <button
+                  type="submit"
+                  disabled={expActionLoading}
+                  className="py-2 px-5 rounded-lg text-sm font-semibold bg-[#237227] text-white border-none cursor-pointer inline-flex items-center gap-1.5 shadow-[0_1px_4px_rgba(35,114,39,0.2)] disabled:opacity-50"
+                >
+                  <FiPlus />
+                  {expActionLoading ? "Adding..." : "Add Expense Deduction"}
+                </button>
+              </div>
+            </form>
+
+            {/* List of Existing Expenses for this Period */}
+            <div className="mb-4">
+              <h3 className="text-sm font-bold text-gray-800 m-0 mb-2.5">
+                Recorded Expenses for this Period
+              </h3>
+              {selectedExpensesRecord.expensesEntries && selectedExpensesRecord.expensesEntries.length > 0 ? (
+                <div className="border border-gray-200 rounded-xl overflow-hidden">
+                  <table className="w-full border-collapse text-sm">
+                    <thead>
+                      <tr className="bg-gray-50 border-b border-gray-200">
+                        <th className="py-2.5 px-3 text-left font-semibold text-gray-600 text-xs uppercase">Item</th>
+                        <th className="py-2.5 px-3 text-left font-semibold text-gray-600 text-xs uppercase">Date</th>
+                        <th className="py-2.5 px-3 text-left font-semibold text-gray-600 text-xs uppercase">Amount</th>
+                        <th className="py-2.5 px-3 text-center font-semibold text-gray-600 text-xs uppercase">Action</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {selectedExpensesRecord.expensesEntries.map((exp, idx) => (
+                        <tr
+                          key={exp.id || idx}
+                          className={idx % 2 === 0 ? "bg-white" : "bg-gray-50/50"}
+                        >
+                          <td className="py-2.5 px-3 border-b border-gray-100 text-gray-800 font-medium">
+                            {exp.item_name}
+                            {exp.note && <div className="text-xs text-gray-400 font-normal">{exp.note}</div>}
+                          </td>
+                          <td className="py-2.5 px-3 border-b border-gray-100 text-gray-600 text-xs">
+                            {exp.expense_date || (exp.created_at ? new Date(exp.created_at).toLocaleDateString() : "-")}
+                          </td>
+                          <td className="py-2.5 px-3 border-b border-gray-100 text-red-600 font-bold">
+                            ₱{Number(exp.amount || 0).toFixed(2)}
+                          </td>
+                          <td className="py-2.5 px-3 border-b border-gray-100 text-center">
+                            <button
+                              type="button"
+                              onClick={() => handleDeleteExpense(exp.id)}
+                              className="p-1.5 text-red-500 hover:text-red-700 bg-transparent border-none cursor-pointer"
+                              title="Delete expense"
+                            >
+                              <FiTrash2 size={15} />
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              ) : (
+                <div className="py-8 text-center text-gray-400 text-sm border border-dashed border-gray-200 rounded-xl">
+                  No expenses recorded for this employee in this payroll period.
+                </div>
+              )}
+            </div>
+
+            {/* Modal Footer */}
+            <div className="flex justify-end pt-3 border-t border-gray-100">
+              <button
+                type="button"
+                onClick={handleCloseExpensesModal}
+                className="py-2 px-5 rounded-lg text-sm font-semibold bg-gray-100 text-gray-700 border border-gray-300 cursor-pointer hover:bg-gray-200"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Payslip Modal */}
       {showPayslip && selected && (

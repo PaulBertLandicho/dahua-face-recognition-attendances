@@ -74,7 +74,7 @@ export default function AttendanceTable() {
       setError(null);
       const { data: attData, error: attErr } = await supabase
         .from("attendance")
-        .select("*");
+        .select("id, person_id, name, event, method, point, device_time, status, archived");
       if (attErr) throw attErr;
       const uniqueAttendance = Array.from(
         new Map(
@@ -100,7 +100,7 @@ export default function AttendanceTable() {
       
       const { data: personsData, error: personsErr } = await supabase
         .from("persons")
-        .select("id, name, department, registration_photo");
+        .select("id, name, department");
       if (personsErr) throw personsErr;
       setPersons(personsData || []);
       

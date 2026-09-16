@@ -27,7 +27,7 @@ export default function DeviceStatus() {
     fetchStatus(true);
     const interval = setInterval(() => {
       if (typeof document === "undefined" || !document.hidden) fetchStatus(false);
-    }, 30000);
+    }, 60000);
     return () => clearInterval(interval);
   }, [fetchStatus]);
 

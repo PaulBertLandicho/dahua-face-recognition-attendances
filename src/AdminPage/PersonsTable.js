@@ -49,7 +49,9 @@ export default function PersonsTable() {
       }
       try {
         setError(null);
-        const { data, error: err } = await supabase.from("persons").select("*");
+        const { data, error: err } = await supabase
+          .from("persons")
+          .select("id, name, department, daily_rate, late_penalty, sss, pag_ibig, philhealth, cash_advance, card_no, created_at, updated_at");
         if (err) throw err;
         const list = data || [];
         setPersons(list);

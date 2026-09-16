@@ -17,6 +17,20 @@ try {
 }
 
 const app = express();
+
+// High-efficiency Gzip/Brotli response compression to minimize cPanel bandwidth
+let compression = null;
+try {
+  compression = require("compression");
+  app.use(compression({
+    level: 6,
+    threshold: 1024,
+  }));
+  console.log("[Bandwidth Optimization] Compression middleware enabled.");
+} catch (e) {
+  console.warn("compression package not loaded:", e.message);
+}
+
 app.use(cors());
 app.use(express.json({ limit: "50mb" }));
 app.use(express.urlencoded({ extended: true, limit: "50mb" }));
@@ -82,6 +96,76 @@ pool.query(`
   // Automatically remove any completed or stale records so the table does not accumulate clutter
   return pool.query("DELETE FROM dahua_pending_deletions WHERE status = 'completed' OR created_at < NOW() - INTERVAL 2 DAY");
 }).catch((err) => console.warn("dahua_pending_deletions table init warning:", err.message));
+
+// Initialize Dahua Device Monitoring and Sync Tracking table
+pool.query(`
+  CREATE TABLE IF NOT EXISTS dahua_device_status (
+    id INT PRIMARY KEY DEFAULT 1,
+    device_name VARCHAR(191) NOT NULL DEFAULT 'Multifactors Biometric Station',
+    model VARCHAR(191) NOT NULL DEFAULT 'DHI-ASA3213GL-MW',
+    ip_address VARCHAR(100) NOT NULL DEFAULT '192.168.111.222',
+    port INT NOT NULL DEFAULT 80,
+    connection_status VARCHAR(50) NOT NULL DEFAULT 'Unknown',
+    last_successful_sync DATETIME NULL,
+    last_failed_sync DATETIME NULL,
+    last_failed_reason TEXT NULL,
+    last_attendance_sync DATETIME NULL,
+    last_person_sync DATETIME NULL,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+  )
+`).then(async () => {
+  await pool.query(`
+    INSERT IGNORE INTO dahua_device_status (id, device_name, model, ip_address, port, connection_status)
+    VALUES (1, 'Multifactors Biometric Station', 'DHI-ASA3213GL-MW', '${DAHUA_DEVICE_IP}', ${DAHUA_DEVICE_PORT}, 'Unknown')
+  `);
+}).catch((err) => console.warn("dahua_device_status table init warning:", err.message));
+
+// Initialize Expenses table for payroll deductions
+pool.query(`
+  CREATE TABLE IF NOT EXISTS expenses (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    person_id VARCHAR(191) NOT NULL,
+    period VARCHAR(100) NULL,
+    item_name VARCHAR(255) NOT NULL,
+    amount DECIMAL(10,2) NOT NULL DEFAULT 0.00,
+    expense_date DATE NULL,
+    note TEXT NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_expenses_person (person_id),
+    INDEX idx_expenses_period (period)
+  )
+`).catch((err) => console.warn("expenses table init warning:", err.message));
+
+async function recordDeviceSyncStatus({ type, success, error = null }) {
+  try {
+    const now = new Date().toISOString().slice(0, 19).replace('T', ' ');
+    if (success) {
+      if (type === 'person') {
+        await pool.query(
+          "UPDATE dahua_device_status SET last_successful_sync = ?, last_person_sync = ?, connection_status = 'Online', last_failed_reason = NULL WHERE id = 1",
+          [now, now]
+        );
+      } else if (type === 'attendance') {
+        await pool.query(
+          "UPDATE dahua_device_status SET last_successful_sync = ?, last_attendance_sync = ?, connection_status = 'Online', last_failed_reason = NULL WHERE id = 1",
+          [now, now]
+        );
+      } else {
+        await pool.query(
+          "UPDATE dahua_device_status SET last_successful_sync = ?, connection_status = 'Online', last_failed_reason = NULL WHERE id = 1",
+          [now]
+        );
+      }
+    } else {
+      await pool.query(
+        "UPDATE dahua_device_status SET last_failed_sync = ?, last_failed_reason = ?, connection_status = 'Error' WHERE id = 1",
+        [now, String(error || 'Sync operation failed')]
+      );
+    }
+  } catch (e) {
+    console.warn("recordDeviceSyncStatus warning:", e.message);
+  }
+}
 
 // Ensure employer share columns exist in department_rates
 (async () => {
@@ -876,6 +960,226 @@ app.post("/api/auth/login", async (req, res) => {
   }
 });
 
+app.post("/api/auth/change-password", async (req, res) => {
+  const { userId, email, currentPassword, newPassword } = req.body || {};
+  if (!newPassword || String(newPassword).trim().length < 4) {
+    return res.status(400).json({ error: { message: "New password must be at least 4 characters long." } });
+  }
+
+  try {
+    let user = null;
+    if (userId) {
+      const [rows] = await pool.query("SELECT * FROM persons WHERE id = ? LIMIT 1", [userId]);
+      user = rows[0];
+    } else if (email) {
+      const [rows] = await pool.query("SELECT * FROM persons WHERE email = ? LIMIT 1", [String(email).trim()]);
+      user = rows[0];
+    }
+
+    if (!user) {
+      return res.status(404).json({ error: { message: "User account not found." } });
+    }
+
+    // Verify current password if specified and user has an existing password
+    if (user.password && currentPassword !== undefined) {
+      if (user.password !== currentPassword) {
+        return res.status(400).json({ error: { message: "Current password does not match our records." } });
+      }
+    }
+
+    await pool.query("UPDATE persons SET password = ? WHERE id = ?", [newPassword, user.id]);
+    return res.json({ success: true, message: "Password updated successfully." });
+  } catch (err) {
+    console.error("Change password error:", err.message);
+    return res.status(500).json({ error: { message: err.message || "Failed to update password." } });
+  }
+});
+
+app.post("/api/auth/update-profile", async (req, res) => {
+  const { userId, email: currentEmail, newName, newEmail, currentPassword, newPassword } = req.body || {};
+
+  try {
+    let user = null;
+    if (userId) {
+      const [rows] = await pool.query("SELECT * FROM persons WHERE id = ? LIMIT 1", [userId]);
+      user = rows[0];
+    } else if (currentEmail) {
+      const [rows] = await pool.query("SELECT * FROM persons WHERE email = ? LIMIT 1", [String(currentEmail).trim()]);
+      user = rows[0];
+    }
+
+    if (!user) {
+      return res.status(404).json({ error: { message: "User account not found." } });
+    }
+
+    // Check duplicate email if email is being changed
+    const targetEmail = newEmail ? String(newEmail).trim() : user.email;
+    if (newEmail && targetEmail !== user.email) {
+      const [dup] = await pool.query("SELECT id FROM persons WHERE email = ? AND id != ? LIMIT 1", [targetEmail, user.id]);
+      if (dup && dup.length > 0) {
+        return res.status(400).json({ error: { message: "Email address is already in use by another account." } });
+      }
+    }
+
+    // If changing password, verify current password and new password length
+    let updatedPassword = user.password;
+    if (newPassword && String(newPassword).trim().length > 0) {
+      if (String(newPassword).trim().length < 4) {
+        return res.status(400).json({ error: { message: "New password must be at least 4 characters long." } });
+      }
+      if (user.password && currentPassword !== undefined) {
+        if (user.password !== currentPassword) {
+          return res.status(400).json({ error: { message: "Current password does not match our records." } });
+        }
+      }
+      updatedPassword = String(newPassword).trim();
+    }
+
+    const updatedName = newName !== undefined && String(newName).trim().length > 0 ? String(newName).trim() : user.name;
+
+    await pool.query(
+      "UPDATE persons SET name = ?, email = ?, password = ? WHERE id = ?",
+      [updatedName, targetEmail, updatedPassword, user.id]
+    );
+
+    const updatedUser = {
+      id: user.id,
+      name: updatedName,
+      email: targetEmail,
+      role: user.role,
+      department: user.department,
+      user_metadata: {
+        role: user.role,
+        name: updatedName,
+      },
+      app_metadata: {
+        role: user.role,
+      },
+    };
+
+    return res.json({
+      success: true,
+      message: "Account settings updated successfully.",
+      user: updatedUser,
+    });
+  } catch (err) {
+    console.error("Update profile error:", err.message);
+    return res.status(500).json({ error: { message: err.message || "Failed to update profile." } });
+  }
+});
+
+// Admin Staff & Secretary Account Manager Routes
+app.get("/api/admin/accounts", async (req, res) => {
+  try {
+    const [rows] = await pool.query(
+      "SELECT id, name, email, role, department, phone_number, approved, created_at FROM persons WHERE role IN ('admin', 'secretary', 'manager') OR (email IS NOT NULL AND email != '') ORDER BY role ASC, name ASC"
+    );
+    return res.json({ accounts: rows || [] });
+  } catch (err) {
+    console.error("Get admin accounts error:", err.message);
+    return res.status(500).json({ error: { message: err.message || "Failed to load accounts." } });
+  }
+});
+
+app.post("/api/admin/accounts", async (req, res) => {
+  const { name, email, role = "secretary", department = "Admin", password = "", phone_number = "" } = req.body || {};
+  if (!email || !String(email).trim()) {
+    return res.status(400).json({ error: { message: "Email is required." } });
+  }
+  if (!name || !String(name).trim()) {
+    return res.status(400).json({ error: { message: "Full name is required." } });
+  }
+  if (!password || String(password).trim().length < 4) {
+    return res.status(400).json({ error: { message: "Password must be at least 4 characters long." } });
+  }
+
+  try {
+    const [existing] = await pool.query("SELECT id FROM persons WHERE email = ? LIMIT 1", [String(email).trim()]);
+    if (existing && existing.length > 0) {
+      return res.status(400).json({ error: { message: "An account with this email address already exists." } });
+    }
+
+    const newId = `ACC-${Date.now().toString(36).toUpperCase()}-${Math.floor(Math.random() * 1000)}`;
+    await pool.query(
+      `INSERT INTO persons (id, name, email, password, role, department, phone_number, approved, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, 1, NOW())`,
+      [newId, String(name).trim(), String(email).trim(), password, role, department || "Admin", phone_number || null]
+    );
+
+    return res.json({
+      success: true,
+      account: { id: newId, name: String(name).trim(), email: String(email).trim(), role, department: department || "Admin", approved: 1 }
+    });
+  } catch (err) {
+    console.error("Create account error:", err.message);
+    return res.status(500).json({ error: { message: err.message || "Failed to create account." } });
+  }
+});
+
+app.put("/api/admin/accounts/:id", async (req, res) => {
+  const { id } = req.params;
+  const { name, email, role, department, password, approved, phone_number } = req.body || {};
+
+  try {
+    const [existing] = await pool.query("SELECT * FROM persons WHERE id = ? LIMIT 1", [id]);
+    if (!existing || existing.length === 0) {
+      return res.status(404).json({ error: { message: "Account not found." } });
+    }
+
+    if (email) {
+      const [duplicate] = await pool.query("SELECT id FROM persons WHERE email = ? AND id != ? LIMIT 1", [String(email).trim(), id]);
+      if (duplicate && duplicate.length > 0) {
+        return res.status(400).json({ error: { message: "Email is already taken by another account." } });
+      }
+    }
+
+    const updates = [];
+    const params = [];
+
+    if (name !== undefined) { updates.push("name = ?"); params.push(String(name).trim()); }
+    if (email !== undefined) { updates.push("email = ?"); params.push(String(email).trim()); }
+    if (role !== undefined) { updates.push("role = ?"); params.push(role); }
+    if (department !== undefined) { updates.push("department = ?"); params.push(department); }
+    if (password && String(password).trim().length > 0) { updates.push("password = ?"); params.push(password); }
+    if (approved !== undefined) { updates.push("approved = ?"); params.push(approved ? 1 : 0); }
+    if (phone_number !== undefined) { updates.push("phone_number = ?"); params.push(phone_number); }
+
+    if (updates.length > 0) {
+      params.push(id);
+      await pool.query(`UPDATE persons SET ${updates.join(", ")} WHERE id = ?`, params);
+    }
+
+    return res.json({ success: true, message: "Account updated successfully." });
+  } catch (err) {
+    console.error("Update account error:", err.message);
+    return res.status(500).json({ error: { message: err.message || "Failed to update account." } });
+  }
+});
+
+app.delete("/api/admin/accounts/:id", async (req, res) => {
+  const { id } = req.params;
+  try {
+    const [existing] = await pool.query("SELECT * FROM persons WHERE id = ? LIMIT 1", [id]);
+    if (!existing || existing.length === 0) {
+      return res.status(404).json({ error: { message: "Account not found." } });
+    }
+
+    if (existing[0].role === "admin") {
+      const [adminCountRows] = await pool.query("SELECT COUNT(*) as count FROM persons WHERE role = 'admin'");
+      const count = adminCountRows[0]?.count || 0;
+      if (count <= 1) {
+        return res.status(400).json({ error: { message: "Cannot delete the only remaining administrator account." } });
+      }
+    }
+
+    await pool.query("DELETE FROM persons WHERE id = ?", [id]);
+    return res.json({ success: true, message: "Account deleted successfully." });
+  } catch (err) {
+    console.error("Delete account error:", err.message);
+    return res.status(500).json({ error: { message: err.message || "Failed to delete account." } });
+  }
+});
+
 // ==========================================
 // DAHUA SYNC ROUTES (MySQL)
 // ==========================================
@@ -956,11 +1260,14 @@ app.post("/api/dahua/sync-users", async (req, res) => {
       insertedOrUpdatedCount += 1;
     }
 
+    await recordDeviceSyncStatus({ type: 'person', success: true });
+
     return res.json({
       count: insertedOrUpdatedCount,
       message: `Synced ${insertedOrUpdatedCount} user(s) from Dahua.`
     });
   } catch (err) {
+    await recordDeviceSyncStatus({ type: 'person', success: false, error: err.message });
     const connectorUrl = DAHUA_CONNECTOR_URL || "";
     const isPrivateIp = /192\.168\.|10\.|172\.(1[6-9]|2[0-9]|3[0-1])\.|localhost|127\.0\.0\.1/.test(connectorUrl || DAHUA_DEVICE_IP);
 
@@ -1208,9 +1515,12 @@ app.post("/api/dahua/sync-attendance", async (req, res) => {
       console.log(`[Payroll] Auto-generated after Dahua sync: created=${payrollResult.created}, updated=${payrollResult.updated}`);
     }
 
+    await recordDeviceSyncStatus({ type: 'attendance', success: true });
+
     return res.json({ count: insertedCount, message: insertedCount ? `Inserted ${insertedCount} deduplicated attendance scan(s).` : "No new attendance records were found after deduplication." });
   } catch (err) {
     console.error("Dahua attendance sync error:", err.message);
+    await recordDeviceSyncStatus({ type: 'attendance', success: false, error: err.message });
     const connectorUrl = DAHUA_CONNECTOR_URL || "";
     const isPrivateIp = /192\.168\.|10\.|172\.(1[6-9]|2[0-9]|3[0-1])\.|localhost|127\.0\.0\.1/.test(connectorUrl || DAHUA_DEVICE_IP);
 
@@ -1231,6 +1541,117 @@ app.post("/api/dahua/sync-attendance", async (req, res) => {
     }
 
     return res.status(502).json({ error: `Dahua attendance sync failed: ${err.message}` });
+  }
+});
+
+// ==========================================
+// DAHUA BIOMETRIC DEVICE MONITORING ROUTES
+// ==========================================
+app.get("/api/device/monitoring", async (req, res) => {
+  try {
+    const [statusRows] = await pool.query("SELECT * FROM dahua_device_status WHERE id = 1 LIMIT 1");
+    const statusData = statusRows?.[0] || {};
+
+    const [personCountRows] = await pool.query("SELECT COUNT(*) as total FROM persons WHERE archived = 0 OR archived IS NULL");
+    const personCount = personCountRows?.[0]?.total || 0;
+
+    const [attendanceCountRows] = await pool.query("SELECT COUNT(*) as total FROM attendance WHERE archived = 0 OR archived IS NULL");
+    const attendanceCount = attendanceCountRows?.[0]?.total || 0;
+
+    const deviceName = statusData.device_name || process.env.DAHUA_DEVICE_NAME || "Multifactors Biometric Station";
+    const model = statusData.model || "DHI-ASA3213GL-MW";
+    const ipAddress = statusData.ip_address || DAHUA_DEVICE_IP;
+    const port = Number(statusData.port || DAHUA_DEVICE_PORT || 80);
+
+    const devices = [
+      {
+        id: "dahua-primary",
+        name: deviceName,
+        model: model,
+        ipAddress: ipAddress,
+        port: port,
+        connectionStatus: statusData.connection_status || "Unknown",
+        lastSuccessfulSync: statusData.last_successful_sync || null,
+        lastFailedSync: statusData.last_failed_sync || null,
+        lastFailedReason: statusData.last_failed_reason || null,
+        lastAttendanceSync: statusData.last_attendance_sync || null,
+        lastPersonSync: statusData.last_person_sync || null,
+        numberOfPersons: Number(personCount),
+        numberOfAttendanceRecords: Number(attendanceCount),
+        streamOnline: streamState.status === "running",
+        useLocalConnector: USE_LOCAL_CONNECTOR,
+        updatedAt: statusData.updated_at || null,
+      }
+    ];
+
+    return res.json({
+      devices,
+      summary: {
+        totalDevices: devices.length,
+        onlineDevices: devices.filter(d => d.connectionStatus === "Online").length,
+        totalPersons: Number(personCount),
+        totalAttendance: Number(attendanceCount),
+      }
+    });
+  } catch (err) {
+    console.error("Device monitoring query error:", err.message);
+    return res.status(500).json({ error: { message: err.message || "Failed to load device monitoring data." } });
+  }
+});
+
+app.post("/api/device/test-connection", async (req, res) => {
+  const startTime = Date.now();
+  try {
+    let resultData = null;
+    if (USE_LOCAL_CONNECTOR) {
+      const resp = await requestDahuaViaConnector("GET", "/cgi-bin/magicBox.cgi?action=getSystemInfo");
+      resultData = resp?.body || resp;
+    } else {
+      resultData = await requestDahuaWithDigest("/cgi-bin/magicBox.cgi?action=getSystemInfo");
+    }
+
+    const latencyMs = Date.now() - startTime;
+    const now = new Date().toISOString().slice(0, 19).replace('T', ' ');
+
+    let detectedModel = "DHI-ASA3213GL-MW";
+    let detectedVersion = null;
+    if (typeof resultData === "string") {
+      const modelMatch = resultData.match(/appType=([^\r\n]+)/i) || resultData.match(/deviceType=([^\r\n]+)/i);
+      if (modelMatch) detectedModel = modelMatch[1].trim();
+      const verMatch = resultData.match(/version=([^\r\n]+)/i);
+      if (verMatch) detectedVersion = verMatch[1].trim();
+    }
+
+    await pool.query(
+      "UPDATE dahua_device_status SET connection_status = 'Online', model = ?, last_successful_sync = COALESCE(last_successful_sync, ?), last_failed_reason = NULL WHERE id = 1",
+      [detectedModel, now]
+    );
+
+    return res.json({
+      success: true,
+      status: "Online",
+      latencyMs,
+      model: detectedModel,
+      firmware: detectedVersion,
+      message: `Connection established! Dahua terminal responded in ${latencyMs}ms.`
+    });
+  } catch (err) {
+    const latencyMs = Date.now() - startTime;
+    const now = new Date().toISOString().slice(0, 19).replace('T', ' ');
+    const isConnRefused = err.message.includes("ECONNREFUSED") || err.message.includes("timed out") || err.message.includes("ENOTFOUND");
+    const status = isConnRefused ? "Offline" : "Error";
+
+    await pool.query(
+      "UPDATE dahua_device_status SET connection_status = ?, last_failed_sync = ?, last_failed_reason = ? WHERE id = 1",
+      [status, now, err.message]
+    ).catch(() => {});
+
+    return res.json({
+      success: false,
+      status: status,
+      latencyMs,
+      message: `Connection test failed: ${err.message}`
+    });
   }
 });
 
@@ -1441,7 +1862,8 @@ app.post("/api/db/query", async (req, res) => {
   const allowedTables = [
     "persons", "attendance", "department_rates", "settings",
     "holidays", "cash_advances", "payroll_periods",
-    "payroll_activity_logs", "payroll_released_history"
+    "payroll_activity_logs", "payroll_released_history",
+    "expenses"
   ];
 
   if (!allowedTables.includes(table)) {
@@ -1816,8 +2238,15 @@ const staticDir = fs.existsSync(path.join(__dirname, "build"))
   : path.join(__dirname, "public");
 
 app.use(express.static(staticDir, {
-  maxAge: "1d",
+  maxAge: "30d",
   etag: true,
+  setHeaders: (res, filePath) => {
+    if (filePath.endsWith("index.html") || filePath.endsWith(".html")) {
+      res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+    } else if (filePath.includes("static")) {
+      res.setHeader("Cache-Control", "public, max-age=2592000, immutable");
+    }
+  },
 }));
 
 app.use((req, res) => {

@@ -144,3 +144,56 @@ export async function getDeviceStatus() {
     method: "GET",
   });
 }
+
+export async function getDeviceMonitoring() {
+  return fetchDahuaApi("/api/device/monitoring", {
+    method: "GET",
+  });
+}
+
+export async function testDeviceConnection() {
+  return fetchDahuaApi("/api/device/test-connection", {
+    method: "POST",
+  });
+}
+
+export async function changePassword({ userId, email, currentPassword, newPassword }) {
+  return fetchDahuaApi("/api/auth/change-password", {
+    method: "POST",
+    body: JSON.stringify({ userId, email, currentPassword, newPassword }),
+  });
+}
+
+export async function updateUserProfile({ userId, email, newName, newEmail, currentPassword, newPassword }) {
+  return fetchDahuaApi("/api/auth/update-profile", {
+    method: "POST",
+    body: JSON.stringify({ userId, email, newName, newEmail, currentPassword, newPassword }),
+  });
+}
+
+export async function getAdminAccounts() {
+  return fetchDahuaApi("/api/admin/accounts", {
+    method: "GET",
+  });
+}
+
+export async function createAdminAccount(data) {
+  return fetchDahuaApi("/api/admin/accounts", {
+    method: "POST",
+    body: JSON.stringify(data),
+  });
+}
+
+export async function updateAdminAccount(id, data) {
+  return fetchDahuaApi(`/api/admin/accounts/${id}`, {
+    method: "PUT",
+    body: JSON.stringify(data),
+  });
+}
+
+export async function deleteAdminAccount(id) {
+  return fetchDahuaApi(`/api/admin/accounts/${id}`, {
+    method: "DELETE",
+  });
+}
+

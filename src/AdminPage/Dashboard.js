@@ -197,9 +197,15 @@ export default function Dashboard() {
     async function load() {
       setLoading(true);
       try {
+        const cutoff = new Date();
+        cutoff.setMonth(cutoff.getMonth() - 6);
+
         const [attRes, personsRes, payrollRes, settingsRes] = await Promise.all([
-          supabase.from("attendance").select("device_time,person_id,photo,name,department,event,status,method,point"),
-          supabase.from("persons").select("id,name,department,registration_photo", { count: 'exact' }),
+          supabase
+            .from("attendance")
+            .select("device_time,person_id,name,department,event,status,method,point")
+            .gte("device_time", cutoff.toISOString()),
+          supabase.from("persons").select("id,name,department", { count: 'exact' }),
           supabase.from("payroll_periods").select("id,person_id,period,released"),
           supabase.from("settings").select("*").eq("id", 1).maybeSingle(),
         ]);

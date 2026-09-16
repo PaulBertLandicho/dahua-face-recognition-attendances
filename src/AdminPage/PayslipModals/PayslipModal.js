@@ -33,6 +33,8 @@ export default function PayslipModal({
   const [loadingHoliday, setLoadingHoliday] = useState(true);
   const [cashAdvanceTotalInPeriod, setCashAdvanceTotalInPeriod] = useState(0);
   const [cashAdvanceEntries, setCashAdvanceEntries] = useState([]);
+  const [expensesTotalInPeriod, setExpensesTotalInPeriod] = useState(0);
+  const [expensesEntries, setExpensesEntries] = useState([]);
 
   // Debug output for troubleshooting
   React.useEffect(() => {
@@ -134,6 +136,45 @@ export default function PayslipModal({
       mounted = false;
     };
   }, [person, period]);
+
+  // Fetch total expenses for this person within the payroll period
+  const fetchExpensesTotal = async () => {
+    if (!person?.id || !period) {
+      setExpensesTotalInPeriod(0);
+      setExpensesEntries([]);
+      return;
+    }
+
+    try {
+      const [start, end] = period.split("_to_");
+      const { data, error } = await supabase
+        .from("expenses")
+        .select("id, person_id, period, item_name, amount, expense_date, note, created_at")
+        .eq("person_id", person.id)
+        .order("created_at", { ascending: true });
+      if (error) throw error;
+      const allExpenses = data || [];
+      const periodExpenses = allExpenses.filter((e) => {
+        if (e.period && e.period === period) return true;
+        const eDate = e.expense_date || (e.created_at ? e.created_at.slice(0, 10) : null);
+        if (eDate && start && end && eDate >= start && eDate <= end) return true;
+        return false;
+      });
+      const total = periodExpenses.reduce((s, r) => s + Number(r.amount || 0), 0);
+      setExpensesEntries(periodExpenses);
+      setExpensesTotalInPeriod(Math.round(total * 100) / 100);
+    } catch (err) {
+      console.error("Error fetching expenses total:", err);
+      setExpensesTotalInPeriod(0);
+      setExpensesEntries([]);
+    }
+  };
+
+  useEffect(() => {
+    fetchExpensesTotal();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [person, period]);
+
   const handlePdf = async () => {
     const grossPay =
       Math.round((standardPayAmount + otPay + totalHolidayPay) * 100) / 100;
@@ -177,7 +218,7 @@ export default function PayslipModal({
       holidayPayDetails,
       totalHolidayPay,
       absentCount,
-      totalDeductions,
+      totalDeductions: computedDeductionsSum,
       daysWorked,
       standardPayAmount,
       otPay,
@@ -185,6 +226,8 @@ export default function PayslipModal({
       gross: grossPay,
       cashAdvanceEntries,
       cashAdvanceTotalInPeriod,
+      expensesEntries,
+      expensesTotalInPeriod,
     });
   };
 
@@ -520,12 +563,10 @@ export default function PayslipModal({
     (payroll.lateCount >= lateCountLimit ? payroll.lateCount * latePenalty : 0);
   const computedDeductionsSum =
     lateDeduction + deductions.reduce((acc, d) => acc + d.value, 0) +
-    Number(cashAdvanceTotalInPeriod || 0);
+    Number(cashAdvanceTotalInPeriod || 0) +
+    Number(expensesTotalInPeriod || 0);
   const totalDeductions =
-    Math.round(
-      (Number(payroll.totalDeductions ?? payroll.total_deductions ?? computedDeductionsSum) || computedDeductionsSum) *
-        100,
-    ) / 100;
+    Math.round(computedDeductionsSum * 100) / 100;
   const adjustedGrossPay =
     Math.round((standardPayAmount + otPay + totalHolidayPay) * 100) / 100;
   const adjustedNetPay =
@@ -1023,9 +1064,45 @@ export default function PayslipModal({
                   </tr>
                 </>
               )}
+
+              {expensesEntries && expensesEntries.length > 0 && (
+                <>
+                  <tr>
+                    <td colSpan={2} className="py-2.5 px-2 border-b border-gray-200 text-gray-800 font-bold">
+                      Expenses / Product Purchases Details
+                    </td>
+                  </tr>
+                  {expensesEntries.map((h, idx) => (
+                    <tr
+                      key={h.id || idx}
+                      className={idx % 2 === 0 ? "bg-gray-50" : "bg-white"}
+                    >
+                      <td className="py-2.5 px-2 border-b border-gray-200 text-gray-800">
+                        <span className="font-semibold">{h.item_name}</span>
+                        {h.note && <span className="text-gray-500 text-xs ml-2">({h.note})</span>}
+                        <div className="text-[0.75rem] text-gray-400">
+                          {h.expense_date || (h.created_at ? new Date(h.created_at).toLocaleDateString() : "-")}
+                        </div>
+                      </td>
+                      <td className="py-2.5 px-2 border-b border-gray-200 text-gray-800">
+                        ₱{Number(h.amount).toFixed(2)}
+                      </td>
+                    </tr>
+                  ))}
+                  <tr className="transition-colors duration-200">
+                    <td className="py-2.5 px-2 border-b border-gray-200 text-gray-800 font-bold">
+                      Expenses Total
+                    </td>
+                    <td className="py-2.5 px-2 border-b border-gray-200 text-gray-800 font-bold">
+                      ₱{Number(expensesTotalInPeriod || 0).toFixed(2)}
+                    </td>
+                  </tr>
+                </>
+              )}
+
               <tr className="bg-gray-100 font-semibold">
                 <td className="py-2.5 px-2 border-b border-gray-200 text-gray-800">Total Deductions</td>
-                <td className="py-2.5 px-2 border-b border-gray-200 text-gray-800">₱{totalDeductions.toLocaleString()}</td>
+                <td className="py-2.5 px-2 border-b border-gray-200 text-gray-800">₱{totalDeductions.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
               </tr>
             </tbody>
           </table>

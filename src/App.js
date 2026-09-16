@@ -23,6 +23,8 @@ import AdminSidebar from "./AdminPage/AdminSidebar";
 import DepartmentRates from "./AdminPage/DepartmentRates";
 import PersonsTable from "./AdminPage/PersonsTable";
 import StaffLoginModal from "./AdminPage/StaffLoginModal";
+import DeviceMonitoring from "./AdminPage/DeviceMonitoring";
+import AccountSettings from "./AdminPage/AccountSettings";
 import {
   ADMIN_ROLE,
   STAFF_ROLES,
@@ -249,6 +251,46 @@ function App() {
                   />
                   <div className={`flex-1 pt-4 pb-8 px-6 lg:px-8 bg-white ${isMobile ? "ml-0" : "ml-[295px]"}`}>
                     <AdminSettings />
+                  </div>
+                </div>
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/admin/device-monitoring"
+            element={
+              <ProtectedRoute session={session} allowedRoles={[ADMIN_ROLE]}>
+                <div className="flex min-h-screen bg-white">
+                  <AdminSidebar
+                    role={currentRole}
+                    onLogout={async () => {
+                      await supabase.auth.signOut();
+                      localStorage.removeItem("sb-session");
+                      window.location.href = "/admin";
+                    }}
+                  />
+                  <div className={`flex-1 pt-4 pb-8 px-6 lg:px-8 bg-white ${isMobile ? "ml-0" : "ml-[295px]"}`}>
+                    <DeviceMonitoring />
+                  </div>
+                </div>
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/admin/account-settings"
+            element={
+              <ProtectedRoute session={session} allowedRoles={STAFF_ROLES}>
+                <div className="flex min-h-screen bg-white">
+                  <AdminSidebar
+                    role={currentRole}
+                    onLogout={async () => {
+                      await supabase.auth.signOut();
+                      localStorage.removeItem("sb-session");
+                      window.location.href = "/admin";
+                    }}
+                  />
+                  <div className={`flex-1 pt-4 pb-8 px-6 lg:px-8 bg-white ${isMobile ? "ml-0" : "ml-[295px]"}`}>
+                    <AccountSettings />
                   </div>
                 </div>
               </ProtectedRoute>
