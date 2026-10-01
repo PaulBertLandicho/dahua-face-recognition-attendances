@@ -109,7 +109,7 @@ async function run() {
             const dt = new Date(r.device_time);
             const hhmm = dt.toTimeString().slice(0,5);
             const minutes = toMinutes(hhmm);
-            if (r.event === 'time-in' && minutes >= morningStartMin && minutes <= morningEndMin) {
+            if (r.event === 'time-in' && minutes <= morningEndMin) {
               if (!morningInRow) morningInRow = r;
             }
             if (r.event === 'time-out' && morningInRow) {

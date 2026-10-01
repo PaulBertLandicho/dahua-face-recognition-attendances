@@ -22,8 +22,8 @@ export function determineExpectedEvent(currentTime, lastEvent, settings, lastEve
   const afternoonStartMinutes = toMinutes(settings.afternoon_start);
   const afternoonEndMinutes = toMinutes(settings.afternoon_end);
 
-  // Morning shift: time-in
-  if (nowMinutes >= morningStartMinutes && nowMinutes <= morningEndMinutes) {
+  // Morning shift: time-in (supports early-in before morningStartMinutes)
+  if (nowMinutes <= morningEndMinutes) {
     if (!lastEvent || lastEvent === "time-out") return "time-in";
     if (lastEvent === "time-in") return "already-timed-in";
     return "attendance-closed";
@@ -120,20 +120,26 @@ export function determineAttendanceStatus(
     return "on-time";
   } else {
     // Morning punch (time-in)
-    if (nowMinutes <= morningStart + morningGrace) {
+    if (nowMinutes < morningStart) {
+      return "early-in";
+    } else if (nowMinutes <= morningStart + morningGrace) {
       return "on-time";
     } else {
       return "late";
     }
   }
-
 }
 
 export function getAttendanceStatus(record, settings = {}) {
-  if (record?.status) return record.status;
-
   const deviceDate = new Date(record?.device_time);
-  if (Number.isNaN(deviceDate.getTime())) return "present";
+  const isValidDate = !Number.isNaN(deviceDate.getTime());
+
+  // If status is specifically set to late, early-out, early-in, overtime, preserve it
+  if (record?.status && record.status !== "on-time" && record.status !== "present") {
+    return record.status;
+  }
+
+  if (!isValidDate) return record?.status || "present";
 
   try {
     return determineAttendanceStatus(
@@ -149,7 +155,7 @@ export function getAttendanceStatus(record, settings = {}) {
       },
     );
   } catch (error) {
-    return "present";
+    return record?.status || "present";
   }
 }
 
@@ -290,14 +296,13 @@ export async function recordAttendanceForPerson({
   // Determine if there was any morning time-in earlier today
   let hadMorningTimeIn = false;
   if (Array.isArray(attData) && attData.length > 0) {
-    const morningStartMinutes = toMinutes(settings.morning_start);
     const morningEndMinutes = toMinutes(settings.morning_end);
     for (const row of attData) {
       if (row.event !== "time-in" || !row.device_time) continue;
       const dt = new Date(row.device_time);
       const hhmm = dt.toTimeString().slice(0, 5);
       const minutes = toMinutes(hhmm);
-      if (minutes >= morningStartMinutes && minutes <= morningEndMinutes) {
+      if (minutes <= morningEndMinutes) {
         hadMorningTimeIn = true;
         break;
       }
@@ -326,9 +331,9 @@ export async function recordAttendanceForPerson({
     };
 
     if (event === "time-in") {
-      // Morning time-in duplicate
-      if (nowMinutes >= morningStartMinutes && nowMinutes <= morningEndMinutes) {
-        if (hasEventInWindow("time-in", morningStartMinutes, morningEndMinutes)) {
+      // Morning time-in duplicate (including early-in)
+      if (nowMinutes <= morningEndMinutes) {
+        if (hasEventInWindow("time-in", 0, morningEndMinutes)) {
           return { inserted: false, blocked: true, event, message: "Morning time-in already recorded for this person." };
         }
       }
@@ -516,7 +521,6 @@ export async function autoGenerateMorningOut({ supabase, settings }) {
         continue;
       }
 
-      const morningStartMin = toMinutes(settings.morning_start);
       const morningEndMin = toMinutes(settings.morning_end);
       let morningInRow = null;
       let hasMorningOut = false;
@@ -527,7 +531,7 @@ export async function autoGenerateMorningOut({ supabase, settings }) {
           const dt = new Date(r.device_time);
           const hhmm = dt.toTimeString().slice(0,5);
           const minutes = toMinutes(hhmm);
-          if (r.event === 'time-in' && minutes >= morningStartMin && minutes <= morningEndMin) {
+          if (r.event === 'time-in' && minutes <= morningEndMin) {
             if (!morningInRow) morningInRow = r;
           }
           if (r.event === 'time-out' && morningInRow) {

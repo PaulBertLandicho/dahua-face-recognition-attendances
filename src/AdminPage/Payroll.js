@@ -94,3 +94,84 @@ export function calculatePayroll(
     };
   });
 }
+
+/**
+ * Calculates late deduction using the Tiered Bracket rule:
+ * - 1 to 15 mins: Minor late fee (default ₱10)
+ * - 16 to 30 mins: Mid late fee (default ₱25)
+ * - 31 to 60 mins: Full 1-hour rate from Employee Rates (Daily Rate / 8 or Late Penalty)
+ * - > 60 mins: Pro-rated by unworked hours
+ */
+export function calculateTieredLateDeduction(
+  lateItems = [],
+  dailyRate = 0,
+  personLatePenalty = 0,
+  settings = {}
+) {
+  let localTier = null;
+  try {
+    const raw = typeof localStorage !== "undefined" ? localStorage.getItem("late_tier_settings") : null;
+    if (raw) localTier = JSON.parse(raw);
+  } catch (e) {}
+
+  const minorFee = Number(
+    settings?.late_tier_minor_fee ?? localTier?.late_tier_minor_fee ?? 10
+  );
+  const midFee = Number(
+    settings?.late_tier_mid_fee ?? localTier?.late_tier_mid_fee ?? 25
+  );
+  const majorMode =
+    settings?.late_tier_major_mode || localTier?.late_tier_major_mode || "employee_hourly";
+  const customMajorFee = Number(
+    settings?.late_tier_major_fee ?? localTier?.late_tier_major_fee ?? 50
+  );
+
+  // Compute 1-hour rate based on Employee Rates
+  let majorRate = 0;
+  if (majorMode === "employee_penalty" && personLatePenalty > 0) {
+    majorRate = Number(personLatePenalty);
+  } else if (majorMode === "custom_flat") {
+    majorRate = customMajorFee;
+  } else {
+    // Default: Employee Hourly Rate (Daily Rate / 8)
+    majorRate = dailyRate > 0 ? Number(dailyRate) / 8 : Number(personLatePenalty || 50);
+  }
+  majorRate = Math.round(majorRate * 100) / 100;
+
+  let totalDeduction = 0;
+  const breakdown = [];
+
+  for (const item of lateItems) {
+    const mins = Number(item.minutesLate) || 1;
+    let itemDeduction = 0;
+    let tierLabel = "";
+
+    if (mins <= 15) {
+      itemDeduction = minorFee;
+      tierLabel = `Minor Late (1–15m)`;
+    } else if (mins <= 30) {
+      itemDeduction = midFee;
+      tierLabel = `Mid Late (16–30m)`;
+    } else if (mins <= 60) {
+      itemDeduction = majorRate;
+      tierLabel = `Major Late (~1 hr rate)`;
+    } else {
+      const hours = Math.ceil(mins / 60);
+      itemDeduction = Math.round(hours * majorRate * 100) / 100;
+      tierLabel = `Extended Late (${hours}h)`;
+    }
+
+    totalDeduction += itemDeduction;
+    breakdown.push({
+      ...item,
+      minutesLate: mins,
+      deduction: itemDeduction,
+      tierLabel,
+    });
+  }
+
+  return {
+    totalLateDeduction: Math.round(totalDeduction * 100) / 100,
+    lateBreakdown: breakdown,
+  };
+}

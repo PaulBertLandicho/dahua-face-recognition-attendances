@@ -84,7 +84,7 @@ CREATE TRIGGER `attendance_before_insert_slot` BEFORE INSERT ON `attendance` FOR
   SET NEW.attendance_work_date = IF(NEW.device_time IS NULL, NULL, DATE(NEW.device_time));
 
   -- Assign event AND slot purely by time of day
-  IF TIME(NEW.device_time) BETWEEN configured_morning_start AND configured_morning_end THEN
+  IF TIME(NEW.device_time) <= configured_morning_end THEN
     SET NEW.event = 'time-in';
     SET NEW.attendance_slot = 'morning_time_in';
   ELSEIF TIME(NEW.device_time) >= configured_afternoon_start THEN
@@ -111,7 +111,7 @@ CREATE TRIGGER `attendance_before_update_slot` BEFORE UPDATE ON `attendance` FOR
   SET NEW.attendance_work_date = IF(NEW.device_time IS NULL, NULL, DATE(NEW.device_time));
 
   -- Assign event AND slot purely by time of day
-  IF TIME(NEW.device_time) BETWEEN configured_morning_start AND configured_morning_end THEN
+  IF TIME(NEW.device_time) <= configured_morning_end THEN
     SET NEW.event = 'time-in';
     SET NEW.attendance_slot = 'morning_time_in';
   ELSEIF TIME(NEW.device_time) >= configured_afternoon_start THEN

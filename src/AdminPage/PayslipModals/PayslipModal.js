@@ -8,11 +8,13 @@ import {
   FiClock,
   FiTrendingDown,
   FiBriefcase,
+  FiCheckCircle,
 } from "react-icons/fi";
 import Icon from "../../components/Icon";
 import { supabase } from "../../mysqlClient";
 import { generatePayslipPdf } from "./generatePayslipPdf";
 import { hasHolidayPayEligibility } from "../../utils/holidayPayEligibility";
+import { calculateTieredLateDeduction } from "../Payroll";
 
 // detailedAttendance: [{ date, morningIn, morningOut, afternoonIn, afternoonOut, lateCount, lateDetails: [{session, time, status}]}]
 export default function PayslipModal({
@@ -23,6 +25,7 @@ export default function PayslipModal({
   showPrintButton,
   period,
   released,
+  onRelease,
 }) {
   // useState declarations (only once)
   const [holidayDetails, setHolidayDetails] = useState([]);
@@ -182,24 +185,39 @@ export default function PayslipModal({
     let totalOtMinutesForPdf = 0;
     try {
       const sched = payroll && payroll.settings ? payroll.settings : {};
+      const schedMorningStart = parseTimeToMinutes(sched.morning_start || "08:00") || 480;
+      const schedEarlyInLimit = Math.min(schedMorningStart - 60, parseTimeToMinutes("07:00") || 420);
       const schedMorningEnd = sched.morning_end || "12:00";
       const schedAfternoonEnd = sched.afternoon_end || "17:00";
       (detailedAttendance || []).forEach((rec) => {
         try {
+          const mIn = parseTimeToMinutes(rec.morningIn || rec.attendanceIn);
           const mOut = parseTimeToMinutes(rec.morningOut);
-          const aOut = parseTimeToMinutes(rec.afternoonOut);
+          const aOut = parseTimeToMinutes(rec.afternoonOut || rec.attendanceOut);
           const mEnd = parseTimeToMinutes(schedMorningEnd);
           const aEnd = parseTimeToMinutes(schedAfternoonEnd);
+
+          // Early-in overtime (7:00 AM and below)
+          if (
+            typeof mIn === "number" &&
+            mIn <= schedEarlyInLimit &&
+            mIn < schedMorningStart
+          ) {
+            totalOtMinutesForPdf += schedMorningStart - mIn;
+          }
+
           if (
             typeof mOut === "number" &&
             typeof mEnd === "number" &&
-            mOut > mEnd
+            mOut > mEnd &&
+            mOut - mEnd >= 60
           )
             totalOtMinutesForPdf += mOut - mEnd;
           if (
             typeof aOut === "number" &&
             typeof aEnd === "number" &&
-            aOut > aEnd
+            aOut > aEnd &&
+            aOut - aEnd >= 60
           )
             totalOtMinutesForPdf += aOut - aEnd;
         } catch (e) {}
@@ -233,7 +251,7 @@ export default function PayslipModal({
 
   // Helper to display hours and minutes
   const getHourMinute = (hours) => {
-    if (!hours || hours <= 0) return "-";
+    if (!hours || hours <= 0) return "N/A";
     const h = Math.floor(hours);
     const m = Math.round((hours - h) * 60);
     let str = "";
@@ -354,6 +372,36 @@ export default function PayslipModal({
     return "";
   }
 
+  // Settings for shift time-in/time-out
+  const settings = payroll && payroll.settings ? payroll.settings : {};
+  const morningStart = settings.morning_start || "08:00";
+  const morningEnd = settings.morning_end || "12:00";
+  const afternoonStart = settings.afternoon_start || "13:00";
+  const afternoonEnd = settings.afternoon_end || "17:00";
+
+  // Helper to check if it's not yet time for time-in/time-out
+  function isNotYetTime(session, dateStr, type) {
+    if (!dateStr) return false;
+    const now = new Date();
+    const todayFormatted = safeFormatYMD(now);
+    const dateFormatted = safeFormatYMD(dateStr);
+    if (dateFormatted < todayFormatted) {
+      return false;
+    }
+    if (dateFormatted > todayFormatted) {
+      return true;
+    }
+    let sessionTime;
+    if (session === "morning") {
+      sessionTime = type === "in" ? morningStart : morningEnd;
+    } else {
+      sessionTime = type === "in" ? afternoonStart : afternoonEnd;
+    }
+    const [h, m] = String(sessionTime).split(":").map(Number);
+    const target = new Date(now.getFullYear(), now.getMonth(), now.getDate(), h || 0, m || 0, 0, 0);
+    return now < target;
+  }
+
   // Calculate absent days in the 15-day period
   // Get the period start and end from the period string (e.g. 2024-03-01_to_2024-03-15)
   let absentDates = [];
@@ -432,43 +480,146 @@ export default function PayslipModal({
         ps === "4h" ||
         ps.includes("half");
 
-      // For each date in the period (weekdays only) that is before today, determine missing sessions
+      // For each date in the period (weekdays only) that is on or before today, determine missing sessions
       absentDates = allDates
-        .filter((dateStr) => dateStr < todayStr)
+        .filter((dateStr) => dateStr <= todayStr)
         .map((dateStr) => {
+          const morningEnded = dateStr < todayStr || !isNotYetTime("morning", dateStr, "out");
+          const afternoonEnded = dateStr < todayStr || !isNotYetTime("afternoon", dateStr, "out");
+
+          // If neither session has ended yet (e.g. earlier today before morning cutoff), don't mark anything absent yet
+          if (!morningEnded && !afternoonEnded) return null;
+
           const rec = attendanceByDate[dateStr] || null;
-          if (!rec) {
-            // no attendance record at all -> full day absent
-            return { date: dateStr, missing: "Full Day" };
-          }
-          const hasMorning = !!rec.morningIn;
-          const hasAfternoon = !!rec.afternoonIn;
+
+          const hasMorning = Boolean(
+            rec && (
+              (rec.morningIn && rec.morningIn !== "-" && rec.morningIn !== "Not time-in") ||
+              (rec.morningOut && rec.morningOut !== "-")
+            )
+          );
+
+          const hasAfternoon = Boolean(
+            rec && (
+              (rec.afternoonOut && rec.afternoonOut !== "-" && rec.afternoonOut !== "Not time-out" && !String(rec.afternoonOut).includes("Missing")) ||
+              (rec.afternoonIn && rec.afternoonIn !== "-")
+            )
+          );
 
           if (expectsMorningOnly) {
-            if (!hasMorning) return { date: dateStr, missing: "Morning" };
+            if (morningEnded && !hasMorning) return { date: dateStr, missing: "Morning" };
             return null;
           }
           if (expectsAfternoonOnly) {
-            if (!hasAfternoon) return { date: dateStr, missing: "Afternoon" };
+            if (afternoonEnded && !hasAfternoon) return { date: dateStr, missing: "Afternoon" };
             return null;
           }
           if (expectsSingleSession) {
-            // half-day staff: missing if neither session present
-            if (!hasMorning && !hasAfternoon)
+            // half-day staff: missing if neither session present after the workday has ended
+            if (afternoonEnded && !hasMorning && !hasAfternoon)
               return { date: dateStr, missing: "Session" };
             return null;
           }
-          // default: if both sessions missing -> full day absent. If one session missing, mark which one
-          if (!hasMorning && !hasAfternoon)
-            return { date: dateStr, missing: "Full Day" };
-          if (!hasMorning) return { date: dateStr, missing: "Morning" };
-          if (!hasAfternoon) return { date: dateStr, missing: "Afternoon" };
+
+          // Default 2-session expectation
+          if (morningEnded && afternoonEnded) {
+            if (!hasMorning && !hasAfternoon)
+              return { date: dateStr, missing: "Full Day" };
+            if (!hasMorning) return { date: dateStr, missing: "Morning" };
+            if (!hasAfternoon) return { date: dateStr, missing: "Afternoon" };
+            return null;
+          }
+
+          // If morning has ended but afternoon has not ended yet
+          if (morningEnded && !afternoonEnded) {
+            if (!hasMorning) return { date: dateStr, missing: "Morning" };
+            return null;
+          }
+
           return null;
         })
         .filter(Boolean);
     }
   }
   const absentCount = absentDates.length;
+
+  // Organize and list all dates of the Payroll Cutoff Period in sequential order (e.g. 2026-09-14, 2026-09-15)
+  const organizedAttendance = (() => {
+    const mapByDate = {};
+    (detailedAttendance || []).forEach((item) => {
+      const dStr = safeFormatYMD(item?.date || item?.device_time);
+      if (dStr) {
+        mapByDate[dStr] = item;
+      }
+    });
+
+    if (typeof period === "string") {
+      let startDateVal = null;
+      let endDateVal = null;
+      if (period.includes("_to_")) {
+        const [start, end] = period.split("_to_");
+        startDateVal = new Date(start);
+        endDateVal = new Date(end);
+      } else {
+        const matches = Array.from(
+          period.matchAll(/(\d{4}[-/]\d{2}[-/]\d{2})/g),
+        ).map((m) => m[1]);
+        if (matches.length >= 2) {
+          startDateVal = new Date(matches[0]);
+          endDateVal = new Date(matches[1]);
+        }
+      }
+
+      if (
+        startDateVal &&
+        endDateVal &&
+        !isNaN(startDateVal.getTime()) &&
+        !isNaN(endDateVal.getTime())
+      ) {
+        const periodDatesList = [];
+        for (
+          let cur = new Date(startDateVal);
+          cur <= endDateVal;
+          cur.setDate(cur.getDate() + 1)
+        ) {
+          const curDateStr = safeFormatYMD(cur);
+          if (!curDateStr) continue;
+
+          // Exclude Saturday (6) and Sunday (0) if there is NO attendance record on that day
+          const dayOfWeek = cur.getDay();
+          const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
+          if (isWeekend && !mapByDate[curDateStr]) {
+            continue;
+          }
+
+          if (mapByDate[curDateStr]) {
+            periodDatesList.push({
+              ...mapByDate[curDateStr],
+              date: curDateStr,
+            });
+          } else {
+            periodDatesList.push({
+              date: curDateStr,
+              attendanceIn: null,
+              attendanceOut: null,
+              morningIn: null,
+              afternoonOut: null,
+              morningInStatus: null,
+              lateCount: 0,
+              lateDetails: [],
+              status: "absent",
+              otHours: 0,
+            });
+          }
+        }
+        return periodDatesList.sort((a, b) => a.date.localeCompare(b.date));
+      }
+    }
+
+    return [...(detailedAttendance || [])].sort((a, b) =>
+      String(a.date || "").localeCompare(String(b.date || "")),
+    );
+  })();
 
   // Calculate holiday pay for each holiday (accurate for payroll period)
   let holidayPayDetails = [];
@@ -497,6 +648,7 @@ export default function PayslipModal({
         return {
           date: h.date,
           type: h.type,
+          description: h.description || "",
           rate: payroll.dailyRate,
           amount,
           ratePercent,
@@ -517,8 +669,14 @@ export default function PayslipModal({
   } else if (detailedAttendance.length) {
     let totalAttendedDays = 0;
     detailedAttendance.forEach((rec) => {
-      const hasMorning = !!rec.morningIn;
-      const hasAfternoon = !!rec.afternoonOut || !!rec.afternoonIn;
+      const hasMorning = Boolean(
+        (rec.morningIn && rec.morningIn !== "-" && rec.morningIn !== "Not time-in") ||
+        (rec.morningOut && rec.morningOut !== "-")
+      );
+      const hasAfternoon = Boolean(
+        (rec.afternoonOut && rec.afternoonOut !== "-" && rec.afternoonOut !== "Not time-out" && !String(rec.afternoonOut).includes("Missing")) ||
+        (rec.afternoonIn && rec.afternoonIn !== "-")
+      );
       if (hasMorning && hasAfternoon) {
         totalAttendedDays += 1;
       } else if (hasMorning || hasAfternoon) {
@@ -538,8 +696,37 @@ export default function PayslipModal({
 
   // Overtime calculation: always use dailyRate/8 (no premium) for display and calculation, and round to 2 decimals for all math
   const hourlyRate = Math.round(((payroll.dailyRate ?? 0) / 8) * 100) / 100;
+  let dynamicOtMinutes = 0;
+  if (detailedAttendance && detailedAttendance.length) {
+    const schedMorningStart = (settings && settings.morning_start) || "08:00";
+    const schedMorningEnd = (settings && settings.morning_end) || "12:00";
+    const schedAfternoonEnd = (settings && settings.afternoon_end) || "17:00";
+    const schedMorningStartMin = parseTimeToMinutes(schedMorningStart) || 480;
+    const schedEarlyInLimit = Math.min(schedMorningStartMin - 60, parseTimeToMinutes("07:00") || 420);
+    const schedMorningEndMin = parseTimeToMinutes(schedMorningEnd);
+    const schedAfternoonEndMin = parseTimeToMinutes(schedAfternoonEnd);
+
+    detailedAttendance.forEach((rec) => {
+      const mIn = parseTimeToMinutes(rec.attendanceIn || rec.morningIn);
+      const mOut = parseTimeToMinutes(rec.morningOut);
+      const aOut = parseTimeToMinutes(rec.attendanceOut || rec.afternoonOut);
+      if (typeof mIn === "number" && mIn <= schedEarlyInLimit && mIn < schedMorningStartMin) {
+        dynamicOtMinutes += schedMorningStartMin - mIn;
+      }
+      if (typeof aOut === "number" && typeof schedAfternoonEndMin === "number" && aOut > schedAfternoonEndMin) {
+        const mins = aOut - schedAfternoonEndMin;
+        if (mins >= 60) dynamicOtMinutes += mins;
+      }
+      if (typeof mOut === "number" && typeof schedMorningEndMin === "number" && mOut > schedMorningEndMin) {
+        const mins = mOut - schedMorningEndMin;
+        if (mins >= 60) dynamicOtMinutes += mins;
+      }
+    });
+  }
   // Ensure otHours is rounded to 2 decimals for precision
-  const otHours = Math.round((payroll.otHours ?? 0) * 100) / 100;
+  const otHours = detailedAttendance && detailedAttendance.length
+    ? Math.round((dynamicOtMinutes / 60) * 100) / 100
+    : Math.round((payroll.otHours ?? 0) * 100) / 100;
   // Round OT pay to 2 decimals for display and math
   const otPay = Math.round(hourlyRate * otHours * 100) / 100;
   const deductions = [
@@ -557,6 +744,7 @@ export default function PayslipModal({
   const lateCountLimit =
     payroll.lateCountLimit || payroll.late_count_limit || 5;
   const latePenalty = person.late_penalty || 0;
+  const baseDailyRate = Number(payroll.dailyRate ?? person.daily_rate ?? 0);
   const lateDeduction =
     payroll.totalLateDeduction ??
     payroll.total_late_deduction ??
@@ -617,6 +805,7 @@ export default function PayslipModal({
                 <thead>
                   <tr>
                     <th className="bg-gray-50 text-gray-600 font-semibold py-3 px-2 text-left border-b-2 border-gray-200 uppercase text-sm tracking-wide">Date</th>
+                    <th className="bg-gray-50 text-gray-600 font-semibold py-3 px-2 text-left border-b-2 border-gray-200 uppercase text-sm tracking-wide">Holiday / Remarks</th>
                     <th className="bg-gray-50 text-gray-600 font-semibold py-3 px-2 text-left border-b-2 border-gray-200 uppercase text-sm tracking-wide">Type</th>
                     <th className="bg-gray-50 text-gray-600 font-semibold py-3 px-2 text-left border-b-2 border-gray-200 uppercase text-sm tracking-wide">Rate (%)</th>
                     {/* <th className="bg-gray-50 text-gray-600 font-semibold py-3 px-2 text-left border-b-2 border-gray-200 uppercase text-sm tracking-wide">Amount</th> */}
@@ -626,12 +815,13 @@ export default function PayslipModal({
                   {holidayPayDetails.map((h, i) => (
                     <tr key={h.date + h.type} className={i % 2 === 0 ? "bg-gray-50" : "bg-white"}>
                       <td className="py-2.5 px-2 border-b border-gray-200 text-gray-800">{h.date}</td>
+                      <td className="py-2.5 px-2 border-b border-gray-200 text-gray-800 font-medium">{h.description || "N/A"}</td>
                       <td className="py-2.5 px-2 border-b border-gray-200 text-gray-800">
                         {h.type === "regular"
                           ? "Regular Holiday"
                           : "Special Holiday"}
                       </td>
-                      <td className="py-2.5 px-2 border-b border-gray-200 text-gray-800">{h.ratePercent}</td>
+                      <td className="py-2.5 px-2 border-b border-gray-200 text-gray-800">{h.ratePercent}%</td>
                       {/* <td className="py-2.5 px-2 border-b border-gray-200 text-gray-800">₱{h.amount.toLocaleString(undefined, { minimumFractionDigits: 2 })}</td> */}
                     </tr>
                   ))}
@@ -650,144 +840,336 @@ export default function PayslipModal({
             Attendance Details
           </h3>
 
-          <table className="w-full border-collapse mb-6 text-[0.95rem]">
-            <thead>
-              <tr>
-                <th className="bg-gray-50 text-gray-600 font-semibold py-3 px-2 text-left border-b-2 border-gray-200 uppercase text-sm tracking-wide">Date</th>
-                <th className="bg-gray-50 text-gray-600 font-semibold py-3 px-2 text-left border-b-2 border-gray-200 uppercase text-sm tracking-wide">Morning In</th>
-                <th className="bg-gray-50 text-gray-600 font-semibold py-3 px-2 text-left border-b-2 border-gray-200 uppercase text-sm tracking-wide">Afternoon Out</th>
-                <th className="bg-gray-50 text-gray-600 font-semibold py-3 px-2 text-left border-b-2 border-gray-200 uppercase text-sm tracking-wide">OT</th>
-                <th className="bg-gray-50 text-gray-600 font-semibold py-3 px-2 text-left border-b-2 border-gray-200 uppercase text-sm tracking-wide">Late Count</th>
-                <th className="bg-gray-50 text-gray-600 font-semibold py-3 px-2 text-left border-b-2 border-gray-200 uppercase text-sm tracking-wide">Late Details</th>
-                {/* Removed unused OT (hrs) column */}
-              </tr>
-            </thead>
-            <tbody>
-              {detailedAttendance.length ? (
-                detailedAttendance.map((rec, i) => {
-                  const trClass = i % 2 === 0 ? "bg-gray-50" : "bg-white";
-
-                  // Settings for time-in/time-out
-                  const settings =
-                    payroll && payroll.settings ? payroll.settings : {};
-
-                  const morningStart = settings.morning_start || "08:00";
-                  const morningEnd = settings.morning_end || "12:00";
-                  const afternoonStart = settings.afternoon_start || "13:00";
-                  const afternoonEnd = settings.afternoon_end || "17:00";
-
-                  // Helper to check if it's not yet time for time-in/time-out
-                  function isNotYetTime(session, date, type) {
-                    // type: 'in' or 'out'
-                    const now = new Date();
-                    const dateObj = new Date(date);
-                    let sessionTime;
-                    if (session === "morning") {
-                      sessionTime = type === "in" ? morningStart : morningEnd;
-                    } else {
-                      sessionTime =
-                        type === "in" ? afternoonStart : afternoonEnd;
-                    }
-                    const [h, m] = sessionTime.split(":").map(Number);
-                    dateObj.setHours(h, m, 0, 0);
-                    return now < dateObj;
-                  }
-
-                  // Morning In
-                  let morningInDisplay = "-";
-                  if (rec.morningIn) {
-                    morningInDisplay = rec.morningIn;
-                  } else if (!isNotYetTime("morning", rec.date, "in")) {
-                    morningInDisplay = "Not time-in";
-                  }
-
-                  // Afternoon Out
-                  let afternoonOutDisplay = "-";
-                  if (rec.afternoonOut) {
-                    afternoonOutDisplay = rec.afternoonOut;
-                  } else if (!isNotYetTime("afternoon", rec.date, "out")) {
-                    afternoonOutDisplay = "Missing (Rate: 0)";
-                  }
-
-                  // Compute per-row overtime (minutes) by comparing out times to scheduled end times.
-                  let otMinutes = 0;
-                  try {
-                    const scheduledMorningEnd =
-                      (settings && settings.morning_end) || "12:00";
-                    const scheduledAfternoonEnd =
-                      (settings && settings.afternoon_end) || "17:00";
-                    const morningOutMin = parseTimeToMinutes(rec.morningOut);
-                    const afternoonOutMin = parseTimeToMinutes(
-                      rec.afternoonOut,
-                    );
-                    const schedMorningEndMin =
-                      parseTimeToMinutes(scheduledMorningEnd);
-                    const schedAfternoonEndMin = parseTimeToMinutes(
-                      scheduledAfternoonEnd,
-                    );
-                    if (
-                      typeof afternoonOutMin === "number" &&
-                      typeof schedAfternoonEndMin === "number" &&
-                      afternoonOutMin > schedAfternoonEndMin
-                    ) {
-                      const mins = afternoonOutMin - schedAfternoonEndMin;
-                      if (mins >= 60) otMinutes += mins;
-                    }
-                    // include morning overtime if present (rare)
-                    if (
-                      typeof morningOutMin === "number" &&
-                      typeof schedMorningEndMin === "number" &&
-                      morningOutMin > schedMorningEndMin
-                    ) {
-                      const mins = morningOutMin - schedMorningEndMin;
-                      if (mins >= 60) otMinutes += mins;
-                    }
-                  } catch (e) {
-                    otMinutes = 0;
-                  }
-
-                  const recOtHours = Math.round((otMinutes / 60) * 100) / 100;
-
-                  return (
-                    <tr key={i} className={trClass}>
-                      <td className="py-2.5 px-2 border-b border-gray-200 text-gray-800">{rec.date}</td>
-                      <td className={`py-2.5 px-2 border-b border-gray-200 ${rec.morningInStatus === 'late' ? 'text-red-500' : 'text-gray-800'}`}>
-                        {morningInDisplay}
-                      </td>
-                      <td className="py-2.5 px-2 border-b border-gray-200 text-gray-800">{afternoonOutDisplay}</td>
-                      <td className="py-2.5 px-2 border-b border-gray-200 text-gray-800">
-                        {getHourMinute(recOtHours)} ({recOtHours.toFixed(2)})
-                      </td>
-                      <td className="py-2.5 px-2 border-b border-gray-200 text-gray-800">{rec.lateCount || 0}</td>
-                      <td className="py-2.5 px-2 border-b border-gray-200 text-gray-800">
-                        {rec.lateDetails && rec.lateDetails.length ? (
-                          <ul className="m-0 pl-4">
-                            {rec.lateDetails.map((d, idx) => (
-                              <li key={idx} className="text-red-500">
-                                {d.session}: {d.time} ({d.status})
-                              </li>
-                            ))}
-                          </ul>
-                        ) : (
-                          "-"
-                        )}
-                      </td>
-                      {/* Removed unused otDisplay cell */}
-                    </tr>
-                  );
-                })
-              ) : (
+          <div className="overflow-x-auto mb-6">
+            <table className="w-full border-collapse text-[0.95rem]">
+              <thead>
                 <tr>
-                  <td
-                    colSpan="9"
-                    className="py-2.5 px-2 border-b border-gray-200 text-center text-gray-400"
-                  >
-                    No attendance records
-                  </td>
+                  <th className="bg-gray-50 text-gray-600 font-semibold py-3 px-2 text-left border-b-2 border-gray-200 uppercase text-sm tracking-wide">Date</th>
+                  <th className="bg-gray-50 text-gray-600 font-semibold py-3 px-2 text-left border-b-2 border-gray-200 uppercase text-sm tracking-wide">Time In</th>
+                  <th className="bg-gray-50 text-gray-600 font-semibold py-3 px-2 text-left border-b-2 border-gray-200 uppercase text-sm tracking-wide">Time Out</th>
+                  <th className="bg-gray-50 text-gray-600 font-semibold py-3 px-2 text-left border-b-2 border-gray-200 uppercase text-sm tracking-wide">OT</th>
+                  <th className="bg-gray-50 text-gray-600 font-semibold py-3 px-2 text-left border-b-2 border-gray-200 uppercase text-sm tracking-wide">Late Count</th>
+                  <th className="bg-gray-50 text-gray-600 font-semibold py-3 px-2 text-left border-b-2 border-gray-200 uppercase text-sm tracking-wide">Late Details</th>
+                  <th className="bg-gray-50 text-gray-600 font-semibold py-3 px-2 text-left border-b-2 border-gray-200 uppercase text-sm tracking-wide">Daily Rate</th>
+                  <th className="bg-gray-50 text-gray-600 font-semibold py-3 px-2 text-left border-b-2 border-gray-200 uppercase text-sm tracking-wide">Late Deduct</th>
+                  <th className="bg-gray-50 text-gray-600 font-semibold py-3 px-2 text-left border-b-2 border-gray-200 uppercase text-sm tracking-wide">Daily Salary</th>
                 </tr>
-              )}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {organizedAttendance.length ? (
+                  organizedAttendance.map((rec, i) => {
+                    const trClass = i % 2 === 0 ? "bg-gray-50" : "bg-white";
+
+                    const recDayOfWeek = rec.date ? new Date(rec.date).getDay() : -1;
+                    const isWeekend = recDayOfWeek === 0 || recDayOfWeek === 6;
+                    const isHolidayDate = holidayDetails.some(
+                      (h) => safeFormatYMD(h.date || h.holiday_date) === rec.date,
+                    );
+
+                    // Attendance In (1st attempt of attendance)
+                    let attendanceInDisplay = "N/A";
+                    const inTime = rec.attendanceIn || rec.morningIn;
+                    if (inTime) {
+                      attendanceInDisplay = inTime;
+                    } else if (isWeekend) {
+                      attendanceInDisplay = "- (Rest Day)";
+                    } else if (isHolidayDate) {
+                      attendanceInDisplay = "- (Holiday)";
+                    } else if (!isNotYetTime("morning", rec.date, "in")) {
+                      attendanceInDisplay = "Not time-in";
+                    }
+
+                    // Attendance Out (2nd / last attempt of attendance)
+                    let attendanceOutDisplay = "N/A";
+                    const outTime = rec.attendanceOut || rec.afternoonOut;
+                    if (outTime) {
+                      attendanceOutDisplay = outTime;
+                    } else if (isWeekend || isHolidayDate) {
+                      attendanceOutDisplay = "-";
+                    } else if (!isNotYetTime("afternoon", rec.date, "out")) {
+                      attendanceOutDisplay = "Not time-out";
+                    }
+
+                    // Compute per-row overtime (minutes) by comparing out times to scheduled end times.
+                    let otMinutes = 0;
+                    let earlyOtHoursForRow = 0;
+                    let afterOtHoursForRow = 0;
+                    try {
+                      const scheduledMorningStart =
+                        (settings && settings.morning_start) || "08:00";
+                      const scheduledMorningEnd =
+                        (settings && settings.morning_end) || "12:00";
+                      const scheduledAfternoonEnd =
+                        (settings && settings.afternoon_end) || "17:00";
+                      const schedMorningStartMin =
+                        parseTimeToMinutes(scheduledMorningStart) || 480;
+                      const schedEarlyInLimit =
+                        Math.min(schedMorningStartMin - 60, parseTimeToMinutes("07:00") || 420);
+                      const morningInMin = parseTimeToMinutes(
+                        rec.attendanceIn || rec.morningIn
+                      );
+                      const morningOutMin = parseTimeToMinutes(rec.morningOut);
+                      const afternoonOutMin = parseTimeToMinutes(
+                        rec.attendanceOut || rec.afternoonOut,
+                      );
+                      const schedMorningEndMin =
+                        parseTimeToMinutes(scheduledMorningEnd);
+                      const schedAfternoonEndMin = parseTimeToMinutes(
+                        scheduledAfternoonEnd,
+                      );
+
+                      // Early-in overtime (triggers at 7:00 AM and below)
+                      if (
+                        typeof morningInMin === "number" &&
+                        morningInMin <= schedEarlyInLimit &&
+                        morningInMin < schedMorningStartMin
+                      ) {
+                        const earlyMins = schedMorningStartMin - morningInMin;
+                        otMinutes += earlyMins;
+                        earlyOtHoursForRow = Math.round((earlyMins / 60) * 100) / 100;
+                      }
+
+                      if (
+                        typeof afternoonOutMin === "number" &&
+                        typeof schedAfternoonEndMin === "number" &&
+                        afternoonOutMin > schedAfternoonEndMin
+                      ) {
+                        const mins = afternoonOutMin - schedAfternoonEndMin;
+                        if (mins >= 60) {
+                          otMinutes += mins;
+                          afterOtHoursForRow = Math.round((mins / 60) * 100) / 100;
+                        }
+                      }
+                      // include morning overtime if present (rare)
+                      if (
+                        typeof morningOutMin === "number" &&
+                        typeof schedMorningEndMin === "number" &&
+                        morningOutMin > schedMorningEndMin
+                      ) {
+                        const mins = morningOutMin - schedMorningEndMin;
+                        if (mins >= 60) otMinutes += mins;
+                      }
+                    } catch (e) {
+                      otMinutes = 0;
+                    }
+
+                    const recOtHours = Math.round((otMinutes / 60) * 100) / 100;
+
+                    // Daily Salary and Late Deduction calculations
+                    const baseDailyRate = Number(payroll.dailyRate ?? person.daily_rate ?? 0);
+                    const hourlyRateForDaily = Math.round((baseDailyRate / 8) * 100) / 100;
+                    const hasMorningPunch = Boolean(
+                      (rec.morningIn && rec.morningIn !== "-" && rec.morningIn !== "N/A" && rec.morningIn !== "Not time-in") ||
+                      (rec.morningOut && rec.morningOut !== "-" && rec.morningOut !== "N/A")
+                    );
+                    const hasAfternoonPunch = Boolean(
+                      (rec.afternoonOut && rec.afternoonOut !== "-" && rec.afternoonOut !== "N/A" && rec.afternoonOut !== "Not time-out" && !String(rec.afternoonOut).includes("Missing")) ||
+                      (rec.afternoonIn && rec.afternoonIn !== "-" && rec.afternoonIn !== "N/A")
+                    );
+
+                    let dayFraction = 0;
+                    if (hasMorningPunch && hasAfternoonPunch) {
+                      dayFraction = 1.0;
+                    } else if (hasMorningPunch || hasAfternoonPunch) {
+                      dayFraction = 0.5;
+                    }
+                    const dayBaseSalary = Math.round(baseDailyRate * dayFraction * 100) / 100;
+                    const dayOtPay = Math.round(recOtHours * hourlyRateForDaily * 100) / 100;
+                    const dayLateItems = rec.lateDetails || [];
+                    const dayLateCalc = calculateTieredLateDeduction(
+                      dayLateItems,
+                      baseDailyRate,
+                      latePenalty,
+                      payroll.settings || {}
+                    );
+                    const dayLateDeduction = dayLateCalc.totalLateDeduction;
+                    const dayNetSalary = Math.max(
+                      0,
+                      Math.round((dayBaseSalary + dayOtPay - dayLateDeduction) * 100) / 100,
+                    );
+
+                    return (
+                      <tr key={i} className={trClass}>
+                        <td className="py-2.5 px-2 border-b border-gray-200 text-gray-800 font-mono text-sm font-semibold">{rec.date}</td>
+                        <td className={`py-2.5 px-2 border-b border-gray-200 ${rec.morningInStatus === 'late' ? 'text-red-500' : 'text-gray-800'}`}>
+                          {attendanceInDisplay}
+                          {earlyOtHoursForRow > 0 && (
+                            <span className="block text-[11px] text-[#237227] font-semibold mt-0.5">
+                              Early OT: {getHourMinute(earlyOtHoursForRow)}
+                            </span>
+                          )}
+                        </td>
+                        <td className="py-2.5 px-2 border-b border-gray-200 text-gray-800">
+                          {attendanceOutDisplay}
+                          {afterOtHoursForRow > 0 && (
+                            <span className="block text-[11px] text-blue-600 font-semibold mt-0.5">
+                              Afternoon OT: {getHourMinute(afterOtHoursForRow)}
+                            </span>
+                          )}
+                        </td>
+                        <td className="py-2.5 px-2 border-b border-gray-200 text-gray-800">
+                          {recOtHours > 0 ? `${getHourMinute(recOtHours)} (${recOtHours.toFixed(2)})` : "N/A"}
+                        </td>
+                        <td className="py-2.5 px-2 border-b border-gray-200 text-gray-800">{rec.lateCount || 0}</td>
+                        <td className="py-2.5 px-2 border-b border-gray-200 text-gray-800">
+                          {rec.lateDetails && rec.lateDetails.length ? (
+                            <ul className="m-0 pl-4">
+                              {rec.lateDetails.map((d, idx) => {
+                                const itemCalc = calculateTieredLateDeduction(
+                                  [d],
+                                  baseDailyRate,
+                                  latePenalty,
+                                  payroll.settings || {}
+                                );
+                                return (
+                                  <li key={idx} className="text-red-500 text-xs">
+                                    {d.session}: {d.time}{" "}
+                                    {d.minutesLate ? `(${d.minutesLate}m late)` : `(${d.status})`}{" "}
+                                    <span className="font-semibold text-red-600">[-₱{itemCalc.totalLateDeduction.toFixed(2)}]</span>
+                                  </li>
+                                );
+                              })}
+                            </ul>
+                          ) : (
+                            "N/A"
+                          )}
+                        </td>
+                        <td className="py-2.5 px-2 border-b border-gray-200 text-gray-800 whitespace-nowrap">
+                          ₱{dayBaseSalary.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                          {dayFraction === 0.5 && (
+                            <span className="text-xs text-amber-600 block">(0.5 day)</span>
+                          )}
+                          {dayFraction === 0 && isWeekend && (
+                            <span className="text-xs text-gray-400 block">(Rest Day)</span>
+                          )}
+                          {dayFraction === 0 && isHolidayDate && !isWeekend && (
+                            <span className="text-xs text-emerald-600 font-semibold block">(Holiday)</span>
+                          )}
+                          {dayFraction === 0 && !isWeekend && !isHolidayDate && (
+                            <span className="text-xs text-red-500 block">(0 day)</span>
+                          )}
+                        </td>
+                        <td className="py-2.5 px-2 border-b border-gray-200 whitespace-nowrap">
+                          {dayLateDeduction > 0 ? (
+                            <span className="text-red-500 font-medium">
+                              -₱{dayLateDeduction.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                            </span>
+                          ) : (
+                            <span className="text-gray-400">-</span>
+                          )}
+                        </td>
+                        <td className="py-2.5 px-2 border-b border-gray-200 font-semibold text-[#237227] whitespace-nowrap">
+                          ₱{dayNetSalary.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                          {dayOtPay > 0 && (
+                            <span className="text-xs text-blue-600 block font-normal">(+₱{dayOtPay.toFixed(2)} OT)</span>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })
+                ) : (
+                  <tr>
+                    <td
+                      colSpan="9"
+                      className="py-2.5 px-2 border-b border-gray-200 text-center text-gray-400"
+                    >
+                      No attendance records
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+              {organizedAttendance.length > 0 && (() => {
+                const baseDailyRate = Number(payroll.dailyRate ?? person.daily_rate ?? 0);
+                const hourlyRateForDaily = Math.round((baseDailyRate / 8) * 100) / 100;
+
+                const totals = organizedAttendance.reduce(
+                  (acc, rec) => {
+                    const hasM = Boolean(
+                      (rec.morningIn && rec.morningIn !== "-" && rec.morningIn !== "Not time-in") ||
+                      (rec.morningOut && rec.morningOut !== "-")
+                    );
+                    const hasA = Boolean(
+                      (rec.afternoonOut && rec.afternoonOut !== "-" && rec.afternoonOut !== "Not time-out" && !String(rec.afternoonOut).includes("Missing")) ||
+                      (rec.afternoonIn && rec.afternoonIn !== "-")
+                    );
+                    let frac = 0;
+                    if (hasM && hasA) frac = 1.0;
+                    else if (hasM || hasA) frac = 0.5;
+
+                    let otM = 0;
+                    try {
+                      const scheduledMorningStart = (settings && settings.morning_start) || "08:00";
+                      const scheduledMorningEnd = (settings && settings.morning_end) || "12:00";
+                      const scheduledAfternoonEnd = (settings && settings.afternoon_end) || "17:00";
+                      const schedMorningStartMin = parseTimeToMinutes(scheduledMorningStart) || 480;
+                      const schedEarlyInLimit = Math.min(schedMorningStartMin - 60, parseTimeToMinutes("07:00") || 420);
+                      const morningInMin = parseTimeToMinutes(rec.attendanceIn || rec.morningIn);
+                      const afternoonOutMin = parseTimeToMinutes(rec.attendanceOut || rec.afternoonOut);
+                      const schedAfternoonEndMin = parseTimeToMinutes(scheduledAfternoonEnd);
+
+                      // Early-in overtime (7:00 AM and below)
+                      if (
+                        typeof morningInMin === "number" &&
+                        morningInMin <= schedEarlyInLimit &&
+                        morningInMin < schedMorningStartMin
+                      ) {
+                        otM += schedMorningStartMin - morningInMin;
+                      }
+
+                      if (typeof afternoonOutMin === "number" && typeof schedAfternoonEndMin === "number" && afternoonOutMin > schedAfternoonEndMin) {
+                        const mins = afternoonOutMin - schedAfternoonEndMin;
+                        if (mins >= 60) otM += mins;
+                      }
+                      const morningOutMin = parseTimeToMinutes(rec.morningOut);
+                      const schedMorningEndMin = parseTimeToMinutes(scheduledMorningEnd);
+                      if (typeof morningOutMin === "number" && typeof schedMorningEndMin === "number" && morningOutMin > schedMorningEndMin) {
+                        const mins = morningOutMin - schedMorningEndMin;
+                        if (mins >= 60) otM += mins;
+                      }
+                    } catch (e) {}
+
+                    const otHrs = Math.round((otM / 60) * 100) / 100;
+                    const baseSalary = Math.round(baseDailyRate * frac * 100) / 100;
+                    const otPay = Math.round(otHrs * hourlyRateForDaily * 100) / 100;
+                    const lCalc = calculateTieredLateDeduction(
+                      rec.lateDetails || [],
+                      baseDailyRate,
+                      latePenalty,
+                      payroll.settings || {}
+                    );
+                    const lDed = lCalc.totalLateDeduction;
+                    const netSalary = Math.max(0, Math.round((baseSalary + otPay - lDed) * 100) / 100);
+
+                    return {
+                      baseRate: acc.baseRate + baseSalary,
+                      lateDeduct: acc.lateDeduct + lDed,
+                      netSalary: acc.netSalary + netSalary,
+                    };
+                  },
+                  { baseRate: 0, lateDeduct: 0, netSalary: 0 }
+                );
+
+                return (
+                  <tfoot>
+                    <tr className="bg-gray-100 font-semibold text-gray-800">
+                      <td colSpan="6" className="py-2.5 px-2 text-right border-t-2 border-gray-300">
+                        Total:
+                      </td>
+                      <td className="py-2.5 px-2 border-t-2 border-gray-300 whitespace-nowrap">
+                        ₱{totals.baseRate.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                      </td>
+                      <td className="py-2.5 px-2 border-t-2 border-gray-300 whitespace-nowrap text-red-500">
+                        {totals.lateDeduct > 0 ? `-₱${totals.lateDeduct.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : "N/A"}
+                      </td>
+                      <td className="py-2.5 px-2 border-t-2 border-gray-300 whitespace-nowrap text-[#237227] font-bold">
+                        ₱{totals.netSalary.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                      </td>
+                    </tr>
+                  </tfoot>
+                );
+              })()}
+            </table>
+          </div>
 
           <h3 className="text-[1.4rem] font-semibold text-gray-800 mt-8 mb-4 border-b-2 border-[#237227] pb-2">
             <Icon as={FiX} style={{ marginRight: 8 }} ariaLabel="Absent days" />
@@ -840,20 +1222,35 @@ export default function PayslipModal({
                 <th className="bg-gray-50 text-gray-600 font-semibold py-3 px-2 text-left border-b-2 border-gray-200 uppercase text-sm tracking-wide">Date</th>
                 <th className="bg-gray-50 text-gray-600 font-semibold py-3 px-2 text-left border-b-2 border-gray-200 uppercase text-sm tracking-wide">Session</th>
                 <th className="bg-gray-50 text-gray-600 font-semibold py-3 px-2 text-left border-b-2 border-gray-200 uppercase text-sm tracking-wide">Time</th>
-                <th className="bg-gray-50 text-gray-600 font-semibold py-3 px-2 text-left border-b-2 border-gray-200 uppercase text-sm tracking-wide">Status</th>
+                <th className="bg-gray-50 text-gray-600 font-semibold py-3 px-2 text-left border-b-2 border-gray-200 uppercase text-sm tracking-wide">Duration</th>
+                <th className="bg-gray-50 text-gray-600 font-semibold py-3 px-2 text-left border-b-2 border-gray-200 uppercase text-sm tracking-wide">Applied Tier</th>
+                <th className="bg-gray-50 text-gray-600 font-semibold py-3 px-2 text-right border-b-2 border-gray-200 uppercase text-sm tracking-wide">Deduction</th>
               </tr>
             </thead>
             <tbody>
               {allLateDetails.length ? (
                 allLateDetails.map((d, i) => {
                   const trClass = i % 2 === 0 ? "bg-gray-50" : "bg-white";
+                  const itemCalc = calculateTieredLateDeduction(
+                    [d],
+                    baseDailyRate,
+                    latePenalty,
+                    payroll.settings || {}
+                  );
+                  const breakdownItem = itemCalc.lateBreakdown?.[0] || {};
                   return (
                     <tr key={i} className={trClass}>
-                      <td className="py-2.5 px-2 border-b border-gray-200 text-gray-800">{d.date}</td>
+                      <td className="py-2.5 px-2 border-b border-gray-200 text-gray-800 font-mono text-sm font-semibold">{d.date}</td>
                       <td className="py-2.5 px-2 border-b border-gray-200 text-gray-800">{d.session}</td>
                       <td className="py-2.5 px-2 border-b border-gray-200 text-gray-800">{d.time}</td>
-                      <td className={`py-2.5 px-2 border-b border-gray-200 ${d.status === 'late' ? 'text-red-500' : 'text-gray-800'}`}>
-                        {d.status}
+                      <td className="py-2.5 px-2 border-b border-gray-200 text-red-600 font-semibold">
+                        {d.minutesLate ? `${d.minutesLate} mins late` : "Late"}
+                      </td>
+                      <td className="py-2.5 px-2 border-b border-gray-200 text-gray-700">
+                        {breakdownItem.tierLabel || "Standard Late"}
+                      </td>
+                      <td className="py-2.5 px-2 border-b border-gray-200 text-right font-bold text-red-600 whitespace-nowrap">
+                        -₱{itemCalc.totalLateDeduction.toFixed(2)}
                       </td>
                     </tr>
                   );
@@ -861,10 +1258,10 @@ export default function PayslipModal({
               ) : (
                 <tr>
                   <td
-                    colSpan="4"
-                    className="py-2.5 px-2 border-b border-gray-200 text-center text-gray-400"
+                    colSpan="6"
+                    className="py-3 px-2 border-b border-gray-200 text-center text-gray-400"
                   >
-                    No late records
+                    No late records for this period
                   </td>
                 </tr>
               )}
@@ -1049,7 +1446,7 @@ export default function PayslipModal({
                       <td className="py-2.5 px-2 border-b border-gray-200 text-gray-800">
                         {h.created_at
                           ? new Date(h.created_at).toLocaleString()
-                          : "-"}
+                          : "N/A"}
                       </td>
                       <td className="py-2.5 px-2 border-b border-gray-200 text-gray-800">₱{Number(h.amount).toFixed(2)}</td>
                     </tr>
@@ -1081,7 +1478,7 @@ export default function PayslipModal({
                         <span className="font-semibold">{h.item_name}</span>
                         {h.note && <span className="text-gray-500 text-xs ml-2">({h.note})</span>}
                         <div className="text-[0.75rem] text-gray-400">
-                          {h.expense_date || (h.created_at ? new Date(h.created_at).toLocaleDateString() : "-")}
+                          {h.expense_date || (h.created_at ? new Date(h.created_at).toLocaleDateString() : "N/A")}
                         </div>
                       </td>
                       <td className="py-2.5 px-2 border-b border-gray-200 text-gray-800">
@@ -1150,6 +1547,15 @@ export default function PayslipModal({
 
         {/* ✅ BUTTONS OUTSIDE PDF */}
         <div className="mt-6 flex justify-end gap-3">
+          {!released && onRelease && (
+            <button
+              onClick={onRelease}
+              className="py-2.5 px-6 rounded-lg text-[0.95rem] font-semibold border-none cursor-pointer inline-flex items-center justify-center bg-[#237227] text-white hover:bg-[#1b5e20] shadow-sm transition-colors"
+            >
+              <FiCheckCircle style={{ marginRight: 8, color: "#ffffff", fontSize: "1.1rem" }} />
+              Release Payslip
+            </button>
+          )}
           {showPrintButton && (
             <button
               onClick={handlePdf}

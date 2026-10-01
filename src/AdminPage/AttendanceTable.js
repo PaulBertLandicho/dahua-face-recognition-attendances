@@ -755,6 +755,7 @@ export default function AttendanceTable() {
             className="py-2 px-3 text-[0.85rem] rounded-md border border-[#dce3dd] bg-white text-[#2c382d] cursor-pointer min-w-[130px] outline-none focus:border-[#237227] focus:ring-0 transition-colors"
           >
             <option value="">All Status</option>
+            <option value="early-in">early-in</option>
             <option value="on-time">on-time</option>
             <option value="late">late</option>
             <option value="early-out">early-out</option>
@@ -913,29 +914,27 @@ export default function AttendanceTable() {
                         if (col.key === "status") value = getAttendanceStatus(row, settings);
                         if (col.key === "device_time" && row[col.key]) value = formatDateTime(row[col.key]);
                         if (col.key === "shift") {
-                          if (!settings) value = "-";
+                          if (!settings) value = "N/A";
                           else {
                             const time = new Date(row.device_time);
                             const hour = time.getHours();
                             const minute = time.getMinutes();
                             const totalMinutes = hour * 60 + minute;
-                            const morningStart = settings.morning_start ? settings.morning_start.split(":").map(Number) : [0, 0];
                             const morningEnd = settings.morning_end ? settings.morning_end.split(":").map(Number) : [0, 0];
                             const afternoonStart = settings.afternoon_start ? settings.afternoon_start.split(":").map(Number) : [0, 0];
                             const afternoonEnd = settings.afternoon_end ? settings.afternoon_end.split(":").map(Number) : [0, 0];
-                            const morningStartMin = morningStart[0] * 60 + morningStart[1];
                             const morningEndMin = morningEnd[0] * 60 + morningEnd[1];
                             const afternoonStartMin = afternoonStart[0] * 60 + afternoonStart[1];
                             const afternoonEndMin = afternoonEnd[0] * 60 + afternoonEnd[1];
                             
-                            if (totalMinutes >= morningStartMin && totalMinutes <= morningEndMin) value = "Morning Shift";
+                            if (totalMinutes <= morningEndMin) value = "Morning Shift";
                             else if (totalMinutes >= afternoonStartMin && totalMinutes <= afternoonEndMin) value = "Afternoon Shift";
-                            else value = "-";
+                            else value = "N/A";
                           }
                         }
                         if (col.key === "work_hours") {
                           if (!settings) {
-                            value = "-";
+                            value = "N/A";
                           } else {
                             let label = "";
                             let configTime = "";
@@ -954,9 +953,9 @@ export default function AttendanceTable() {
                                 }
                               }
                             } else {
-                              value = "-";
+                              value = "N/A";
                             }
-                            value = label && configTime ? `${label}: ${configTime}` : "-";
+                            value = label && configTime ? `${label}: ${configTime}` : "N/A";
                           }
                         }
 
@@ -966,6 +965,8 @@ export default function AttendanceTable() {
 
                           if (lowerVal === "on-time" || lowerVal === "on time") {
                             badgeClass = "bg-[#237227]/10 text-[#237227] border border-[#237227]/30";
+                          } else if (lowerVal === "early-in" || lowerVal === "early in") {
+                            badgeClass = "bg-teal-50 text-teal-700 border border-teal-200";
                           } else if (lowerVal === "late") {
                             badgeClass = "bg-red-50 text-red-600 border border-red-200";
                           } else if (lowerVal === "early-out" || lowerVal === "early out") {
@@ -979,12 +980,12 @@ export default function AttendanceTable() {
                               key={col.key} 
                               className="py-[13px] px-3.5 border-b border-[#edf2ee] align-middle"
                             >
-                              {value && value !== "-" ? (
+                              {value && value !== "-" && value !== "N/A" ? (
                                 <span className={`inline-flex items-center justify-center px-2.5 py-0.5 rounded-full text-xs font-semibold ${badgeClass}`}>
                                   {value}
                                 </span>
                               ) : (
-                                "-"
+                                "N/A"
                               )}
                             </td>
                           );
@@ -995,7 +996,7 @@ export default function AttendanceTable() {
                             key={col.key} 
                             className={`py-[13px] px-3.5 border-b border-[#edf2ee] align-middle text-[#2c382d] font-normal ${col.key === 'person_id' ? 'font-mono' : ''} ${col.key === 'point' ? 'max-w-[220px] break-words' : 'whitespace-normal'}`}
                           >
-                            {value || "-"}
+                            {value || "N/A"}
                           </td>
                         );
                       })}

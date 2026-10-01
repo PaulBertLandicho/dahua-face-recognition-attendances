@@ -3,7 +3,7 @@
 
 import React, { useEffect, useState } from "react";
 import Swal from "sweetalert2";
-import { FiCalendar, FiTrash2, FiX } from "react-icons/fi";
+import { FiCalendar, FiTrash2, FiX, FiEdit2 } from "react-icons/fi";
 import { supabase } from "../mysqlClient";
 
 // Global HolidayManager for all departments
@@ -37,7 +37,7 @@ export default function HolidayManagerGlobal({
       // Fetch only global holidays (department is null) for this month
       const { data, error } = await supabase
         .from("holidays")
-        .select("date, type, id")
+        .select("date, type, id, description")
         .is("department", null)
         .eq("month", parseInt(monthNum))
         .eq("year", parseInt(year));
@@ -67,9 +67,10 @@ export default function HolidayManagerGlobal({
 
   // Delete a saved holiday from DB
   const handleDeleteSavedHoliday = async (holiday) => {
+    const holidayName = holiday.description ? ` (${holiday.description})` : "";
     const confirm = await Swal.fire({
       title: "Delete Holiday?",
-      html: `<p style="color:#6b7280;font-size:0.92rem;margin:0">Are you sure you want to delete the holiday on <strong style="color:#111827">${holiday.date}</strong> (${holiday.type})?</p>`,
+      html: `<p style="color:#6b7280;font-size:0.92rem;margin:0">Are you sure you want to delete the holiday on <strong style="color:#111827">${holiday.date}</strong>${holidayName} [${holiday.type === "regular" ? "Regular Holiday" : "Special Holiday"}]?</p>`,
       icon: "warning",
       showCancelButton: true,
       confirmButtonText: "Delete",
@@ -88,12 +89,16 @@ export default function HolidayManagerGlobal({
     });
     if (!confirm.isConfirmed) return;
 
-    const { error } = await supabase
-      .from("holidays")
-      .delete()
-      .is("department", null)
-      .eq("date", holiday.date)
-      .eq("type", holiday.type);
+    let query = supabase.from("holidays").delete();
+    if (holiday.id) {
+      query = query.eq("id", holiday.id);
+    } else {
+      query = query
+        .is("department", null)
+        .eq("date", holiday.date)
+        .eq("type", holiday.type);
+    }
+    const { error } = await query;
     if (error) {
       showToast(error.message || "Delete failed", "error");
     } else {
@@ -102,19 +107,73 @@ export default function HolidayManagerGlobal({
     setSaving((s) => !s); // trigger refresh
   };
 
-  const addHoliday = (type) => {
-    if (type === "regular") setRegularHolidays([...regularHolidays, ""]);
-    else setSpecialHolidays([...specialHolidays, ""]);
+  // Edit Note / Remarks of a saved holiday
+  const handleEditSavedHoliday = async (holiday) => {
+    const { value: newDesc, isConfirmed } = await Swal.fire({
+      title: "Edit Note / Remarks",
+      input: "text",
+      inputLabel: `Holiday: ${holiday.date} (${holiday.type === "regular" ? "Regular Holiday" : "Special Holiday"})`,
+      inputValue: holiday.description || "",
+      inputPlaceholder: "e.g. Christmas Day, Bonifacio Day, etc.",
+      showCancelButton: true,
+      confirmButtonText: "Save",
+      cancelButtonText: "Cancel",
+      customClass: {
+        popup: "!rounded-3xl !shadow-[0_24px_60px_rgba(0,0,0,0.12)] !px-8 !py-8 !max-w-[420px]",
+        title: "!text-gray-800 !text-[1.3rem] !font-bold !mt-2 !mb-1",
+        input: "!rounded-lg !border !border-gray-300 !text-sm !py-2 !px-3",
+        actions: "!flex !items-center !justify-center !gap-3 !mt-4 !w-full",
+        confirmButton:
+          "!bg-[#237227] !text-white !font-semibold !rounded-lg !px-6 !py-2.5 !text-sm !shadow-none !border-none cursor-pointer !m-0 !min-w-[100px]",
+        cancelButton:
+          "!bg-white !border !border-gray-300 !text-gray-700 !font-semibold !rounded-lg !px-6 !py-2.5 !text-sm !shadow-none cursor-pointer !m-0 !min-w-[100px]",
+      },
+      buttonsStyling: false,
+    });
+    if (!isConfirmed) return;
+
+    let query = supabase
+      .from("holidays")
+      .update({ description: (newDesc || "").trim() || null });
+
+    if (holiday.id) {
+      query = query.eq("id", holiday.id);
+    } else {
+      query = query
+        .is("department", null)
+        .eq("date", holiday.date)
+        .eq("type", holiday.type);
+    }
+
+    const { error } = await query;
+    if (error) {
+      showToast(error.message || "Failed to update holiday note", "error");
+    } else {
+      showToast("Holiday note updated successfully!", "success");
+      setSaving((s) => !s);
+    }
   };
 
-  const updateHoliday = (type, idx, value) => {
+  const addHoliday = (type) => {
+    if (type === "regular") {
+      setRegularHolidays([...regularHolidays, { date: "", description: "" }]);
+    } else {
+      setSpecialHolidays([...specialHolidays, { date: "", description: "" }]);
+    }
+  };
+
+  const updateHoliday = (type, idx, field, value) => {
     if (type === "regular") {
       const updated = [...regularHolidays];
-      updated[idx] = value;
+      const cur = typeof updated[idx] === "object" ? { ...updated[idx] } : { date: updated[idx] || "", description: "" };
+      cur[field] = value;
+      updated[idx] = cur;
       setRegularHolidays(updated);
     } else {
       const updated = [...specialHolidays];
-      updated[idx] = value;
+      const cur = typeof updated[idx] === "object" ? { ...updated[idx] } : { date: updated[idx] || "", description: "" };
+      cur[field] = value;
+      updated[idx] = cur;
       setSpecialHolidays(updated);
     }
   };
@@ -135,23 +194,33 @@ export default function HolidayManagerGlobal({
     setSaving(true);
     const [year, monthNum] = month.split("-");
     const inserts = [];
-    for (const date of regularHolidays.filter(Boolean)) {
-      inserts.push({
-        department: null,
-        date,
-        type: "regular",
-        month: parseInt(monthNum),
-        year: parseInt(year),
-      });
+    for (const item of regularHolidays) {
+      const dateVal = typeof item === "string" ? item : item?.date;
+      const descVal = typeof item === "string" ? "" : item?.description;
+      if (dateVal && dateVal.trim()) {
+        inserts.push({
+          department: null,
+          date: dateVal.trim(),
+          description: (descVal || "").trim() || null,
+          type: "regular",
+          month: parseInt(monthNum),
+          year: parseInt(year),
+        });
+      }
     }
-    for (const date of specialHolidays.filter(Boolean)) {
-      inserts.push({
-        department: null,
-        date,
-        type: "special",
-        month: parseInt(monthNum),
-        year: parseInt(year),
-      });
+    for (const item of specialHolidays) {
+      const dateVal = typeof item === "string" ? item : item?.date;
+      const descVal = typeof item === "string" ? "" : item?.description;
+      if (dateVal && dateVal.trim()) {
+        inserts.push({
+          department: null,
+          date: dateVal.trim(),
+          description: (descVal || "").trim() || null,
+          type: "special",
+          month: parseInt(monthNum),
+          year: parseInt(year),
+        });
+      }
     }
     if (inserts.length) {
       const { error } = await supabase.from("holidays").insert(inserts);
@@ -221,20 +290,38 @@ export default function HolidayManagerGlobal({
             {allHolidays.map((h, idx) => (
               <div
                 key={h.id || idx}
-                className="bg-gray-100/80 rounded-lg py-2.5 px-4 flex items-center justify-between"
+                className="bg-gray-100/80 rounded-xl py-3 px-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3"
               >
-                <span className="font-semibold text-gray-800 text-sm">{h.date}</span>
-                <div className="flex items-center gap-3">
+                <div className="flex flex-wrap items-center gap-2.5 min-w-0">
+                  <span className="font-semibold text-gray-800 text-sm shrink-0">{h.date}</span>
+                  {h.description ? (
+                    <span className="text-xs px-2.5 py-1 rounded-md bg-emerald-50 text-[#237227] border border-emerald-200 font-medium truncate max-w-[280px]">
+                      {h.description}
+                    </span>
+                  ) : (
+                    <span className="text-xs text-gray-400 italic">No remarks</span>
+                  )}
+                </div>
+                <div className="flex items-center gap-2 self-end sm:self-auto shrink-0">
                   <span
-                    className={`text-sm font-semibold ${
-                      h.type === "regular" ? "text-[#237227]" : "text-[#f59e42]"
+                    className={`text-xs sm:text-sm font-semibold px-2.5 py-1 rounded-md ${
+                      h.type === "regular"
+                        ? "text-[#237227] bg-[#237227]/10"
+                        : "text-[#f59e42] bg-[#f59e42]/10"
                     }`}
                   >
                     {h.type === "regular" ? "Regular Holiday" : "Special Holiday"}
                   </span>
                   <button
+                    onClick={() => handleEditSavedHoliday(h)}
+                    className="p-1.5 rounded-lg bg-gray-200 hover:bg-gray-300 text-gray-700 cursor-pointer border-none flex items-center justify-center transition-colors"
+                    title="Edit note / remarks"
+                  >
+                    <FiEdit2 size={15} />
+                  </button>
+                  <button
                     onClick={() => handleDeleteSavedHoliday(h)}
-                    className="p-1.5 rounded-lg bg-[#e11d48] text-white hover:bg-[#e11d48] cursor-pointer border-none flex items-center justify-center"
+                    className="p-1.5 rounded-lg bg-[#e11d48] text-white hover:bg-[#be123c] cursor-pointer border-none flex items-center justify-center transition-colors"
                     title="Delete holiday"
                   >
                     <FiTrash2 size={15} />
@@ -256,23 +343,37 @@ export default function HolidayManagerGlobal({
                 Regular Holidays <span className="text-[#237227] font-bold">({regularRate}%)</span>
               </h3>
             </div>
-            {regularHolidays.map((date, idx) => (
-              <div key={idx} className="flex items-center gap-2 mb-3">
-                <input
-                  type="date"
-                  value={date}
-                  onChange={(e) => updateHoliday("regular", idx, e.target.value)}
-                  className="flex-1 py-2 px-3 text-sm rounded-lg border border-gray-300 bg-white text-gray-800 outline-none focus:outline-none focus:ring-0 focus:border-[#237227] cursor-pointer"
-                />
-                <button
-                  onClick={() => removeHoliday("regular", idx)}
-                  className="p-2 bg-rose-50 text-rose-600 border border-rose-200 rounded-lg hover:bg-rose-50 cursor-pointer flex items-center justify-center"
-                  title="Remove date"
-                >
-                  <FiX size={16} />
-                </button>
-              </div>
-            ))}
+            {regularHolidays.length === 0 && (
+              <p className="text-xs text-gray-400 italic mb-3">No regular holidays added yet. Click below to add.</p>
+            )}
+            {regularHolidays.map((item, idx) => {
+              const dateVal = typeof item === "string" ? item : (item?.date || "");
+              const descVal = typeof item === "string" ? "" : (item?.description || "");
+              return (
+                <div key={idx} className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 mb-3 bg-gray-50/80 p-2.5 sm:p-0 rounded-lg sm:bg-transparent">
+                  <input
+                    type="date"
+                    value={dateVal}
+                    onChange={(e) => updateHoliday("regular", idx, "date", e.target.value)}
+                    className="w-full sm:w-[145px] py-2 px-3 text-sm rounded-lg border border-gray-300 bg-white text-gray-800 outline-none focus:outline-none focus:ring-0 focus:border-[#237227] cursor-pointer shrink-0"
+                  />
+                  <input
+                    type="text"
+                    placeholder="Note / Remarks (e.g. Christmas Day)"
+                    value={descVal}
+                    onChange={(e) => updateHoliday("regular", idx, "description", e.target.value)}
+                    className="flex-1 min-w-0 py-2 px-3 text-sm rounded-lg border border-gray-300 bg-white text-gray-800 outline-none focus:outline-none focus:ring-0 focus:border-[#237227]"
+                  />
+                  <button
+                    onClick={() => removeHoliday("regular", idx)}
+                    className="p-2 bg-rose-50 text-rose-600 border border-rose-200 rounded-lg hover:bg-rose-100 cursor-pointer flex items-center justify-center shrink-0 self-end sm:self-auto"
+                    title="Remove holiday"
+                  >
+                    <FiX size={16} />
+                  </button>
+                </div>
+              );
+            })}
           </div>
           <button
             onClick={() => addHoliday("regular")}
@@ -290,23 +391,37 @@ export default function HolidayManagerGlobal({
                 Special Holidays <span className="text-[#f59e42] font-bold">({specialRate}%)</span>
               </h3>
             </div>
-            {specialHolidays.map((date, idx) => (
-              <div key={idx} className="flex items-center gap-2 mb-3">
-                <input
-                  type="date"
-                  value={date}
-                  onChange={(e) => updateHoliday("special", idx, e.target.value)}
-                  className="flex-1 py-2 px-3 text-sm rounded-lg border border-gray-300 bg-white text-gray-800 outline-none focus:outline-none focus:ring-0 focus:border-[#237227] cursor-pointer"
-                />
-                <button
-                  onClick={() => removeHoliday("special", idx)}
-                  className="p-2 bg-rose-50 text-rose-600 border border-rose-200 rounded-lg hover:bg-rose-50 cursor-pointer flex items-center justify-center"
-                  title="Remove date"
-                >
-                  <FiX size={16} />
-                </button>
-              </div>
-            ))}
+            {specialHolidays.length === 0 && (
+              <p className="text-xs text-gray-400 italic mb-3">No special holidays added yet. Click below to add.</p>
+            )}
+            {specialHolidays.map((item, idx) => {
+              const dateVal = typeof item === "string" ? item : (item?.date || "");
+              const descVal = typeof item === "string" ? "" : (item?.description || "");
+              return (
+                <div key={idx} className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 mb-3 bg-gray-50/80 p-2.5 sm:p-0 rounded-lg sm:bg-transparent">
+                  <input
+                    type="date"
+                    value={dateVal}
+                    onChange={(e) => updateHoliday("special", idx, "date", e.target.value)}
+                    className="w-full sm:w-[145px] py-2 px-3 text-sm rounded-lg border border-gray-300 bg-white text-gray-800 outline-none focus:outline-none focus:ring-0 focus:border-[#237227] cursor-pointer shrink-0"
+                  />
+                  <input
+                    type="text"
+                    placeholder="Note / Remarks (e.g. Ninoy Aquino Day)"
+                    value={descVal}
+                    onChange={(e) => updateHoliday("special", idx, "description", e.target.value)}
+                    className="flex-1 min-w-0 py-2 px-3 text-sm rounded-lg border border-gray-300 bg-white text-gray-800 outline-none focus:outline-none focus:ring-0 focus:border-[#237227]"
+                  />
+                  <button
+                    onClick={() => removeHoliday("special", idx)}
+                    className="p-2 bg-rose-50 text-rose-600 border border-rose-200 rounded-lg hover:bg-rose-100 cursor-pointer flex items-center justify-center shrink-0 self-end sm:self-auto"
+                    title="Remove holiday"
+                  >
+                    <FiX size={16} />
+                  </button>
+                </div>
+              );
+            })}
           </div>
           <button
             onClick={() => addHoliday("special")}

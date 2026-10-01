@@ -1,7 +1,18 @@
 import React, { useEffect, useState, useRef, useMemo, Fragment } from "react";
+import { useNavigate } from "react-router-dom";
 import { supabase } from "../mysqlClient";
 import Swal from "sweetalert2";
-import { FiTrendingUp, FiUsers, FiClock, FiDownload, FiChevronLeft, FiChevronRight, FiCalendar } from "react-icons/fi";
+import {
+  FiUsers,
+  FiClock,
+  FiDownload,
+  FiChevronLeft,
+  FiChevronRight,
+  FiCalendar,
+  FiCheckCircle,
+  FiArrowRight,
+  FiSearch,
+} from "react-icons/fi";
 import { determineAttendanceStatus, getAttendanceStatus } from "./attendanceUtils";
 import * as XLSX from "xlsx";
 
@@ -51,82 +62,6 @@ function buildLastNWeeks(n = 12) {
   return res;
 }
 
-function parsePeriodEnd(period) {
-  if (!period) return null;
-  const s = String(period).trim();
-  let matches = Array.from(s.matchAll(/(\d{4}[-/]\d{2}[-/]\d{2})/g)).map((m) => m[1]);
-  if (matches.length) return new Date(matches[matches.length - 1].replace(/\//g, "-"));
-
-  matches = Array.from(s.matchAll(/(\d{2}[-/.]\d{2}[-/.]\d{4})/g)).map((m) => m[1]);
-  if (matches.length) {
-    const parts = matches[matches.length - 1].split(/[-/.]/);
-    return new Date(Number(parts[2]), Number(parts[1]) - 1, Number(parts[0]));
-  }
-
-  if (s.includes("-")) {
-    const parts = s.split(/[-–—]/).map((p) => p.trim()).filter(Boolean);
-    if (parts.length >= 2) {
-      const last = parts[parts.length - 1];
-      const parsed = parsePeriodEnd(last);
-      if (parsed) return parsed;
-    }
-  }
-
-  if (/\bto\b/i.test(s)) {
-    const parts = s.split(/to/i).map((p) => p.trim()).filter(Boolean);
-    if (parts.length >= 2) {
-      const parsed = parsePeriodEnd(parts[parts.length - 1]);
-      if (parsed) return parsed;
-    }
-  }
-
-  const my = s.match(/(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+\d{4}/i);
-  if (my) {
-    const dt = new Date('1 ' + my[0]);
-    if (!Number.isNaN(dt.getTime())) {
-      return new Date(dt.getFullYear(), dt.getMonth() + 1, 0);
-    }
-  }
-
-  const fallback = new Date(s);
-  if (!Number.isNaN(fallback.getTime())) return fallback;
-  return null;
-}
-
-function isPeriodEnded(period) {
-  const end = parsePeriodEnd(period);
-  if (!end) return false;
-  const today = new Date();
-  const endOfDay = new Date(end.getFullYear(), end.getMonth(), end.getDate(), 23, 59, 59, 999);
-  return endOfDay <= today;
-}
-
-function isPeriodEndedNow(period, settings) {
-  const end = parsePeriodEnd(period);
-  if (!end) return false;
-  const now = new Date();
-  if (
-    end.getFullYear() === now.getFullYear() &&
-    end.getMonth() === now.getMonth() &&
-    end.getDate() === now.getDate()
-  ) {
-    try {
-      const hhmm = (settings && settings.afternoon_end) || null;
-      if (hhmm) {
-        const parts = String(hhmm).split(":").map(Number);
-        const h = Number.isFinite(parts[0]) ? parts[0] : 17;
-        const m = Number.isFinite(parts[1]) ? parts[1] : 0;
-        const endOfPeriod = new Date(end.getFullYear(), end.getMonth(), end.getDate(), h, m, 0, 0);
-        return now >= endOfPeriod;
-      }
-    } catch (e) {}
-    const endOfDay = new Date(end.getFullYear(), end.getMonth(), end.getDate(), 23, 59, 59, 999);
-    return now >= endOfDay;
-  }
-  const endOfDay = new Date(end.getFullYear(), end.getMonth(), end.getDate(), 23, 59, 59, 999);
-  return endOfDay <= now;
-}
-
 function formatPeriod(period) {
   if (!period) return "";
   try {
@@ -152,7 +87,26 @@ function formatPeriod(period) {
   return String(period);
 }
 
+function formatReleasedAt(isoString) {
+  if (!isoString) return "";
+  try {
+    const d = new Date(isoString);
+    if (!isNaN(d.getTime())) {
+      return d.toLocaleDateString("en-US", {
+        month: "short",
+        day: "numeric",
+        year: "numeric",
+        hour: "numeric",
+        minute: "2-digit",
+        hour12: true,
+      });
+    }
+  } catch (e) {}
+  return String(isoString);
+}
+
 export default function Dashboard() {
+  const navigate = useNavigate();
   const [currentTime, setCurrentTime] = useState(new Date());
 
   useEffect(() => {
@@ -164,33 +118,14 @@ export default function Dashboard() {
   const [persons, setPersons] = useState([]);
   const [totalEmployees, setTotalEmployees] = useState(0);
   const [settings, setSettings] = useState(null);
-  const [payrolls, setPayrolls] = useState([]);
-  const [payrollSearch, setPayrollSearch] = useState("");
-  const [payrollSort] = useState("name-asc");
-  const [payrollShowAll, setPayrollShowAll] = useState(false);
+  const [releasedHistory, setReleasedHistory] = useState([]);
+  const [historySearch, setHistorySearch] = useState("");
   const [, setLoading] = useState(true);
   const [tooltip, setTooltip] = useState({ visible: false, x: 0, y: 0, title: "", items: [] });
   const presentCardRef = useRef(null);
   const absentCardRef = useRef(null);
   const tooltipHideTimerRef = useRef(null);
   const [photoModal, setPhotoModal] = useState({ visible: false, src: "", title: "" });
-  const showToast = (title, icon = "success") => {
-    Swal.fire({
-      toast: true,
-      position: "top-end",
-      icon,
-      title,
-      showConfirmButton: false,
-      timer: 2500,
-      timerProgressBar: true,
-      iconColor: icon === "success" ? "#237227" : undefined,
-      customClass: {
-        popup: "!rounded-2xl !shadow-[0_12px_30px_rgba(0,0,0,0.12)] !border !border-gray-200 !px-4 !py-3 !bg-white font-sans",
-        title: "!text-sm !font-semibold !text-gray-800 !m-0 !leading-tight",
-        timerProgressBar: "!bg-[#237227]",
-      },
-    });
-  };
 
   useEffect(() => {
     let mounted = true;
@@ -200,14 +135,17 @@ export default function Dashboard() {
         const cutoff = new Date();
         cutoff.setMonth(cutoff.getMonth() - 6);
 
-        const [attRes, personsRes, payrollRes, settingsRes] = await Promise.all([
+        const [attRes, personsRes, settingsRes, releasedRes] = await Promise.all([
           supabase
             .from("attendance")
             .select("device_time,person_id,name,department,event,status,method,point")
             .gte("device_time", cutoff.toISOString()),
           supabase.from("persons").select("id,name,department", { count: 'exact' }),
-          supabase.from("payroll_periods").select("id,person_id,period,released"),
           supabase.from("settings").select("*").eq("id", 1).maybeSingle(),
+          supabase
+            .from("payroll_released_history")
+            .select("*")
+            .order("released_at", { ascending: false }),
         ]);
 
         if (!mounted) return;
@@ -215,17 +153,7 @@ export default function Dashboard() {
         setPersons(personsRes.data || []);
         try { console.debug && console.debug("personsRes", personsRes); } catch (e) {}
         setTotalEmployees((personsRes && personsRes.data && personsRes.data.length) || 0);
-        setPayrolls(payrollRes.data || []);
-        try {
-          const debugPayrolls = (payrollRes.data || []).map((p) => ({
-            id: p.id,
-            period: p.period,
-            released: !!p.released,
-            parsedEnd: parsePeriodEnd(p.period),
-            ended: isPeriodEnded(p.period),
-          }));
-          console.debug('payrolls debug', debugPayrolls);
-        } catch (e) {}
+        setReleasedHistory(releasedRes.data || []);
         setSettings(settingsRes && settingsRes.data ? settingsRes.data : null);
       } catch (err) {
         console.error(err);
@@ -278,105 +206,20 @@ export default function Dashboard() {
   }, [attendance, viewMode]);
 
   const totalAttendance = attendance.length;
-  const pendingPayrolls = payrolls.filter((p) => !p.released).length;
-  const notReadyPayrolls = payrolls.filter((p) => !p.released && !isPeriodEndedNow(p.period, settings)).length;
-  const readyPayrolls = payrolls.filter((p) => !p.released && isPeriodEndedNow(p.period, settings)).length;
-
-  async function releasePayroll(id, isAdvanceRelease = false) {
-    try {
-      const { error } = await supabase.from("payroll_periods").update({ released: true }).eq("id", id);
-      if (error) throw error;
-
-      setPayrolls((prev) => prev.map((p) => (p.id === id ? { ...p, released: true } : p)));
-
-      try {
-        const payroll = (payrolls || []).find((p) => p.id === id) || null;
-        const personId = payroll ? payroll.person_id : null;
-        const person = personMap[personId] || null;
-        const personName = (person && person.name) || null;
-
-        let releasedBy = "admin";
-        try {
-          const sessionStr = localStorage.getItem("sb-session");
-          if (sessionStr) {
-            const sess = JSON.parse(sessionStr);
-            if (sess && sess.user && sess.user.email) releasedBy = sess.user.email;
-          }
-        } catch (e) {}
-
-        const actionType = isAdvanceRelease ? "Advance Release" : "Period Released";
-        
-        await supabase.from("payroll_activity_logs").insert([
-          {
-            payroll_period_id: id,
-            person_id: personId,
-            person_name: personName,
-            released_by: releasedBy,
-            action: actionType,
-            timestamp: new Date().toISOString(),
-          },
-        ]);
-        
-        // Update the auto-generated history row from the trigger to accurately reflect action and user
-        await supabase
-          .from("payroll_released_history")
-          .update({
-            action: actionType,
-            released_by: releasedBy
-          })
-          .eq("payroll_period_id", id);
-
-        try {
-          if (settings && settings.auto_create_next_period) {
-            const end = parsePeriodEnd(payroll && payroll.period);
-            const periodDays = Number(settings.payroll_period_days) || 15;
-            if (end && personId) {
-              const nextStart = new Date(end.getFullYear(), end.getMonth(), end.getDate());
-              nextStart.setDate(nextStart.getDate() + 1);
-              const nextEnd = new Date(nextStart);
-              nextEnd.setDate(nextStart.getDate() + periodDays - 1);
-              const y = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-              const newPeriod = `${y(nextStart)}_to_${y(nextEnd)}`;
-              const { data: newRows, error: insErr } = await supabase.from("payroll_periods").insert([{ person_id: personId, period: newPeriod, released: false }]).select();
-              if (!insErr && Array.isArray(newRows) && newRows.length) {
-                setPayrolls((prev) => [...prev, ...newRows]);
-              } else {
-                try {
-                  const { data: personFull } = await supabase.from('persons').select('daily_rate,late_penalty').eq('id', personId).maybeSingle();
-                  const dailyRate = Number(personFull && (personFull.daily_rate || personFull.daily_rate === 0) ? personFull.daily_rate : 0) || 0;
-                  const latePenalty = Number(personFull && (personFull.late_penalty || personFull.late_penalty === 0) ? personFull.late_penalty : 0) || 0;
-                  const insertObj = {
-                    person_id: personId,
-                    period: newPeriod,
-                    days_present: 0,
-                    daily_rate: dailyRate,
-                    late_penalty: latePenalty,
-                    late_count: 0,
-                    gross: 0,
-                    total_late_deduction: 0,
-                    total_deductions: 0,
-                    net: 0,
-                    released: false,
-                  };
-                  const { data: inserted, error: insertErr } = await supabase.from('payroll_periods').insert([insertObj]).select();
-                  if (!insertErr && Array.isArray(inserted) && inserted.length) setPayrolls((prev) => [...prev, ...inserted]);
-                } catch (e) {
-                  console.error('fallback insert next period failed', e);
-                }
-              }
-            }
-          }
-        } catch (e) { console.error('auto create next period failed', e); }
-      } catch (e) { console.error('logging payroll release failed', e); }
-
-      showToast(isAdvanceRelease ? "Payroll advance released successfully!" : "Payroll released successfully!");
-    } catch (err) {
-      console.error(err);
-      Swal.fire("Error", err.message || String(err), "error");
-    }
-  }
 
   const personMap = useMemo(() => Object.fromEntries((persons || []).map((p) => [p.id, p])), [persons]);
+
+  const filteredReleasedHistory = useMemo(() => {
+    const q = (historySearch || "").trim().toLowerCase();
+    if (!q) return releasedHistory;
+    return (releasedHistory || []).filter((item) => {
+      const name = String(item.person_name || personMap[item.person_id]?.name || "").toLowerCase();
+      const dept = String(item.department || personMap[item.person_id]?.department || "").toLowerCase();
+      const period = String(item.period || "").toLowerCase();
+      const by = String(item.released_by || "").toLowerCase();
+      return name.includes(q) || dept.includes(q) || period.includes(q) || by.includes(q);
+    });
+  }, [releasedHistory, historySearch, personMap]);
 
   const todayEntries = useMemo(() => {
     const now = new Date();
@@ -392,42 +235,6 @@ export default function Dashboard() {
       })
       .sort((x, y) => new Date(y.device_time) - new Date(x.device_time));
   }, [attendance, personMap]);
-
-  const filteredPayrolls = useMemo(() => {
-    const q = (payrollSearch || "").trim().toLowerCase();
-    let list = (payrolls || []).filter((p) => !p.released);
-    if (q) {
-      list = list.filter((p) => {
-        const person = personMap[p.person_id] || {};
-        const name = (person.name || "").toLowerCase();
-        const id = String(p.person_id || "").toLowerCase();
-        const period = String(p.period || "").toLowerCase();
-        return name.includes(q) || id.includes(q) || period.includes(q);
-      });
-    }
-    const sortFn = (a, b) => {
-      if (payrollSort === "name-asc" || payrollSort === "name-desc") {
-        const an = (personMap[a.person_id]?.name || "").toLowerCase();
-        const bn = (personMap[b.person_id]?.name || "").toLowerCase();
-        if (an < bn) return payrollSort === "name-asc" ? -1 : 1;
-        if (an > bn) return payrollSort === "name-asc" ? 1 : -1;
-        return 0;
-      }
-      if (payrollSort === "period-asc" || payrollSort === "period-desc") {
-        const pa = String(a.period || "");
-        const pb = String(b.period || "");
-        if (pa < pb) return payrollSort === "period-asc" ? -1 : 1;
-        if (pa > pb) return payrollSort === "period-asc" ? 1 : -1;
-        return 0;
-      }
-      return 0;
-    };
-    list.sort(sortFn);
-    if (!payrollShowAll) {
-      return list.filter((p) => isPeriodEndedNow(p.period, settings));
-    }
-    return list;
-  }, [payrolls, payrollSearch, payrollSort, personMap, payrollShowAll, settings]);
 
   const {
     morningPresentNames,
@@ -449,7 +256,6 @@ export default function Dashboard() {
       }
     };
 
-    const morningStartMin = settings ? parseHHMM(settings.morning_start, 0, 0) : 0;
     const morningEndMin = settings ? parseHHMM(settings.morning_end, 11, 59) : 11 * 60 + 59;
     const afternoonStartMin = settings ? parseHHMM(settings.afternoon_start, 12, 0) : 12 * 60;
     const afternoonEndMin = settings ? parseHHMM(settings.afternoon_end, 17, 0) : 17 * 60;
@@ -462,7 +268,7 @@ export default function Dashboard() {
         const d = new Date(a.device_time);
         if (d >= start && d <= end && a.person_id) {
           const minutes = d.getHours() * 60 + d.getMinutes();
-          if (minutes >= morningStartMin && minutes <= morningEndMin) morningPresentIds.add(a.person_id);
+          if (minutes <= morningEndMin) morningPresentIds.add(a.person_id);
           if (minutes >= afternoonStartMin && minutes <= afternoonEndMin) afternoonPresentIds.add(a.person_id);
         }
       } catch (e) {}
@@ -587,7 +393,7 @@ export default function Dashboard() {
   }, [photoModal.visible]);
 
   function getWorkHoursLabel(row) {
-    if (!settings) return "-";
+    if (!settings) return "N/A";
     try {
       let label = "";
       let configTime = "";
@@ -620,11 +426,11 @@ export default function Dashboard() {
           }
         }
       } else {
-        return "-";
+        return "N/A";
       }
-      return label && configTime ? `${label}: ${configTime}` : "-";
+      return label && configTime ? `${label}: ${configTime}` : "N/A";
     } catch (e) {
-      return "-";
+      return "N/A";
     }
   }
 
@@ -830,14 +636,18 @@ export default function Dashboard() {
           </div>
         </div>
 
-        {/* Pending Payrolls */}
-        <div className="bg-white rounded-xl p-[18px] shadow-[0_8px_24px_rgba(16,185,129,0.06)] border border-[#e6f4ef] flex items-center gap-3">
-          <div className="w-12 h-12 rounded-full flex-shrink-0 aspect-square flex items-center justify-center bg-[#237227] text-emerald-600">
-            <FiTrendingUp size={20}  color="#ffffff"/>
+        {/* Released Payrolls */}
+        <div
+          onClick={() => navigate("/admin/released-history")}
+          className="bg-white rounded-xl p-[18px] shadow-[0_8px_24px_rgba(16,185,129,0.06)] border border-[#e6f4ef] flex items-center gap-3 cursor-pointer hover:border-[#237227] transition-all"
+          title="Click to view full Released Payroll History"
+        >
+          <div className="w-12 h-12 rounded-full flex-shrink-0 aspect-square flex items-center justify-center bg-[#237227] text-white">
+            <FiCheckCircle size={20} color="#ffffff"/>
           </div>
           <div>
-            <div className="text-sm text-[#9E9E9E]">Pending Payrolls</div>
-            <div className="text-base font-bold text-[#9E9E9E]">{compactNumber(pendingPayrolls)}</div>
+            <div className="text-sm text-[#9E9E9E]">Released Payslips</div>
+            <div className="text-base font-bold text-[#237227]">{compactNumber(releasedHistory.length)}</div>
           </div>
         </div>
 
@@ -926,81 +736,92 @@ export default function Dashboard() {
           <LineChart data={chartData} />
         </div>
 
-        {/* Payroll Card */}
-        <div className="bg-white rounded-xl p-[18px]  border border-[#eef2f6]">
-          <div className="flex justify-between items-center mb-2">
-            <h5 className="m-0 text-[#9E9E9E]">Payrolls Pending Release</h5>
-            <div className="flex items-center gap-2">
-              <input
-                placeholder="Search name.."
-                value={payrollSearch}
-                onChange={(e) => setPayrollSearch(e.target.value)}
-                className="px-2.5 py-2 rounded-lg border border-[#237227] outline-none min-w-[110px] text-sm"
-                style={{ border: "1px solid #e6eef6", outline: "none", boxShadow: "none" }}
-              />
+        {/* Released Payroll History Feed Card */}
+        <div className="bg-white rounded-xl p-[18px] border border-[#eef2f6] flex flex-col justify-between">
+          <div>
+            <div className="flex justify-between items-center mb-3 flex-wrap gap-2">
+              <div>
+                <h5 className="m-0 text-base font-bold text-gray-800 flex items-center gap-2">
+                  <FiCheckCircle className="text-[#237227]" size={18} />
+                  Released Payroll History Feed
+                </h5>
+                <p className="m-0 text-xs text-gray-500 mt-0.5">
+                  Showing all {releasedHistory.length} released payslips
+                </p>
+              </div>
               <button
-                onClick={() => setPayrollShowAll((s) => !s)}
-                className="px-2.5 py-2 rounded-lg bg-[#237227] text-[#ffffff] cursor-pointer text-sm"
-                title="Toggle show all pending payrolls"
+                onClick={() => navigate("/admin/released-history")}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-[#237227]/10 text-[#237227] hover:bg-[#237227]/20 border-none cursor-pointer transition-colors"
+                title="Open full released payroll history table"
               >
-                {payrollShowAll ? 'All' : 'Today'}
+                <span>View Full History</span>
+                <FiArrowRight size={13} />
               </button>
-              {readyPayrolls > 0 && (
-                <div title={`${readyPayrolls} payroll(s) ready to release`} className="flex items-center gap-2">
-                  <div className="w-2.5 h-2.5 rounded-full bg-emerald-500" />
-                  <div className="text-xs text-gray-500">{readyPayrolls} ready</div>
-                </div>
-              )}
-              {notReadyPayrolls > 0 && (
-                <div title={`${notReadyPayrolls} payroll(s) pending but not yet ended`} className="flex items-center gap-2">
-                  <div className="w-2.5 h-2.5 rounded-full bg-amber-400" />
-                  <div className="text-xs text-gray-500">{notReadyPayrolls} not ready</div>
-                </div>
-              )}
+            </div>
+
+            {/* Search Input Filter */}
+            <div className="relative mb-3">
+              <input
+                type="text"
+                placeholder="Search by name, department, or period..."
+                value={historySearch}
+                onChange={(e) => setHistorySearch(e.target.value)}
+                className="w-full pl-8 pr-3 py-2 rounded-lg border border-gray-200 outline-none text-xs text-gray-800 focus:border-[#237227] box-border"
+              />
+              <FiSearch className="absolute left-2.5 top-2.5 text-gray-400" size={13} />
             </div>
           </div>
 
-          <div className="mt-2 grid gap-2 max-h-[300px] overflow-y-auto pr-2">
-            {(filteredPayrolls || []).map((p) => {
-              const ready = isPeriodEndedNow(p.period, settings);
-              const person = personMap[p.person_id] || null;
-              const name = (person && (person.name || person.id)) || p.person_id || 'Unknown';
-              return (
-                <div key={p.id} className="flex justify-between items-center p-2.5 rounded-lg bg-[#f8fafc] border border-[#eef2f6]">
-                  <div className="text-slate-900" title={name}>
-                    <div className="font-bold">{name}</div>
-                    <div className="text-[13px] text-slate-700">
-                      {formatPeriod(p.period)}
-                      {!ready && <span className="ml-2 text-gray-400 text-xs">(ready after work-hours)</span>}
+          {/* All Released Records Feed (Scrollable) */}
+          <div className="flex-1 max-h-[300px] overflow-y-auto pr-1.5 flex flex-col gap-2">
+            {filteredReleasedHistory.length === 0 ? (
+              <div className="py-12 text-center text-gray-400 text-xs">
+                {historySearch ? "No matching released payroll records found." : "No released payroll records yet."}
+              </div>
+            ) : (
+              filteredReleasedHistory.map((item) => {
+                const name = item.person_name || personMap[item.person_id]?.name || `Employee #${item.person_id}`;
+                const dept = item.department || personMap[item.person_id]?.department || "General";
+                const net = Number(item.net ?? 0);
+                const relDate = formatReleasedAt(item.released_at);
+
+                return (
+                  <div
+                    key={item.id}
+                    className="p-3 rounded-xl bg-gray-50/70 border border-gray-100 hover:border-emerald-200 hover:bg-emerald-50/30 transition-all flex items-center justify-between gap-3"
+                  >
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="font-bold text-sm text-gray-900 truncate">
+                          {name}
+                        </span>
+                        <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-gray-200/80 text-gray-700">
+                          {dept}
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-1.5 text-xs text-gray-500 mt-1 truncate">
+                        <FiCalendar size={12} className="text-[#237227] shrink-0" />
+                        <span className="truncate">{formatPeriod(item.period)}</span>
+                      </div>
+                      {relDate && (
+                        <div className="text-[11px] text-gray-400 mt-0.5">
+                          Released: {relDate} {item.released_by ? `• by ${item.released_by}` : ""}
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="text-right shrink-0">
+                      <div className="text-sm font-bold text-[#237227]">
+                        ₱{net.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                      </div>
+                      <span className="inline-flex items-center gap-1 px-2 py-0.5 mt-1 rounded-md text-[10px] font-bold uppercase tracking-wider bg-emerald-100 text-emerald-800">
+                        <FiCheckCircle size={10} />
+                        {item.action === "advance_release" ? "Advance" : "Released"}
+                      </span>
                     </div>
                   </div>
-                  <div className="flex gap-2">
-                    <button
-                      onClick={() => releasePayroll(p.id, false)}
-                      disabled={!ready}
-                      className={`px-3 py-1.5 rounded-lg border-none text-sm ${ready ? "bg-[#237227] text-white cursor-pointer" : "bg-[#e6eef6] text-gray-400 cursor-not-allowed"}`}
-                    >
-                      {ready ? 'Release' : 'Release (disabled)'}
-                    </button>
-                    {payrollShowAll && (
-                      <button
-                        onClick={async () => {
-                          const res = await Swal.fire({ title: 'Advance Release payroll?', text: `This will mark payroll for ${name} as released immediately (admin override). Continue?`, icon: 'warning', showCancelButton: true, confirmButtonText: 'Advance Release' });
-                          if (res && res.isConfirmed) {
-                            try { await releasePayroll(p.id, true); } catch (e) {}
-                          }
-                        }}
-                        className="px-2.5 py-1.5 rounded-lg bg-white text-gray-700 border border-[#e6eef6] cursor-pointer text-sm"
-                      >
-                        Advance Release
-                      </button>
-                    )}
-                  </div>
-                </div>
-              );
-            })}
-            {(filteredPayrolls || []).length === 0 && (
-              <div className="text-gray-500 text-sm">No pending payrolls ready for release</div>
+                );
+              })
             )}
           </div>
         </div>
@@ -1195,7 +1016,7 @@ export default function Dashboard() {
 
                       {/* Employee ID */}
                       <td className="py-3 px-3 text-[13px] text-slate-900 font-bold font-mono">
-                        {person && person.id ? person.id : (r.person_id || '-')}
+                        {person && person.id ? person.id : (r.person_id || 'N/A')}
                       </td>
 
                       {/* Employee Name */}
@@ -1205,7 +1026,7 @@ export default function Dashboard() {
 
                       {/* Department / Work Hours */}
                       <td className="py-3 px-3">
-                        <div className="text-slate-900 font-medium">{(person && person.department) || r.department || "-"}</div>
+                        <div className="text-slate-900 font-medium">{(person && person.department) || r.department || "N/A"}</div>
                         <div className="text-xs text-gray-400 mt-1">{getWorkHoursLabel(r)}</div>
                       </td>
 
@@ -1213,7 +1034,7 @@ export default function Dashboard() {
                       {/* Attendance Status */}
                       <td className="py-3 px-3">
                         <span className={`inline-flex items-center justify-center px-2.5 py-0.5 rounded-full text-xs font-semibold ${badgeStyle}`}>
-                          {status || "—"}
+                          {status || "N/A"}
                         </span>
                       </td>
 

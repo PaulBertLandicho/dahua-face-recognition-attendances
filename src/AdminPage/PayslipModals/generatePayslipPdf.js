@@ -343,7 +343,7 @@ export async function generatePayslipPdf(params) {
 }
 
 // Generate a single PDF containing payslips for many records (used by PayrollPage)
-export async function generateAllPayslipsPdf(list = []) {
+export async function generateAllPayslipsPdf(list = [], periodSlug = "") {
   if (!Array.isArray(list) || list.length === 0) return;
   const { jsPDF } = await import("jspdf");
   const doc = new jsPDF({ orientation: "portrait", unit: "mm", format: "a4" });
@@ -376,5 +376,8 @@ export async function generateAllPayslipsPdf(list = []) {
     }
   }
 
-  doc.save("payroll_summary_payslips.pdf");
+  const filename = periodSlug
+    ? `all_payslips_${String(periodSlug).replace(/[^\w-]/g, "_")}.pdf`
+    : "payroll_summary_payslips.pdf";
+  doc.save(filename);
 }

@@ -146,7 +146,7 @@ BEGIN
   SET NEW.attendance_work_date = IF(NEW.device_time IS NULL, NULL, DATE(NEW.device_time));
   SET NEW.attendance_slot = CASE
     WHEN LOWER(COALESCE(NEW.event, '')) = 'time-in'
-      AND TIME(NEW.device_time) BETWEEN configured_morning_start AND configured_morning_end
+      AND TIME(NEW.device_time) <= configured_morning_end
       THEN 'morning_time_in'
     WHEN LOWER(COALESCE(NEW.event, '')) = 'time-out'
       AND TIME(NEW.device_time) >= configured_afternoon_start
@@ -171,7 +171,7 @@ BEGIN
   SET NEW.attendance_work_date = IF(NEW.device_time IS NULL, NULL, DATE(NEW.device_time));
   SET NEW.attendance_slot = CASE
     WHEN LOWER(COALESCE(NEW.event, '')) = 'time-in'
-      AND TIME(NEW.device_time) BETWEEN configured_morning_start AND configured_morning_end
+      AND TIME(NEW.device_time) <= configured_morning_end
       THEN 'morning_time_in'
     WHEN LOWER(COALESCE(NEW.event, '')) = 'time-out'
       AND TIME(NEW.device_time) >= configured_afternoon_start
@@ -204,6 +204,7 @@ CREATE TABLE `holidays` (
   `department` VARCHAR(255) NULL,
   `date` DATE NOT NULL,
   `type` VARCHAR(50) NOT NULL,
+  `description` VARCHAR(255) NULL,
   `month` INT NOT NULL,
   `year` INT NOT NULL,
   `created_at` DATETIME NULL DEFAULT CURRENT_TIMESTAMP,

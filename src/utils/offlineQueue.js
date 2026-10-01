@@ -70,14 +70,13 @@ export async function enqueueAttendance(item) {
         } catch (e) { return null; }
       };
 
-      const morningStart = toMinutes(settings.morning_start);
       const morningEnd = toMinutes(settings.morning_end);
       const afternoonStart = toMinutes(settings.afternoon_start);
       const afternoonEnd = toMinutes(settings.afternoon_end);
 
       const itemMinutes = parseMinutesFromIso(item.device_time) || parseMinutesFromIso(new Date().toISOString());
 
-      const inMorningWindow = (m) => m !== null && morningStart !== null && morningEnd !== null && m >= morningStart && m <= morningEnd;
+      const inMorningWindow = (m) => m !== null && morningEnd !== null && m <= morningEnd;
       const inAfternoonWindow = (m) => m !== null && afternoonStart !== null && afternoonEnd !== null && m >= afternoonStart && m <= afternoonEnd;
       const inMorningTimeoutWindow = (m) => m !== null && morningEnd !== null && afternoonStart !== null && m > morningEnd && m < afternoonStart;
 
@@ -223,7 +222,7 @@ export async function enqueueAutoMorningOuts() {
           const dd = String(d.getDate()).padStart(2, "0");
           if (String(y) !== String(year) || m !== month || dd !== day) return false;
           const minutes = parseMinutesFromIso(q.device_time);
-          return minutes !== null && minutes >= morningStart && minutes <= morningEnd;
+          return minutes !== null && minutes <= morningEnd;
         });
 
         if (!hasMorningInQueued) {
@@ -371,13 +370,12 @@ export async function syncQueue(supabase) {
           // If settings present, perform windowed checks similar to client logic
           try {
             if (cachedSettings) {
-              const morningStart = toMinutes(cachedSettings.morning_start);
               const morningEnd = toMinutes(cachedSettings.morning_end);
               const afternoonStart = toMinutes(cachedSettings.afternoon_start);
               const afternoonEnd = toMinutes(cachedSettings.afternoon_end);
               const itemMinutes = parseMinutesFromIso(it.device_time) || parseMinutesFromIso(new Date().toISOString());
 
-              const inMorningWindow = (m) => m !== null && morningStart !== null && morningEnd !== null && m >= morningStart && m <= morningEnd;
+              const inMorningWindow = (m) => m !== null && morningEnd !== null && m <= morningEnd;
               const inAfternoonWindow = (m) => m !== null && afternoonStart !== null && afternoonEnd !== null && m >= afternoonStart && m <= afternoonEnd;
               const inMorningTimeoutWindow = (m) => m !== null && morningEnd !== null && afternoonStart !== null && m > morningEnd && m < afternoonStart;
 

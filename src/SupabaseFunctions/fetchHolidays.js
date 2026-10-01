@@ -12,7 +12,7 @@ import { supabase } from "../mysqlClient";
 export async function fetchHolidays(department, month, year) {
   const { data, error } = await supabase
     .from("holidays")
-    .select("date, type")
+    .select("date, type, description")
     .or(`department.eq.${department},department.is.null`)
     .eq("month", month)
     .eq("year", year);

@@ -186,6 +186,108 @@ async function recordDeviceSyncStatus({ type, success, error = null }) {
   }
 })();
 
+// Ensure description/note column exists in holidays table
+(async () => {
+  try {
+    const [cols] = await pool.query("SHOW COLUMNS FROM holidays");
+    const colNames = (cols || []).map((c) => c.Field);
+    if (!colNames.includes("description")) {
+      await pool.query("ALTER TABLE holidays ADD COLUMN description VARCHAR(255) NULL AFTER type");
+    }
+  } catch (e) {
+    console.warn("Holidays description column check warning:", e.message);
+  }
+})();
+
+// Ensure late tier deduction columns exist in settings table
+(async () => {
+  try {
+    const [cols] = await pool.query("SHOW COLUMNS FROM settings");
+    const colNames = (cols || []).map((c) => c.Field);
+    if (!colNames.includes("late_tier_minor_fee")) {
+      await pool.query("ALTER TABLE settings ADD COLUMN late_tier_minor_fee DECIMAL(10,2) NOT NULL DEFAULT 10.00");
+    }
+    if (!colNames.includes("late_tier_mid_fee")) {
+      await pool.query("ALTER TABLE settings ADD COLUMN late_tier_mid_fee DECIMAL(10,2) NOT NULL DEFAULT 25.00");
+    }
+    if (!colNames.includes("late_tier_major_mode")) {
+      await pool.query("ALTER TABLE settings ADD COLUMN late_tier_major_mode VARCHAR(50) NOT NULL DEFAULT 'employee_hourly'");
+    }
+    if (!colNames.includes("late_tier_major_fee")) {
+      await pool.query("ALTER TABLE settings ADD COLUMN late_tier_major_fee DECIMAL(10,2) NOT NULL DEFAULT 50.00");
+    }
+  } catch (e) {
+    console.warn("Settings late tier columns check warning:", e.message);
+  }
+})();
+
+// Ensure attendance slot triggers allow early-in scans before morning_start
+(async () => {
+  try {
+    await pool.query("DROP TRIGGER IF EXISTS attendance_before_insert_slot");
+    await pool.query(`
+      CREATE TRIGGER attendance_before_insert_slot
+      BEFORE INSERT ON attendance
+      FOR EACH ROW
+      BEGIN
+        DECLARE configured_morning_start TIME DEFAULT '08:00:00';
+        DECLARE configured_morning_end TIME DEFAULT '11:59:00';
+        DECLARE configured_afternoon_start TIME DEFAULT '13:00:00';
+
+        SELECT COALESCE(morning_start, '08:00:00'),
+               COALESCE(morning_end, '11:59:00'),
+               COALESCE(afternoon_start, '13:00:00')
+          INTO configured_morning_start, configured_morning_end, configured_afternoon_start
+          FROM settings ORDER BY id LIMIT 1;
+
+        SET NEW.attendance_work_date = IF(NEW.device_time IS NULL, NULL, DATE(NEW.device_time));
+
+        IF TIME(NEW.device_time) <= configured_morning_end THEN
+          SET NEW.event = 'time-in';
+          SET NEW.attendance_slot = 'morning_time_in';
+        ELSEIF TIME(NEW.device_time) >= configured_afternoon_start THEN
+          SET NEW.event = 'time-out';
+          SET NEW.attendance_slot = 'afternoon_time_out';
+        ELSE
+          SET NEW.attendance_slot = NULL;
+        END IF;
+      END
+    `);
+
+    await pool.query("DROP TRIGGER IF EXISTS attendance_before_update_slot");
+    await pool.query(`
+      CREATE TRIGGER attendance_before_update_slot
+      BEFORE UPDATE ON attendance
+      FOR EACH ROW
+      BEGIN
+        DECLARE configured_morning_start TIME DEFAULT '08:00:00';
+        DECLARE configured_morning_end TIME DEFAULT '11:59:00';
+        DECLARE configured_afternoon_start TIME DEFAULT '13:00:00';
+
+        SELECT COALESCE(morning_start, '08:00:00'),
+               COALESCE(morning_end, '11:59:00'),
+               COALESCE(afternoon_start, '13:00:00')
+          INTO configured_morning_start, configured_morning_end, configured_afternoon_start
+          FROM settings ORDER BY id LIMIT 1;
+
+        SET NEW.attendance_work_date = IF(NEW.device_time IS NULL, NULL, DATE(NEW.device_time));
+
+        IF TIME(NEW.device_time) <= configured_morning_end THEN
+          SET NEW.event = 'time-in';
+          SET NEW.attendance_slot = 'morning_time_in';
+        ELSEIF TIME(NEW.device_time) >= configured_afternoon_start THEN
+          SET NEW.event = 'time-out';
+          SET NEW.attendance_slot = 'afternoon_time_out';
+        ELSE
+          SET NEW.attendance_slot = NULL;
+        END IF;
+      END
+    `);
+  } catch (e) {
+    console.warn("Attendance trigger update warning:", e.message);
+  }
+})();
+
 process.on("uncaughtException", (err) => {
   console.error("Uncaught Exception:", err.message);
 });
@@ -508,6 +610,8 @@ function dedupeDahuaAttendanceByPersonDay(records, settings = null) {
   const morningStart = parseHHMMToMinutes(settings?.morning_start || "08:00", 8 * 60);
   const morningEnd = parseHHMMToMinutes(settings?.morning_end || "11:59", 11 * 60 + 59);
   const afternoonStart = parseHHMMToMinutes(settings?.afternoon_start || "13:00", 13 * 60);
+  const afternoonEnd = parseHHMMToMinutes(settings?.afternoon_end || "17:00", 17 * 60);
+  const morningGrace = Number(settings?.morning_grace_minutes) || 15;
 
   // Helper: extract HH:MM minutes from a local time string "YYYY-MM-DD HH:MM:SS"
   function minutesFromLocalTime(deviceTime) {
@@ -531,14 +635,29 @@ function dedupeDahuaAttendanceByPersonDay(records, settings = null) {
     const mins = minutesFromLocalTime(record.device_time);
     if (mins < 0) continue;
 
-    // Assign event by time window (matches the MySQL trigger logic)
+    // Assign event and status by time window (supports early-in before morningStart)
     let event;
-    if (mins >= morningStart && mins <= morningEnd) {
+    let status;
+    if (mins <= morningEnd) {
       event = "time-in";
+      if (mins < morningStart) {
+        status = "early-in";
+      } else if (mins <= morningStart + morningGrace) {
+        status = "on-time";
+      } else {
+        status = "late";
+      }
     } else if (mins >= afternoonStart) {
       event = "time-out";
+      if (mins < afternoonEnd) {
+        status = "early-out";
+      } else if (mins >= afternoonEnd + 60) {
+        status = "overtime";
+      } else {
+        status = "on-time";
+      }
     } else {
-      // Outside both windows — skip this record
+      // Outside both windows (e.g. lunch period)
       continue;
     }
 
@@ -549,6 +668,7 @@ function dedupeDahuaAttendanceByPersonDay(records, settings = null) {
       _dateStr: dateStr,
       _minutes: mins,
       event,
+      status,
     });
     byPersonDay.set(dateKey, bucket);
   }
@@ -1416,8 +1536,8 @@ app.post(["/api/attendance/import", "/attendance/import", "/api/dahua/import", "
         ).catch(() => {});
 
         const [result] = await pool.query(
-          "INSERT IGNORE INTO attendance (person_id, name, event, point, method, device_time) VALUES (?, ?, ?, ?, ?, ?)",
-          [record.person_id, record.name, record.event, record.point, record.method, formattedTime]
+          "INSERT IGNORE INTO attendance (person_id, name, event, point, method, device_time, status) VALUES (?, ?, ?, ?, ?, ?, ?)",
+          [record.person_id, record.name, record.event, record.point, record.method, formattedTime, record.status || null]
         );
         if (result.affectedRows > 0) {
           insertedCount += 1;
@@ -1492,8 +1612,8 @@ app.post("/api/dahua/sync-attendance", async (req, res) => {
           [record.person_id, record.event, `${dateDay}%`, formattedTime]
         ).catch(() => {});
         const [result] = await pool.query(
-          "INSERT IGNORE INTO attendance (person_id, name, event, point, method, device_time) VALUES (?, ?, ?, ?, ?, ?)",
-          [record.person_id, record.name, record.event, record.point, record.method, formattedTime]
+          "INSERT IGNORE INTO attendance (person_id, name, event, point, method, device_time, status) VALUES (?, ?, ?, ?, ?, ?, ?)",
+          [record.person_id, record.name, record.event, record.point, record.method, formattedTime, record.status || null]
         );
         if (result.affectedRows > 0) {
           insertedCount += 1;
@@ -2207,7 +2327,7 @@ if (AUTO_SYNC_ATTENDANCE_MINUTES > 0) {
           [pId, record.event, `${dateDay}%`, dTime]
         ).catch(() => {});
         await pool.query(
-          "INSERT IGNORE INTO attendance (person_id, name, event, point, method, device_time) VALUES (?, ?, ?, ?, ?, ?)",
+          "INSERT IGNORE INTO attendance (person_id, name, event, point, method, device_time, status) VALUES (?, ?, ?, ?, ?, ?, ?)",
           [
             pId,
             record.name,
@@ -2215,6 +2335,7 @@ if (AUTO_SYNC_ATTENDANCE_MINUTES > 0) {
             record.point,
             record.method,
             dTime,
+            record.status || null,
           ]
         );
       }
