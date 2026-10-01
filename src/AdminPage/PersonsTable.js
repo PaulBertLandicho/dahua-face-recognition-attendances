@@ -992,7 +992,7 @@ export default function PersonsTable() {
   };
 
   return (
-    <div className="mx-auto pt-0 pb-6 px-0 max-w-full bg-white min-h-screen text-gray-800 font-sans">
+    <div className="max-w-full min-h-screen px-0 pt-0 pb-6 mx-auto font-sans text-gray-800 bg-white">
       {error && (
         <div
           role="alert"
@@ -1015,12 +1015,12 @@ export default function PersonsTable() {
           <div>
             <label
               htmlFor="persons-search"
-              className="block mb-1 text-xs text-gray-600 font-semibold"
+              className="block mb-1 text-xs font-semibold text-gray-600"
             >
               Search
             </label>
             <div className="relative">
-              <FiSearch className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 text-sm" />
+              <FiSearch className="absolute text-sm text-gray-400 -translate-y-1/2 left-3 top-1/2" />
               <input
                 id="persons-search"
                 name="persons-search"
@@ -1035,7 +1035,7 @@ export default function PersonsTable() {
           <div>
             <label
               htmlFor="persons-department-filter"
-              className="block mb-1 text-xs text-gray-600 font-semibold"
+              className="block mb-1 text-xs font-semibold text-gray-600"
             >
               Department
             </label>
@@ -1088,7 +1088,7 @@ export default function PersonsTable() {
       {/* Card Grid */}
       <div className="grid grid-cols-[repeat(auto-fill,minmax(280px,1fr))] gap-5 items-stretch mb-6">
         {currentRecords.length === 0 ? (
-          <div className="col-span-full text-center py-16 px-5 text-gray-500 text-base bg-white rounded-2xl border border-gray-100 shadow-sm">
+          <div className="px-5 py-16 text-base text-center text-gray-500 bg-white border border-gray-100 shadow-sm col-span-full rounded-2xl">
             No persons found.
           </div>
         ) : (
@@ -1123,7 +1123,7 @@ export default function PersonsTable() {
                 className="bg-white rounded-xl border border-gray-200 p-5 flex flex-col justify-between shadow-[0_8px_20px_rgba(16,185,129,0.05)]"
               >
                 {/* Card Header */}
-                <div className="flex justify-between items-center mb-3">
+                <div className="flex items-center justify-between mb-3">
                   <div className="flex items-center justify-center w-[84px] h-[84px] mr-3 shrink-0">
                     {getPersonPhoto(p) ? (
                       <img
@@ -1162,26 +1162,26 @@ export default function PersonsTable() {
 
                 {/* Person Info */}
                 <div className="mb-4">
-                  <div className="font-bold text-base text-gray-800 mb-1 truncate">
+                  <div className="mb-1 text-base font-bold text-gray-800 truncate">
                     {p.name || "Unnamed"}
                   </div>
-                  <div className="inline-flex items-center justify-center w-5 h-5 rounded-full bg-gray-100 text-gray-600 text-xs font-bold mb-2">
+                  <div className="inline-flex items-center justify-center w-5 h-5 mb-2 text-xs font-bold text-gray-600 bg-gray-100 rounded-full">
                     {p.id}
                   </div>
                   {p.department && (
-                    <div className="flex items-center text-xs text-gray-600 mb-1 truncate">
+                    <div className="flex items-center mb-1 text-xs text-gray-600 truncate">
                       <FiBriefcase className="mr-1.5 text-cyan-600 text-sm shrink-0" />
                       <span className="truncate">{p.department}</span>
                     </div>
                   )}
                   {p.email && (
-                    <div className="flex items-center text-xs text-gray-600 mb-1 truncate">
+                    <div className="flex items-center mb-1 text-xs text-gray-600 truncate">
                       <FiMail className="mr-1.5 text-cyan-600 text-sm shrink-0" />
                       <span className="truncate">{p.email}</span>
                     </div>
                   )}
                   {p.phone_number && (
-                    <div className="flex items-center text-xs text-gray-600 mb-2 truncate">
+                    <div className="flex items-center mb-2 text-xs text-gray-600 truncate">
                       <FiPhone className="mr-1.5 text-cyan-600 text-sm shrink-0" />
                       <span className="truncate">{p.phone_number}</span>
                     </div>
@@ -1250,7 +1250,7 @@ export default function PersonsTable() {
             </h2>
             <form onSubmit={handleEditModalSave}>
               <div className="mb-4">
-                <label className="block text-xs font-semibold text-gray-700 mb-2">
+                <label className="block mb-2 text-xs font-semibold text-gray-700">
                   Enrolled Dahua Face Photo
                 </label>
                 <div className="flex items-center gap-3.5 flex-wrap">
@@ -1287,7 +1287,7 @@ export default function PersonsTable() {
                 </div>
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 items-start">
+              <div className="grid items-start grid-cols-1 gap-3 sm:grid-cols-2">
                 <div>
                   <label
                     htmlFor="edit-person-name"
@@ -1302,8 +1302,8 @@ export default function PersonsTable() {
                     onChange={(e) =>
                       setEditPerson({ ...editPerson, name: e.target.value })
                     }
-                    className="w-full p-2.5 text-sm rounded-xl border border-gray-200 bg-white text-gray-900 outline-none focus:border-[#237227] focus:ring-0 transition-colors"
-                  />
+                    disabled
+                    className="box-border w-full px-4 py-3 text-base text-gray-500 bg-gray-100 border border-gray-300 outline-none cursor-not-allowed rounded-2xl"                  />
                 </div>
                 <div>
                   <label
@@ -1444,10 +1444,10 @@ export default function PersonsTable() {
 
                 {/* Mandatory Contributions */}
                 <div className="col-span-1 sm:col-span-2">
-                  <label className="block text-xs font-semibold text-gray-700 mb-2">
+                  <label className="block mb-2 text-xs font-semibold text-gray-700">
                     Mandatory Contributions
                   </label>
-                  <div className="flex gap-3 items-center flex-wrap">
+                  <div className="flex flex-wrap items-center gap-3">
                     <div className="min-w-[200px] flex-1">
                       <label
                         htmlFor="edit-person-sss"
@@ -1518,10 +1518,10 @@ export default function PersonsTable() {
 
                 {/* Add Cash Advance */}
                 <div className="col-span-1 sm:col-span-2">
-                  <label className="block text-xs font-semibold text-gray-700 mb-2">
+                  <label className="block mb-2 text-xs font-semibold text-gray-700">
                     Add Cash Advance
                   </label>
-                  <div className="flex gap-2 items-center flex-wrap">
+                  <div className="flex flex-wrap items-center gap-2">
                     <input
                       id="cash-advance-amount"
                       name="cash-advance-amount"
@@ -1545,7 +1545,7 @@ export default function PersonsTable() {
                       disabled={actionLoading}
                       className="inline-flex items-center justify-center gap-1.5 py-2.5 px-4 rounded-xl text-sm font-semibold border-none cursor-pointer transition-colors bg-[#237227] text-white shadow-sm focus:outline-none"
                     >
-                      <FiPlusCircle className="mr-1 text-white text-base" />
+                      <FiPlusCircle className="mr-1 text-base text-white" />
                       {actionLoading ? "Working..." : "Add"}
                     </button>
                   </div>
@@ -1557,20 +1557,20 @@ export default function PersonsTable() {
                     Cash Advance History
                   </label>
                   {loadingCashAdvances ? (
-                    <div className="text-gray-500 text-xs">Loading...</div>
+                    <div className="text-xs text-gray-500">Loading...</div>
                   ) : editCashAdvances && editCashAdvances.length ? (
-                    <div className="max-h-36 overflow-auto border border-gray-200 rounded-xl p-2 bg-gray-50/50">
+                    <div className="p-2 overflow-auto border border-gray-200 max-h-36 rounded-xl bg-gray-50/50">
                       {editCashAdvances.map((c) => (
                         <div
                           key={c.id}
                           className="flex justify-between items-center py-2 px-2.5 border-b border-gray-100 last:border-none"
                         >
-                          <div className="text-gray-700 text-xs">
+                          <div className="text-xs text-gray-700">
                             {new Date(c.created_at).toLocaleString()}
                           </div>
-                          <div className="text-right flex gap-3 items-center">
+                          <div className="flex items-center gap-3 text-right">
                             <div>
-                              <div className="font-bold text-gray-900 text-xs">{`₱${Number(c.amount || 0).toFixed(2)}`}</div>
+                              <div className="text-xs font-bold text-gray-900">{`₱${Number(c.amount || 0).toFixed(2)}`}</div>
                               {c.note ? (
                                 <div className="text-[11px] text-gray-400">
                                   {c.note}
@@ -1581,7 +1581,7 @@ export default function PersonsTable() {
                               <button
                                 type="button"
                                 onClick={() => deleteCashAdvance(c.id)}
-                                className="py-1 px-3 rounded-lg text-xs font-semibold border border-red-200 bg-white text-red-600 transition-colors cursor-pointer"
+                                className="px-3 py-1 text-xs font-semibold text-red-600 transition-colors bg-white border border-red-200 rounded-lg cursor-pointer"
                                 disabled={actionLoading}
                               >
                                 Delete
@@ -1592,7 +1592,7 @@ export default function PersonsTable() {
                       ))}
                     </div>
                   ) : (
-                    <div className="text-gray-400 text-xs">
+                    <div className="text-xs text-gray-400">
                       No cash advance history
                     </div>
                   )}
@@ -1628,7 +1628,7 @@ export default function PersonsTable() {
             <h2 className="text-2xl font-bold mb-4 text-[#0f3d16] text-center">
               Record Attendance
             </h2>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
               {/* Row 1: Person (Full Width) */}
               <div className="col-span-1 sm:col-span-2">
                 <label className="block text-xs font-semibold text-gray-700 mb-1.5">
@@ -1723,7 +1723,7 @@ export default function PersonsTable() {
               <button
                 onClick={() => closePhotoModal()}
                 aria-label="Close photo"
-                className="bg-transparent border-none text-gray-700 hover:text-gray-900 text-2xl cursor-pointer"
+                className="text-2xl text-gray-700 bg-transparent border-none cursor-pointer hover:text-gray-900"
               >
                 ×
               </button>
@@ -1735,7 +1735,7 @@ export default function PersonsTable() {
                 className="max-w-full max-h-[80vh] block mx-auto rounded-lg object-contain"
               />
               {photoModal.title && (
-                <div className="mt-2 text-gray-800 font-semibold text-sm">
+                <div className="mt-2 text-sm font-semibold text-gray-800">
                   {photoModal.title}
                 </div>
               )}

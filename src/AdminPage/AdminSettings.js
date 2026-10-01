@@ -254,7 +254,7 @@ export default function AdminSettings() {
       `}</style>
 
       {/* Header & Tabs */}
-      <div className="flex flex-col items-center justify-center text-center mb-10">
+      <div className="flex flex-col items-center justify-center mb-10 text-center">
         <h1 className="text-[2.6rem] font-bold text-gray-800 m-0 mb-6">Settings</h1>
 
         {/* Tab Switcher */}
@@ -291,17 +291,17 @@ export default function AdminSettings() {
       {activeTab === "work-hours" && (
         <div>
           {/* Three cards in a row */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+          <div className="grid grid-cols-1 gap-6 mb-8 md:grid-cols-3">
             {/* Morning Shift Card */}
-            <div className="card-box bg-gray-50 rounded-3xl p-6 sm:p-7 border border-gray-200 flex flex-col">
+            <div className="flex flex-col p-6 border border-gray-200 card-box bg-gray-50 rounded-3xl sm:p-7">
               <div className="flex items-center gap-3 mb-6">
                 <span className="text-[2rem] text-amber-500">
                   <FiSun size={28} aria-label="Morning shift" />
                 </span>
-                <h2 className="text-2xl font-semibold text-gray-800 m-0">Morning Shift</h2>
+                <h2 className="m-0 text-2xl font-semibold text-gray-800">Morning Shift</h2>
               </div>
               <div className="mb-5">
-                <label htmlFor="morning_start" className="block text-xs font-semibold text-gray-600 mb-2 uppercase tracking-wide">
+                <label htmlFor="morning_start" className="block mb-2 text-xs font-semibold tracking-wide text-gray-600 uppercase">
                   Start Time
                 </label>
                 <input
@@ -314,7 +314,7 @@ export default function AdminSettings() {
                 />
               </div>
               <div className="mb-5">
-                <label htmlFor="morning_end" className="block text-xs font-semibold text-gray-600 mb-2 uppercase tracking-wide">
+                <label htmlFor="morning_end" className="block mb-2 text-xs font-semibold tracking-wide text-gray-600 uppercase">
                   End Time
                 </label>
                 <input
@@ -324,11 +324,11 @@ export default function AdminSettings() {
                   value={settings.morning_end}
                   onChange={handleChange}
                   disabled
-                  className="w-full px-4 py-3 text-base rounded-2xl border border-gray-300 bg-gray-100 text-gray-500 outline-none box-border cursor-not-allowed"
+                  className="box-border w-full px-4 py-3 text-base text-gray-500 bg-gray-100 border border-gray-300 outline-none cursor-not-allowed rounded-2xl"
                 />
               </div>
               <div className="mb-5">
-                <label htmlFor="morning_grace_minutes" className="block text-xs font-semibold text-gray-600 mb-2 uppercase tracking-wide">
+                <label htmlFor="morning_grace_minutes" className="block mb-2 text-xs font-semibold tracking-wide text-gray-600 uppercase">
                   Grace Period
                 </label>
                 <div className="flex items-center gap-2">
@@ -342,7 +342,7 @@ export default function AdminSettings() {
                     step="1"
                     className="w-[100px] px-4 py-3 text-base rounded-2xl border border-gray-300 bg-white text-gray-800 outline-none focus:outline-none focus:ring-0 focus:border-[#237227]"
                   />
-                  <span className="text-gray-500 text-sm font-medium">min</span>
+                  <span className="text-sm font-medium text-gray-500">min</span>
                 </div>
                 <span className="block text-xs text-gray-500 mt-1.5">
                   Minutes after start considered on-time
@@ -351,15 +351,15 @@ export default function AdminSettings() {
             </div>
 
             {/* Afternoon Shift Card */}
-            <div className="card-box bg-gray-50 rounded-3xl p-6 sm:p-7 border border-gray-200 flex flex-col">
+            <div className="flex flex-col p-6 border border-gray-200 card-box bg-gray-50 rounded-3xl sm:p-7">
               <div className="flex items-center gap-3 mb-6">
                 <span className="text-[2rem] text-indigo-500">
                   <FiMoon size={28} aria-label="Afternoon shift" />
                 </span>
-                <h2 className="text-2xl font-semibold text-gray-800 m-0">Afternoon Shift</h2>
+                <h2 className="m-0 text-2xl font-semibold text-gray-800">Afternoon Shift</h2>
               </div>
               <div className="mb-5">
-                <label htmlFor="afternoon_start" className="block text-xs font-semibold text-gray-600 mb-2 uppercase tracking-wide">
+                <label htmlFor="afternoon_start" className="block mb-2 text-xs font-semibold tracking-wide text-gray-600 uppercase">
                   Start Time
                 </label>
                 <input
@@ -369,11 +369,11 @@ export default function AdminSettings() {
                   value={settings.afternoon_start}
                   onChange={handleChange}
                   disabled
-                  className="w-full px-4 py-3 text-base rounded-2xl border border-gray-300 bg-gray-100 text-gray-500 outline-none box-border cursor-not-allowed"
+                  className="box-border w-full px-4 py-3 text-base text-gray-500 bg-gray-100 border border-gray-300 outline-none cursor-not-allowed rounded-2xl"
                 />
               </div>
               <div className="mb-5">
-                <label htmlFor="afternoon_end" className="block text-xs font-semibold text-gray-600 mb-2 uppercase tracking-wide">
+                <label htmlFor="afternoon_end" className="block mb-2 text-xs font-semibold tracking-wide text-gray-600 uppercase">
                   End Time
                 </label>
                 <input
@@ -386,7 +386,7 @@ export default function AdminSettings() {
                 />
               </div>
               <div className="mb-5">
-                <label htmlFor="afternoon_grace_minutes" className="block text-xs font-semibold text-gray-600 mb-2 uppercase tracking-wide">
+                <label htmlFor="afternoon_grace_minutes" className="block mb-2 text-xs font-semibold tracking-wide text-gray-600 uppercase">
                   Grace Period
                 </label>
                 <div className="flex items-center gap-2">
@@ -400,7 +400,7 @@ export default function AdminSettings() {
                     step="1"
                     className="w-[100px] px-4 py-3 text-base rounded-2xl border border-gray-300 bg-white text-gray-800 outline-none focus:outline-none focus:ring-0 focus:border-[#237227]"
                   />
-                  <span className="text-gray-500 text-sm font-medium">min</span>
+                  <span className="text-sm font-medium text-gray-500">min</span>
                 </div>
                 <span className="block text-xs text-gray-500 mt-1.5">
                   Minutes after start considered on-time
@@ -409,15 +409,15 @@ export default function AdminSettings() {
             </div>
 
             {/* Late Count Limit & Payroll Length Card */}
-            <div className="card-box bg-gray-50 rounded-3xl p-6 sm:p-7 border border-gray-200 flex flex-col">
+            <div className="flex flex-col p-6 border border-gray-200 card-box bg-gray-50 rounded-3xl sm:p-7">
               <div className="flex items-center gap-3 mb-6">
                 <span className="text-[2rem] text-amber-600">
                   <FiAlertTriangle size={24} aria-label="Warning" />
                 </span>
-                <h2 className="text-2xl font-semibold text-gray-800 m-0">Late Count Limit</h2>
+                <h2 className="m-0 text-2xl font-semibold text-gray-800">Late Count Limit</h2>
               </div>
               <div className="mb-5">
-                <label htmlFor="late_count_limit" className="block text-xs font-semibold text-gray-600 mb-2 uppercase tracking-wide">
+                <label htmlFor="late_count_limit" className="block mb-2 text-xs font-semibold tracking-wide text-gray-600 uppercase">
                   Limit
                 </label>
                 <div className="flex items-center gap-2">
@@ -431,19 +431,19 @@ export default function AdminSettings() {
                     step="1"
                     className="w-[100px] px-4 py-3 text-base rounded-2xl border border-gray-300 bg-white text-gray-800 outline-none focus:outline-none focus:ring-0 focus:border-[#237227]"
                   />
-                  <span className="text-gray-500 text-sm font-medium">occurrences</span>
+                  <span className="text-sm font-medium text-gray-500">occurrences</span>
                 </div>
                 <span className="block text-xs text-gray-500 mt-1.5">Late occurrences before deduction</span>
               </div>
 
-              <div className="flex items-center gap-3 mb-4 mt-2 pt-4 border-t border-gray-200">
+              <div className="flex items-center gap-3 pt-4 mt-2 mb-4 border-t border-gray-200">
                 <span className="text-[1.8rem] text-emerald-700">
                   <FiCalendar size={24} aria-label="Payroll calendar" />
                 </span>
-                <h2 className="text-xl font-semibold text-gray-800 m-0">Payroll Period Length</h2>
+                <h2 className="m-0 text-xl font-semibold text-gray-800">Payroll Period Length</h2>
               </div>
               <div className="mb-5">
-                <label htmlFor="payroll_period_days" className="block text-xs font-semibold text-gray-600 mb-2 uppercase tracking-wide">
+                <label htmlFor="payroll_period_days" className="block mb-2 text-xs font-semibold tracking-wide text-gray-600 uppercase">
                   Days per Payroll Period
                 </label>
                 <div className="flex items-center gap-2">
@@ -458,7 +458,7 @@ export default function AdminSettings() {
                     step="1"
                     className="w-[100px] px-4 py-3 text-base rounded-2xl border border-gray-300 bg-white text-gray-800 outline-none focus:outline-none focus:ring-0 focus:border-[#237227]"
                   />
-                  <span className="text-gray-500 text-sm font-medium">days</span>
+                  <span className="text-sm font-medium text-gray-500">days</span>
                 </div>
                 <span className="block text-xs text-gray-500 mt-1.5">
                   Number of days in each payroll period (default: 15)
@@ -468,27 +468,27 @@ export default function AdminSettings() {
           </div>
 
           {/* Late Deduction Tier Rules Card */}
-          <div className="bg-white rounded-3xl p-6 sm:p-7 border border-emerald-100 shadow-sm mb-8">
-            <div className="flex items-center justify-between pb-4 border-b border-gray-100 mb-6 flex-wrap gap-2">
+          <div className="p-6 mb-8 bg-white border shadow-sm rounded-3xl sm:p-7 border-emerald-100">
+            <div className="flex flex-wrap items-center justify-between gap-2 pb-4 mb-6 border-b border-gray-100">
               <div className="flex items-center gap-3">
                 <span className="p-2.5 bg-emerald-50 text-emerald-700 rounded-2xl">
                   <FiDollarSign size={24} aria-label="Late Tiers" />
                 </span>
                 <div>
-                  <h2 className="text-xl font-bold text-gray-800 m-0">Late Deduction Tier Rules</h2>
+                  <h2 className="m-0 text-xl font-bold text-gray-800">Late Deduction Tier Rules</h2>
                   <p className="text-xs text-gray-500 m-0 mt-0.5">
                     Configure late penalty deductions based on late duration (minutes vs. hours)
                   </p>
                 </div>
               </div>
-              <span className="text-xs font-semibold px-3 py-1 bg-emerald-100 text-emerald-800 rounded-full">
+              <span className="px-3 py-1 text-xs font-semibold rounded-full bg-emerald-100 text-emerald-800">
                 Active Tier Model
               </span>
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+            <div className="grid grid-cols-1 gap-6 md:grid-cols-3">
               {/* Tier 1: 1 - 15 Minutes */}
-              <div className="bg-gray-50 rounded-2xl p-5 border border-gray-200 flex flex-col justify-between">
+              <div className="flex flex-col justify-between p-5 border border-gray-200 bg-gray-50 rounded-2xl">
                 <div>
                   <div className="flex items-center justify-between mb-2">
                     <span className="text-xs font-bold uppercase tracking-wider text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded">
@@ -496,8 +496,8 @@ export default function AdminSettings() {
                     </span>
                     <span className="text-xs font-semibold text-gray-500">1 – 15 Mins</span>
                   </div>
-                  <h3 className="text-base font-semibold text-gray-800 mb-1">Minor Late Fee</h3>
-                  <p className="text-xs text-gray-500 mb-4">
+                  <h3 className="mb-1 text-base font-semibold text-gray-800">Minor Late Fee</h3>
+                  <p className="mb-4 text-xs text-gray-500">
                     Charged when late is between 1 and 15 minutes past start/grace.
                   </p>
                 </div>
@@ -506,7 +506,7 @@ export default function AdminSettings() {
                     Deduction (₱)
                   </label>
                   <div className="flex items-center gap-2">
-                    <span className="text-gray-500 font-semibold text-base">₱</span>
+                    <span className="text-base font-semibold text-gray-500">₱</span>
                     <input
                       type="number"
                       id="late_tier_minor_fee"
@@ -522,7 +522,7 @@ export default function AdminSettings() {
               </div>
 
               {/* Tier 2: 16 - 30 Minutes */}
-              <div className="bg-gray-50 rounded-2xl p-5 border border-gray-200 flex flex-col justify-between">
+              <div className="flex flex-col justify-between p-5 border border-gray-200 bg-gray-50 rounded-2xl">
                 <div>
                   <div className="flex items-center justify-between mb-2">
                     <span className="text-xs font-bold uppercase tracking-wider text-amber-700 bg-amber-50 px-2 py-0.5 rounded">
@@ -530,8 +530,8 @@ export default function AdminSettings() {
                     </span>
                     <span className="text-xs font-semibold text-gray-500">16 – 30 Mins</span>
                   </div>
-                  <h3 className="text-base font-semibold text-gray-800 mb-1">Moderate Late Fee</h3>
-                  <p className="text-xs text-gray-500 mb-4">
+                  <h3 className="mb-1 text-base font-semibold text-gray-800">Moderate Late Fee</h3>
+                  <p className="mb-4 text-xs text-gray-500">
                     Charged when late is between 16 and 30 minutes.
                   </p>
                 </div>
@@ -540,7 +540,7 @@ export default function AdminSettings() {
                     Deduction (₱)
                   </label>
                   <div className="flex items-center gap-2">
-                    <span className="text-gray-500 font-semibold text-base">₱</span>
+                    <span className="text-base font-semibold text-gray-500">₱</span>
                     <input
                       type="number"
                       id="late_tier_mid_fee"
@@ -556,7 +556,7 @@ export default function AdminSettings() {
               </div>
 
               {/* Tier 3: 31 - 60 Minutes (Almost 1 hr) & > 60 Mins */}
-              <div className="bg-gray-50 rounded-2xl p-5 border border-gray-200 flex flex-col justify-between">
+              <div className="flex flex-col justify-between p-5 border border-gray-200 bg-gray-50 rounded-2xl">
                 <div>
                   <div className="flex items-center justify-between mb-2">
                     <span className="text-xs font-bold uppercase tracking-wider text-rose-700 bg-rose-50 px-2 py-0.5 rounded">
@@ -564,8 +564,8 @@ export default function AdminSettings() {
                     </span>
                     <span className="text-xs font-semibold text-gray-500">31+ Mins (Almost 1 hr)</span>
                   </div>
-                  <h3 className="text-base font-semibold text-gray-800 mb-1">Major / Hourly Rate Basis</h3>
-                  <p className="text-xs text-gray-500 mb-3">
+                  <h3 className="mb-1 text-base font-semibold text-gray-800">Major / Hourly Rate Basis</h3>
+                  <p className="mb-3 text-xs text-gray-500">
                     Basis for almost 1 hour late (31–60 mins = 1 hr deduction, &gt;60 mins = pro-rated).
                   </p>
                 </div>
@@ -587,7 +587,7 @@ export default function AdminSettings() {
 
                   {settings.late_tier_major_mode === "custom_flat" && (
                     <div className="flex items-center gap-2 mt-2">
-                      <span className="text-gray-500 font-semibold text-sm">₱</span>
+                      <span className="text-sm font-semibold text-gray-500">₱</span>
                       <input
                         type="number"
                         id="late_tier_major_fee"
@@ -597,7 +597,7 @@ export default function AdminSettings() {
                         min="0"
                         step="1"
                         placeholder="Fixed Hourly Fee"
-                        className="w-full px-3 py-2 text-sm rounded-xl border border-gray-300 bg-white text-gray-800 outline-none"
+                        className="w-full px-3 py-2 text-sm text-gray-800 bg-white border border-gray-300 outline-none rounded-xl"
                       />
                     </div>
                   )}
@@ -607,7 +607,7 @@ export default function AdminSettings() {
           </div>
 
           {/* Action Buttons */}
-          <div className="flex justify-center gap-4 flex-wrap items-center mt-8">
+          <div className="flex flex-wrap items-center justify-center gap-4 mt-8">
             <button
               onClick={handleSave}
               disabled={saving}
