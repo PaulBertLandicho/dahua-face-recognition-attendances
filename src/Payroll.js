@@ -42,26 +42,49 @@ export function calculatePayroll(
     if (!otHourlyRate && dailyRate) otHourlyRate = dailyRate / 8;
 
     let otHours = 0;
-    // Calculate OT from attendance records with event='time-out' and status='overtime'
+    const morningStart = settings.morning_start || "08:00";
+    const [startHour, startMinute] = morningStart.split(":").map(Number);
+    const startTotal = (startHour || 8) * 60 + (startMinute || 0);
+    const earlyOtLimit = Math.min(startTotal - 60, 7 * 60);
+
     const afternoonEnd = settings.afternoon_end || "17:00";
     const [endHour, endMinute] = afternoonEnd.split(":").map(Number);
-    const endTotal = endHour * 60 + endMinute;
+    const endTotal = (endHour || 17) * 60 + (endMinute || 0);
+
+    // 1. Early-in OT: 3:00 AM up to 7:00 AM
+    attendance
+      .filter((a) => a.person_id === person.id && a.event === "time-in")
+      .forEach((a) => {
+        const dt = new Date(a.device_time);
+        const inTotal = dt.getHours() * 60 + dt.getMinutes();
+        if (inTotal >= 3 * 60 && inTotal <= earlyOtLimit && inTotal < startTotal) {
+          otHours += (startTotal - inTotal) / 60;
+        }
+      });
+
+    // 2. Afternoon Out OT (past afternoonEnd, including past midnight < 3:00 AM)
     attendance
       .filter(
         (a) =>
           a.person_id === person.id &&
-          a.event === "time-out" &&
-          a.status === "overtime"
+          a.event === "time-out"
       )
       .forEach((a) => {
         const dt = new Date(a.device_time);
-        const outTotal = dt.getHours() * 60 + dt.getMinutes();
+        let outTotal = dt.getHours() * 60 + dt.getMinutes();
+        if (outTotal < 3 * 60) {
+          outTotal += 24 * 60;
+        }
         if (outTotal > endTotal) {
-          otHours += (outTotal - endTotal) / 60;
+          const otMins = outTotal - endTotal;
+          if (otMins >= 60) {
+            otHours += otMins / 60;
+          }
         }
       });
 
-    const otPay = otHourlyRate * otHours;
+    otHours = Math.round(otHours * 100) / 100;
+    const otPay = Math.round(otHourlyRate * otHours * 100) / 100;
 
     // --- End OT Calculation ---
 

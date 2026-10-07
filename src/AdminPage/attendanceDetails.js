@@ -8,10 +8,25 @@ export function getDetailedAttendance(attendance, personId, settings = {}) {
     .forEach((r) => {
       const dt = new Date(r.device_time);
       if (isNaN(dt.getTime())) return;
-      const y = dt.getFullYear();
-      const m = String(dt.getMonth() + 1).padStart(2, "0");
-      const d = String(dt.getDate()).padStart(2, "0");
-      const dateStr = `${y}-${m}-${d}`;
+      let dateStr;
+      if (r.attendance_work_date) {
+        dateStr = String(r.attendance_work_date).slice(0, 10);
+      } else {
+        // Fallback: scans before 3:00 AM belong to previous shift day
+        if (dt.getHours() < 3) {
+          const prev = new Date(dt);
+          prev.setDate(prev.getDate() - 1);
+          const y = prev.getFullYear();
+          const m = String(prev.getMonth() + 1).padStart(2, "0");
+          const d = String(prev.getDate()).padStart(2, "0");
+          dateStr = `${y}-${m}-${d}`;
+        } else {
+          const y = dt.getFullYear();
+          const m = String(dt.getMonth() + 1).padStart(2, "0");
+          const d = String(dt.getDate()).padStart(2, "0");
+          dateStr = `${y}-${m}-${d}`;
+        }
+      }
       if (!byDate[dateStr]) byDate[dateStr] = [];
       byDate[dateStr].push({ ...r, dt });
     });
@@ -29,7 +44,7 @@ export function getDetailedAttendance(attendance, personId, settings = {}) {
     const mins = dt.getHours() * 60 + dt.getMinutes();
     const [h, m] = morningStart.split(":").map(Number);
     const startMins = h * 60 + m;
-    return mins < startMins;
+    return mins >= 3 * 60 && mins < startMins;
   }
 
   function isLate(dt, session) {
@@ -70,15 +85,18 @@ export function getDetailedAttendance(attendance, personId, settings = {}) {
     let morningInStatus = null;
     let lateCount = 0;
     let lateDetails = [];
-    // Separate morning (< 12:00) and afternoon (>= 12:00) punches
+    // Separate morning and afternoon punches (scans < 3:00 AM are overnight afternoon time-outs)
     recs.forEach((r) => {
       const hour = r.dt.getHours();
       const timeStr = r.dt.toLocaleTimeString([], {
         hour: "2-digit",
         minute: "2-digit",
       });
-      // Morning punch (before 12 PM) - only morning arrivals are evaluated for lateness
-      if (hour < 12) {
+      if (hour < 3) {
+        // Overnight punch past midnight (< 3:00 AM) is afternoon out
+        afternoonOut = timeStr;
+      } else if (hour < 12) {
+        // Morning punch (3:00 AM to 11:59 AM) - only morning arrivals are evaluated for lateness
         if (!morningIn) {
           morningIn = timeStr;
           if (r.status === "late" || isLate(r.dt, "morning")) {
@@ -98,7 +116,7 @@ export function getDetailedAttendance(attendance, personId, settings = {}) {
           }
         }
       } else {
-        // Afternoon punch
+        // Afternoon punch (>= 12:00 PM)
         afternoonOut = timeStr;
       }
     });
@@ -121,7 +139,8 @@ export function getDetailedAttendance(attendance, personId, settings = {}) {
         hour: "2-digit",
         minute: "2-digit",
       });
-      if (recs[0].dt.getHours() < 12) {
+      const singleHour = recs[0].dt.getHours();
+      if (singleHour >= 3 && singleHour < 12) {
         attendanceIn = singleTime;
         attendanceOut = null;
       } else {
@@ -164,13 +183,18 @@ export function getDetailedAttendance(attendance, personId, settings = {}) {
 
     if (checkinTime) {
       const inTotal = parseTimeToMinutes(checkinTime);
-      if (inTotal > 0 && inTotal <= earlyOtLimit && inTotal < startTotal) {
+      // Early in OT: from 3:00 AM (180 mins) up to earlyOtLimit (<= 7:00 AM)
+      if (inTotal >= 3 * 60 && inTotal <= earlyOtLimit && inTotal < startTotal) {
         dayOtMinutes += (startTotal - inTotal);
       }
     }
 
     if (checkoutTime) {
-      const outTotal = parseTimeToMinutes(checkoutTime);
+      let outTotal = parseTimeToMinutes(checkoutTime);
+      // If checkout is past midnight (< 3:00 AM), add 24 hours (1440 mins)
+      if (outTotal < 3 * 60) {
+        outTotal += 24 * 60;
+      }
       if (outTotal > endTotal) {
         const afterMins = outTotal - endTotal;
         if (afterMins >= 60) {

@@ -137,22 +137,52 @@ BEGIN
   DECLARE configured_morning_start TIME DEFAULT '08:00:00';
   DECLARE configured_morning_end TIME DEFAULT '11:59:00';
   DECLARE configured_afternoon_start TIME DEFAULT '13:00:00';
+  DECLARE configured_afternoon_end TIME DEFAULT '17:00:00';
+  DECLARE configured_morning_grace INT DEFAULT 15;
 
-  SELECT COALESCE(morning_start, '08:00:00'), COALESCE(morning_end, '11:59:00'),
-         COALESCE(afternoon_start, '13:00:00')
-    INTO configured_morning_start, configured_morning_end, configured_afternoon_start
+  SELECT COALESCE(morning_start, '08:00:00'),
+         COALESCE(morning_end, '11:59:00'),
+         COALESCE(afternoon_start, '13:00:00'),
+         COALESCE(afternoon_end, '17:00:00'),
+         COALESCE(morning_grace_minutes, 15)
+    INTO configured_morning_start, configured_morning_end, configured_afternoon_start, configured_afternoon_end, configured_morning_grace
     FROM settings ORDER BY id LIMIT 1;
 
-  SET NEW.attendance_work_date = IF(NEW.device_time IS NULL, NULL, DATE(NEW.device_time));
-  SET NEW.attendance_slot = CASE
-    WHEN LOWER(COALESCE(NEW.event, '')) = 'time-in'
-      AND TIME(NEW.device_time) <= configured_morning_end
-      THEN 'morning_time_in'
-    WHEN LOWER(COALESCE(NEW.event, '')) = 'time-out'
-      AND TIME(NEW.device_time) >= configured_afternoon_start
-      THEN 'afternoon_time_out'
-    ELSE NULL
-  END;
+  IF TIME(NEW.device_time) < '03:00:00' THEN
+    SET NEW.event = 'time-out';
+    SET NEW.attendance_slot = 'afternoon_time_out';
+    SET NEW.attendance_work_date = IF(NEW.device_time IS NULL, NULL, DATE(NEW.device_time - INTERVAL 1 DAY));
+    SET NEW.status = 'overtime';
+  ELSEIF TIME(NEW.device_time) <= configured_morning_end THEN
+    SET NEW.event = 'time-in';
+    SET NEW.attendance_slot = 'morning_time_in';
+    SET NEW.attendance_work_date = IF(NEW.device_time IS NULL, NULL, DATE(NEW.device_time));
+    IF NEW.status IS NULL OR NEW.status = '' OR NEW.status = 'present' OR NEW.status = 'on-time' THEN
+      IF TIME(NEW.device_time) < configured_morning_start THEN
+        SET NEW.status = 'early-in';
+      ELSEIF TIME(NEW.device_time) <= ADDTIME(configured_morning_start, SEC_TO_TIME(configured_morning_grace * 60)) THEN
+        SET NEW.status = 'on-time';
+      ELSE
+        SET NEW.status = 'late';
+      END IF;
+    END IF;
+  ELSEIF TIME(NEW.device_time) >= configured_afternoon_start THEN
+    SET NEW.event = 'time-out';
+    SET NEW.attendance_slot = 'afternoon_time_out';
+    SET NEW.attendance_work_date = IF(NEW.device_time IS NULL, NULL, DATE(NEW.device_time));
+    IF NEW.status IS NULL OR NEW.status = '' OR NEW.status = 'present' OR NEW.status = 'on-time' THEN
+      IF TIME(NEW.device_time) < configured_afternoon_end THEN
+        SET NEW.status = 'early-out';
+      ELSEIF TIME(NEW.device_time) >= ADDTIME(configured_afternoon_end, '01:00:00') THEN
+        SET NEW.status = 'overtime';
+      ELSE
+        SET NEW.status = 'on-time';
+      END IF;
+    END IF;
+  ELSE
+    SET NEW.attendance_slot = NULL;
+    SET NEW.attendance_work_date = IF(NEW.device_time IS NULL, NULL, DATE(NEW.device_time));
+  END IF;
 END$$
 
 CREATE TRIGGER attendance_before_update_slot
@@ -162,22 +192,52 @@ BEGIN
   DECLARE configured_morning_start TIME DEFAULT '08:00:00';
   DECLARE configured_morning_end TIME DEFAULT '11:59:00';
   DECLARE configured_afternoon_start TIME DEFAULT '13:00:00';
+  DECLARE configured_afternoon_end TIME DEFAULT '17:00:00';
+  DECLARE configured_morning_grace INT DEFAULT 15;
 
-  SELECT COALESCE(morning_start, '08:00:00'), COALESCE(morning_end, '11:59:00'),
-         COALESCE(afternoon_start, '13:00:00')
-    INTO configured_morning_start, configured_morning_end, configured_afternoon_start
+  SELECT COALESCE(morning_start, '08:00:00'),
+         COALESCE(morning_end, '11:59:00'),
+         COALESCE(afternoon_start, '13:00:00'),
+         COALESCE(afternoon_end, '17:00:00'),
+         COALESCE(morning_grace_minutes, 15)
+    INTO configured_morning_start, configured_morning_end, configured_afternoon_start, configured_afternoon_end, configured_morning_grace
     FROM settings ORDER BY id LIMIT 1;
 
-  SET NEW.attendance_work_date = IF(NEW.device_time IS NULL, NULL, DATE(NEW.device_time));
-  SET NEW.attendance_slot = CASE
-    WHEN LOWER(COALESCE(NEW.event, '')) = 'time-in'
-      AND TIME(NEW.device_time) <= configured_morning_end
-      THEN 'morning_time_in'
-    WHEN LOWER(COALESCE(NEW.event, '')) = 'time-out'
-      AND TIME(NEW.device_time) >= configured_afternoon_start
-      THEN 'afternoon_time_out'
-    ELSE NULL
-  END;
+  IF TIME(NEW.device_time) < '03:00:00' THEN
+    SET NEW.event = 'time-out';
+    SET NEW.attendance_slot = 'afternoon_time_out';
+    SET NEW.attendance_work_date = IF(NEW.device_time IS NULL, NULL, DATE(NEW.device_time - INTERVAL 1 DAY));
+    SET NEW.status = 'overtime';
+  ELSEIF TIME(NEW.device_time) <= configured_morning_end THEN
+    SET NEW.event = 'time-in';
+    SET NEW.attendance_slot = 'morning_time_in';
+    SET NEW.attendance_work_date = IF(NEW.device_time IS NULL, NULL, DATE(NEW.device_time));
+    IF NEW.status IS NULL OR NEW.status = '' OR NEW.status = OLD.status OR NEW.status = 'present' OR NEW.status = 'on-time' THEN
+      IF TIME(NEW.device_time) < configured_morning_start THEN
+        SET NEW.status = 'early-in';
+      ELSEIF TIME(NEW.device_time) <= ADDTIME(configured_morning_start, SEC_TO_TIME(configured_morning_grace * 60)) THEN
+        SET NEW.status = 'on-time';
+      ELSE
+        SET NEW.status = 'late';
+      END IF;
+    END IF;
+  ELSEIF TIME(NEW.device_time) >= configured_afternoon_start THEN
+    SET NEW.event = 'time-out';
+    SET NEW.attendance_slot = 'afternoon_time_out';
+    SET NEW.attendance_work_date = IF(NEW.device_time IS NULL, NULL, DATE(NEW.device_time));
+    IF NEW.status IS NULL OR NEW.status = '' OR NEW.status = OLD.status OR NEW.status = 'present' OR NEW.status = 'on-time' THEN
+      IF TIME(NEW.device_time) < configured_afternoon_end THEN
+        SET NEW.status = 'early-out';
+      ELSEIF TIME(NEW.device_time) >= ADDTIME(configured_afternoon_end, '01:00:00') THEN
+        SET NEW.status = 'overtime';
+      ELSE
+        SET NEW.status = 'on-time';
+      END IF;
+    END IF;
+  ELSE
+    SET NEW.attendance_slot = NULL;
+    SET NEW.attendance_work_date = IF(NEW.device_time IS NULL, NULL, DATE(NEW.device_time));
+  END IF;
 END$$
 
 DELIMITER ;

@@ -268,8 +268,13 @@ export default function Dashboard() {
         const d = new Date(a.device_time);
         if (d >= start && d <= end && a.person_id) {
           const minutes = d.getHours() * 60 + d.getMinutes();
-          if (minutes <= morningEndMin) morningPresentIds.add(a.person_id);
-          if (minutes >= afternoonStartMin && minutes <= afternoonEndMin) afternoonPresentIds.add(a.person_id);
+          if (minutes < 3 * 60) {
+            afternoonPresentIds.add(a.person_id);
+          } else if (minutes <= morningEndMin) {
+            morningPresentIds.add(a.person_id);
+          } else if (minutes >= afternoonStartMin && minutes <= afternoonEndMin) {
+            afternoonPresentIds.add(a.person_id);
+          }
         }
       } catch (e) {}
     });
@@ -420,7 +425,7 @@ export default function Dashboard() {
           const morningEnd = settings.morning_end.split(":").map(Number);
           const morningEndMin = morningEnd[0] * 60 + morningEnd[1];
           const morningGrace = Number(settings.morning_grace_minutes) || 0;
-          if (minutes > morningEndMin + morningGrace) {
+          if (minutes < 3 * 60 || minutes > morningEndMin + morningGrace) {
             label = "Afternoon Out";
             configTime = settings.afternoon_end;
           }

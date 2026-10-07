@@ -9,8 +9,9 @@ export function isTimeBetween(current, start, end) {
 }
 
 export function toMinutes(currentTime) {
+  if (!currentTime || typeof currentTime !== "string") return 0;
   const [hours, minutes] = currentTime.split(":").map(Number);
-  return hours * 60 + minutes;
+  return (hours || 0) * 60 + (minutes || 0);
 }
 
 export function determineExpectedEvent(currentTime, lastEvent, settings, lastEventDeviceTimeIso = null) {
@@ -22,7 +23,15 @@ export function determineExpectedEvent(currentTime, lastEvent, settings, lastEve
   const afternoonStartMinutes = toMinutes(settings.afternoon_start);
   const afternoonEndMinutes = toMinutes(settings.afternoon_end);
 
-  // Morning shift: time-in (supports early-in before morningStartMinutes)
+  // Overnight shift checkout past midnight (< 03:00 AM) applies to afternoon out
+  if (nowMinutes < 3 * 60) {
+    if (!lastEvent) return "time-out";
+    if (lastEvent === "time-in") return "time-out";
+    if (lastEvent === "time-out") return "attendance-closed";
+    return "time-out";
+  }
+
+  // Morning shift: time-in (supports early-in starting at 3:00 AM before morningStartMinutes)
   if (nowMinutes <= morningEndMinutes) {
     if (!lastEvent || lastEvent === "time-out") return "time-in";
     if (lastEvent === "time-in") return "already-timed-in";
@@ -105,10 +114,15 @@ export function determineAttendanceStatus(
   hadMorningTimeIn = false
 ) {
   const nowMinutes = toMinutes(currentTime);
-  const morningStart = toMinutes(settings.morning_start);
-  const morningEnd = toMinutes(settings.morning_end);
-  const afternoonEnd = toMinutes(settings.afternoon_end);
-  const morningGrace = Number(settings.morning_grace_minutes) || 15;
+  const morningStart = toMinutes(settings?.morning_start || "08:00");
+  const morningEnd = toMinutes(settings?.morning_end || "11:59");
+  const afternoonEnd = toMinutes(settings?.afternoon_end || "17:00");
+  const morningGrace = Number(settings?.morning_grace_minutes) || 15;
+
+  // Overnight checkout past midnight (< 03:00 AM) is afternoon out overtime
+  if (nowMinutes < 3 * 60) {
+    return "overtime";
+  }
 
   if (nowMinutes > morningEnd) {
     // System is morning-in / afternoon-out based. Any punch in the afternoon is considered the afternoon out.
@@ -119,7 +133,7 @@ export function determineAttendanceStatus(
     }
     return "on-time";
   } else {
-    // Morning punch (time-in)
+    // Morning punch (time-in starting at 3:00 AM)
     if (nowMinutes < morningStart) {
       return "early-in";
     } else if (nowMinutes <= morningStart + morningGrace) {

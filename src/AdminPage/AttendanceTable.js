@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback, useRef } from "react";
 import { useLoading } from "../LoadingContext";
 import { supabase } from "../mysqlClient";
-import { getAttendanceStatus } from "./attendanceUtils";
+import { getAttendanceStatus, determineAttendanceStatus } from "./attendanceUtils";
 import * as XLSX from "xlsx";
 import Swal from "sweetalert2";
 import { syncDahuaAttendance, deleteDahuaAttendance } from "../utils/dahuaApi";
@@ -307,12 +307,32 @@ export default function AttendanceTable() {
       });
 
       if (!formValues) return;
-      const { date, time, event } = formValues;
+      let { date, time, event } = formValues;
       const updatedTime = `${date} ${time}`;
+      const hhmm = time.slice(0, 5);
+      const [hStr] = hhmm.split(":");
+      const hours = parseInt(hStr, 10);
+
+      if (hours < 3) {
+        event = "time-out";
+      }
+
+      let currentSettings = settings;
+      if (!currentSettings) {
+        try {
+          const { data: sData } = await supabase.from("settings").select("*").eq("id", 1).maybeSingle();
+          if (sData) {
+            currentSettings = sData;
+            setSettings(sData);
+          }
+        } catch (_) {}
+      }
+
+      const updatedStatus = determineAttendanceStatus(hhmm, event, currentSettings || {}, false);
 
       const { error } = await supabase
         .from("attendance")
-        .update({ device_time: updatedTime, event })
+        .update({ device_time: updatedTime, event, status: updatedStatus })
         .eq("id", rec.id);
 
       if (error) {
@@ -330,7 +350,7 @@ export default function AttendanceTable() {
         return;
       }
       setRecords((prev) =>
-        prev.map((r) => (r.id === rec.id ? { ...r, device_time: updatedTime, event } : r))
+        prev.map((r) => (r.id === rec.id ? { ...r, device_time: updatedTime, event, status: updatedStatus } : r))
       );
       showToast("Attendance updated successfully!");
     } catch (e) {
@@ -922,13 +942,12 @@ export default function AttendanceTable() {
                             const totalMinutes = hour * 60 + minute;
                             const morningEnd = settings.morning_end ? settings.morning_end.split(":").map(Number) : [0, 0];
                             const afternoonStart = settings.afternoon_start ? settings.afternoon_start.split(":").map(Number) : [0, 0];
-                            const afternoonEnd = settings.afternoon_end ? settings.afternoon_end.split(":").map(Number) : [0, 0];
                             const morningEndMin = morningEnd[0] * 60 + morningEnd[1];
                             const afternoonStartMin = afternoonStart[0] * 60 + afternoonStart[1];
-                            const afternoonEndMin = afternoonEnd[0] * 60 + afternoonEnd[1];
                             
-                            if (totalMinutes <= morningEndMin) value = "Morning Shift";
-                            else if (totalMinutes >= afternoonStartMin && totalMinutes <= afternoonEndMin) value = "Afternoon Shift";
+                            if (totalMinutes < 3 * 60) value = "Afternoon Shift";
+                            else if (totalMinutes <= morningEndMin) value = "Morning Shift";
+                            else if (totalMinutes >= afternoonStartMin) value = "Afternoon Shift";
                             else value = "N/A";
                           }
                         }
@@ -947,7 +966,7 @@ export default function AttendanceTable() {
                                 const morningEnd = settings.morning_end.split(":").map(Number);
                                 const morningEndMin = morningEnd[0] * 60 + morningEnd[1];
                                 const morningGrace = Number(settings.morning_grace_minutes) || 0;
-                                if (minutes > morningEndMin + morningGrace) {
+                                if (minutes < 3 * 60 || minutes > morningEndMin + morningGrace) {
                                   label = "Afternoon Out";
                                   configTime = settings.afternoon_end;
                                 }

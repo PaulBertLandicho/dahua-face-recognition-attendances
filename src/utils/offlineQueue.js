@@ -76,7 +76,7 @@ export async function enqueueAttendance(item) {
 
       const itemMinutes = parseMinutesFromIso(item.device_time) || parseMinutesFromIso(new Date().toISOString());
 
-      const inMorningWindow = (m) => m !== null && morningEnd !== null && m <= morningEnd;
+      const inMorningWindow = (m) => m !== null && morningEnd !== null && m >= 3 * 60 && m <= morningEnd;
       const inAfternoonWindow = (m) => m !== null && afternoonStart !== null && afternoonEnd !== null && m >= afternoonStart && m <= afternoonEnd;
       const inMorningTimeoutWindow = (m) => m !== null && morningEnd !== null && afternoonStart !== null && m > morningEnd && m < afternoonStart;
 
@@ -101,7 +101,7 @@ export async function enqueueAttendance(item) {
         if (inMorningTimeoutWindow(itemMinutes) && hasQueuedInWindow("time-out", (m) => inMorningTimeoutWindow(m) || inMorningWindow(m))) {
           return { queued: false, reason: "duplicate_morning_time_out" };
         }
-        if ((itemMinutes > afternoonEnd) || inAfternoonWindow(itemMinutes)) {
+        if ((itemMinutes < 3 * 60) || (itemMinutes > afternoonEnd) || inAfternoonWindow(itemMinutes)) {
           if (hasQueuedInWindow("time-out", inAfternoonWindow)) {
             return { queued: false, reason: "duplicate_afternoon_time_out" };
           }
@@ -375,7 +375,7 @@ export async function syncQueue(supabase) {
               const afternoonEnd = toMinutes(cachedSettings.afternoon_end);
               const itemMinutes = parseMinutesFromIso(it.device_time) || parseMinutesFromIso(new Date().toISOString());
 
-              const inMorningWindow = (m) => m !== null && morningEnd !== null && m <= morningEnd;
+              const inMorningWindow = (m) => m !== null && morningEnd !== null && m >= 3 * 60 && m <= morningEnd;
               const inAfternoonWindow = (m) => m !== null && afternoonStart !== null && afternoonEnd !== null && m >= afternoonStart && m <= afternoonEnd;
               const inMorningTimeoutWindow = (m) => m !== null && morningEnd !== null && afternoonStart !== null && m > morningEnd && m < afternoonStart;
 
@@ -410,7 +410,7 @@ export async function syncQueue(supabase) {
                   results.push({ id: it.id, success: false, dropped: true, reason: msg });
                   continue;
                 }
-                if ((itemMinutes > (afternoonEnd || 0)) || inAfternoonWindow(itemMinutes)) {
+                if ((itemMinutes < 3 * 60) || (itemMinutes > (afternoonEnd || 0)) || inAfternoonWindow(itemMinutes)) {
                   if (existsInWindow("time-out", inAfternoonWindow)) {
                     await removeQueueItem(it.id);
                     const msg = "server_duplicate_afternoon_time_out";

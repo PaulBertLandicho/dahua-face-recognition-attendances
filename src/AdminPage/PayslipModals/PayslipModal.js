@@ -197,9 +197,10 @@ export default function PayslipModal({
           const mEnd = parseTimeToMinutes(schedMorningEnd);
           const aEnd = parseTimeToMinutes(schedAfternoonEnd);
 
-          // Early-in overtime (7:00 AM and below)
+          // Early-in overtime (3:00 AM up to 7:00 AM)
           if (
             typeof mIn === "number" &&
+            mIn >= 3 * 60 &&
             mIn <= schedEarlyInLimit &&
             mIn < schedMorningStart
           ) {
@@ -215,11 +216,13 @@ export default function PayslipModal({
             totalOtMinutesForPdf += mOut - mEnd;
           if (
             typeof aOut === "number" &&
-            typeof aEnd === "number" &&
-            aOut > aEnd &&
-            aOut - aEnd >= 60
-          )
-            totalOtMinutesForPdf += aOut - aEnd;
+            typeof aEnd === "number"
+          ) {
+            const effectiveAOut = aOut < 3 * 60 ? aOut + 24 * 60 : aOut;
+            if (effectiveAOut > aEnd && effectiveAOut - aEnd >= 60) {
+              totalOtMinutesForPdf += effectiveAOut - aEnd;
+            }
+          }
         } catch (e) {}
       });
     } catch (e) {}
@@ -710,12 +713,15 @@ export default function PayslipModal({
       const mIn = parseTimeToMinutes(rec.attendanceIn || rec.morningIn);
       const mOut = parseTimeToMinutes(rec.morningOut);
       const aOut = parseTimeToMinutes(rec.attendanceOut || rec.afternoonOut);
-      if (typeof mIn === "number" && mIn <= schedEarlyInLimit && mIn < schedMorningStartMin) {
+      if (typeof mIn === "number" && mIn >= 3 * 60 && mIn <= schedEarlyInLimit && mIn < schedMorningStartMin) {
         dynamicOtMinutes += schedMorningStartMin - mIn;
       }
-      if (typeof aOut === "number" && typeof schedAfternoonEndMin === "number" && aOut > schedAfternoonEndMin) {
-        const mins = aOut - schedAfternoonEndMin;
-        if (mins >= 60) dynamicOtMinutes += mins;
+      if (typeof aOut === "number" && typeof schedAfternoonEndMin === "number") {
+        const effectiveAOut = aOut < 3 * 60 ? aOut + 24 * 60 : aOut;
+        if (effectiveAOut > schedAfternoonEndMin) {
+          const mins = effectiveAOut - schedAfternoonEndMin;
+          if (mins >= 60) dynamicOtMinutes += mins;
+        }
       }
       if (typeof mOut === "number" && typeof schedMorningEndMin === "number" && mOut > schedMorningEndMin) {
         const mins = mOut - schedMorningEndMin;
@@ -918,9 +924,10 @@ export default function PayslipModal({
                         scheduledAfternoonEnd,
                       );
 
-                      // Early-in overtime (triggers at 7:00 AM and below)
+                      // Early-in overtime (triggers at 3:00 AM up to 7:00 AM)
                       if (
                         typeof morningInMin === "number" &&
+                        morningInMin >= 3 * 60 &&
                         morningInMin <= schedEarlyInLimit &&
                         morningInMin < schedMorningStartMin
                       ) {
@@ -931,13 +938,15 @@ export default function PayslipModal({
 
                       if (
                         typeof afternoonOutMin === "number" &&
-                        typeof schedAfternoonEndMin === "number" &&
-                        afternoonOutMin > schedAfternoonEndMin
+                        typeof schedAfternoonEndMin === "number"
                       ) {
-                        const mins = afternoonOutMin - schedAfternoonEndMin;
-                        if (mins >= 60) {
-                          otMinutes += mins;
-                          afterOtHoursForRow = Math.round((mins / 60) * 100) / 100;
+                        const effectiveAfternoonOutMin = afternoonOutMin < 3 * 60 ? afternoonOutMin + 24 * 60 : afternoonOutMin;
+                        if (effectiveAfternoonOutMin > schedAfternoonEndMin) {
+                          const mins = effectiveAfternoonOutMin - schedAfternoonEndMin;
+                          if (mins >= 60) {
+                            otMinutes += mins;
+                            afterOtHoursForRow = Math.round((mins / 60) * 100) / 100;
+                          }
                         }
                       }
                       // include morning overtime if present (rare)
@@ -995,7 +1004,7 @@ export default function PayslipModal({
                           {attendanceInDisplay}
                           {earlyOtHoursForRow > 0 && (
                             <span className="block text-[11px] text-[#237227] font-semibold mt-0.5">
-                              Early OT: {getHourMinute(earlyOtHoursForRow)}
+                              Early-In OT: {getHourMinute(earlyOtHoursForRow)}
                             </span>
                           )}
                         </td>
@@ -1003,7 +1012,7 @@ export default function PayslipModal({
                           {attendanceOutDisplay}
                           {afterOtHoursForRow > 0 && (
                             <span className="block text-[11px] text-blue-600 font-semibold mt-0.5">
-                              Afternoon OT: {getHourMinute(afterOtHoursForRow)}
+                              Overtime: {getHourMinute(afterOtHoursForRow)}
                             </span>
                           )}
                         </td>
@@ -1107,18 +1116,22 @@ export default function PayslipModal({
                       const afternoonOutMin = parseTimeToMinutes(rec.attendanceOut || rec.afternoonOut);
                       const schedAfternoonEndMin = parseTimeToMinutes(scheduledAfternoonEnd);
 
-                      // Early-in overtime (7:00 AM and below)
+                      // Early-in overtime (3:00 AM up to 7:00 AM)
                       if (
                         typeof morningInMin === "number" &&
+                        morningInMin >= 3 * 60 &&
                         morningInMin <= schedEarlyInLimit &&
                         morningInMin < schedMorningStartMin
                       ) {
                         otM += schedMorningStartMin - morningInMin;
                       }
 
-                      if (typeof afternoonOutMin === "number" && typeof schedAfternoonEndMin === "number" && afternoonOutMin > schedAfternoonEndMin) {
-                        const mins = afternoonOutMin - schedAfternoonEndMin;
-                        if (mins >= 60) otM += mins;
+                      if (typeof afternoonOutMin === "number" && typeof schedAfternoonEndMin === "number") {
+                        const effectiveAfternoonOutMin = afternoonOutMin < 3 * 60 ? afternoonOutMin + 24 * 60 : afternoonOutMin;
+                        if (effectiveAfternoonOutMin > schedAfternoonEndMin) {
+                          const mins = effectiveAfternoonOutMin - schedAfternoonEndMin;
+                          if (mins >= 60) otM += mins;
+                        }
                       }
                       const morningOutMin = parseTimeToMinutes(rec.morningOut);
                       const schedMorningEndMin = parseTimeToMinutes(scheduledMorningEnd);

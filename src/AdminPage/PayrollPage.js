@@ -244,14 +244,18 @@ export default function PayrollPage() {
 
             if (
               mIn !== null &&
+              mIn >= 3 * 60 &&
               mIn <= schedEarlyInLimit &&
               mIn < schedMorningStart
             ) {
               dayOtMins += schedMorningStart - mIn;
             }
-            if (aOut !== null && aOut > schedAfternoonEnd) {
-              const otMins = aOut - schedAfternoonEnd;
-              if (otMins >= 60) dayOtMins += otMins;
+            if (aOut !== null) {
+              const effectiveAOut = aOut < 3 * 60 ? aOut + 24 * 60 : aOut;
+              if (effectiveAOut > schedAfternoonEnd) {
+                const otMins = effectiveAOut - schedAfternoonEnd;
+                if (otMins >= 60) dayOtMins += otMins;
+              }
             }
             if (mOut !== null && mOut > schedMorningEnd) {
               const otMins = mOut - schedMorningEnd;
@@ -1548,27 +1552,51 @@ export default function PayrollPage() {
         let totalOtMinutes = 0;
         try {
           const sched = payroll && payroll.settings ? payroll.settings : {};
+          const schedMorningStart = sched.morning_start || "08:00";
           const schedMorningEnd = sched.morning_end || "12:00";
           const schedAfternoonEnd = sched.afternoon_end || "17:00";
           (detailedAttendance || []).forEach((rec) => {
             try {
+              const mIn =
+                (rec.morningIn || rec.attendanceIn) &&
+                String(rec.morningIn || rec.attendanceIn).trim();
               const mOut =
                 (rec.morningOut && String(rec.morningOut).trim()) || null;
               const aOut =
-                (rec.afternoonOut && String(rec.afternoonOut).trim()) || null;
-              // parse time HH:MM into minutes
+                (rec.afternoonOut || rec.attendanceOut) &&
+                String(rec.afternoonOut || rec.attendanceOut).trim();
+              // parse time HH:MM (including AM/PM) into minutes
               const parseT = (t) => {
                 if (!t) return null;
                 const mm = String(t)
                   .trim()
-                  .match(/^(\d{1,2}):(\d{2})/);
+                  .match(/^(\d{1,2}):(\d{2})(?:\s*([APap][Mm]))?/);
                 if (!mm) return null;
-                return Number(mm[1]) * 60 + Number(mm[2]);
+                let hour = Number(mm[1]);
+                const minute = Number(mm[2]);
+                const ampm = mm[3];
+                if (ampm) {
+                  if (/pm/i.test(ampm) && hour < 12) hour += 12;
+                  if (/am/i.test(ampm) && hour === 12) hour = 0;
+                }
+                return hour * 60 + minute;
               };
+              const mInMin = parseT(mIn);
               const mOutMin = parseT(mOut);
               const aOutMin = parseT(aOut);
+              const mStartMin = parseT(schedMorningStart) || 480;
+              const schedEarlyInLimit = Math.min(mStartMin - 60, 7 * 60);
               const mEndMin = parseT(schedMorningEnd);
               const aEndMin = parseT(schedAfternoonEnd);
+
+              if (
+                typeof mInMin === "number" &&
+                mInMin >= 3 * 60 &&
+                mInMin <= schedEarlyInLimit &&
+                mInMin < mStartMin
+              ) {
+                totalOtMinutes += mStartMin - mInMin;
+              }
               if (
                 typeof mOutMin === "number" &&
                 typeof mEndMin === "number" &&
@@ -1577,14 +1605,21 @@ export default function PayrollPage() {
                 totalOtMinutes += mOutMin - mEndMin;
               if (
                 typeof aOutMin === "number" &&
-                typeof aEndMin === "number" &&
-                aOutMin > aEndMin
-              )
-                totalOtMinutes += aOutMin - aEndMin;
+                typeof aEndMin === "number"
+              ) {
+                const effectiveAOutMin = aOutMin < 3 * 60 ? aOutMin + 24 * 60 : aOutMin;
+                if (effectiveAOutMin > aEndMin) {
+                  const otM = effectiveAOutMin - aEndMin;
+                  if (otM >= 60) totalOtMinutes += otM;
+                }
+              }
             } catch (e) {}
           });
         } catch (e) {}
-        const totalOtHours = Math.round((totalOtMinutes / 60) * 100) / 100;
+        const totalOtHours =
+          typeof payroll?.otHours === "number" && payroll.otHours > 0
+            ? payroll.otHours
+            : Math.round((totalOtMinutes / 60) * 100) / 100;
 
         pdfParamsList.push({
           payroll,

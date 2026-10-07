@@ -558,16 +558,21 @@ export default function PersonsTable() {
       const formattedTime = `${selectedDate.getFullYear()}-${pad(selectedDate.getMonth() + 1)}-${pad(selectedDate.getDate())} ${pad(selectedDate.getHours())}:${pad(selectedDate.getMinutes())}:${pad(selectedDate.getSeconds() || 0)}`;
       const hhmm = `${pad(selectedDate.getHours())}:${pad(selectedDate.getMinutes())}`;
 
+      let adminEvent = adminModal.event;
+      if (selectedDate.getHours() < 3) {
+        adminEvent = "time-out";
+      }
+
       let status = "on-time";
       try {
-        status = determineAttendanceStatus(hhmm, adminModal.event, settingsData || {}, false);
+        status = determineAttendanceStatus(hhmm, adminEvent, settingsData || {}, false);
       } catch (e) {}
 
       const payload = {
         person_id: person.id,
         name: person.name,
         department: person.department,
-        event: adminModal.event,
+        event: adminEvent,
         method: "admin-entry",
         device_time: formattedTime,
         status,
