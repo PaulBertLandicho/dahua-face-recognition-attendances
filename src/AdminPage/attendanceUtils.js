@@ -119,8 +119,11 @@ export function determineAttendanceStatus(
   const afternoonEnd = toMinutes(settings?.afternoon_end || "17:00");
   const morningGrace = Number(settings?.morning_grace_minutes) || 15;
 
-  // Overnight checkout past midnight (< 03:00 AM) is afternoon out overtime
+  // Overnight checkout past midnight (< 03:00 AM) is afternoon out overtime unless time-in
   if (nowMinutes < 3 * 60) {
+    if (eventToRecord === "time-in") {
+      return "early-in";
+    }
     return "overtime";
   }
 
@@ -217,17 +220,28 @@ export async function recordAttendanceForPerson({
     throw new Error("Work-hours settings are not loaded.");
   }
 
-  const deviceTime = scanPayload?.deviceTime || new Date().toISOString();
+  const pad = (n) => String(n).padStart(2, "0");
+  let deviceTime = scanPayload?.deviceTime;
+  if (!deviceTime) {
+    const now = new Date();
+    deviceTime = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`;
+  } else if (typeof deviceTime === "string" && (deviceTime.includes("T") || deviceTime.includes("Z"))) {
+    const d = new Date(deviceTime);
+    if (!isNaN(d.getTime())) {
+      deviceTime = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+    }
+  }
+
   const deviceDate = new Date(deviceTime);
-  const currentTime = deviceDate.toTimeString().slice(0, 5);
+  const currentTime = `${pad(deviceDate.getHours())}:${pad(deviceDate.getMinutes())}`;
 
   // Compute current workday window (local day based on deviceTime) so
   // we only consider today's attendance when deciding already-timed-in.
   const year = deviceDate.getFullYear();
-  const month = String(deviceDate.getMonth() + 1).padStart(2, "0");
-  const day = String(deviceDate.getDate()).padStart(2, "0");
-  const dayStartIso = `${year}-${month}-${day}T00:00:00.000Z`;
-  const dayEndIso = `${year}-${month}-${day}T23:59:59.999Z`;
+  const month = pad(deviceDate.getMonth() + 1);
+  const day = pad(deviceDate.getDate());
+  const dayStart = `${year}-${month}-${day} 00:00:00`;
+  const dayEnd = `${year}-${month}-${day} 23:59:59`;
 
   // Debug output: show current time and settings values
   console.log("DEBUG: Current time for attendance:", currentTime);
@@ -238,8 +252,8 @@ export async function recordAttendanceForPerson({
       .from("attendance")
       .select("event, device_time")
       .eq("person_id", person.id)
-      .gte("device_time", dayStartIso)
-      .lte("device_time", dayEndIso)
+      .gte("device_time", dayStart)
+      .lte("device_time", dayEnd)
       .order("device_time", { ascending: false });
     if (res.error) {
       console.warn("recordAttendanceForPerson: reading recent attendance failed, falling back to offline mode", res.error);
@@ -388,9 +402,8 @@ export async function recordAttendanceForPerson({
   // If an attendance with the same person and event was recorded very
   // recently (within DUPLICATE_WINDOW_MS), skip inserting a duplicate.
   const DUPLICATE_WINDOW_MS = 30 * 1000; // 30 seconds
-  const duplicateWindowStartIso = new Date(
-    deviceDate.getTime() - DUPLICATE_WINDOW_MS
-  ).toISOString();
+  const dupDate = new Date(deviceDate.getTime() - DUPLICATE_WINDOW_MS);
+  const duplicateWindowStart = `${dupDate.getFullYear()}-${pad(dupDate.getMonth() + 1)}-${pad(dupDate.getDate())} ${pad(dupDate.getHours())}:${pad(dupDate.getMinutes())}:${pad(dupDate.getSeconds())}`;
 
   try {
     let recentDup = [];
@@ -400,7 +413,7 @@ export async function recordAttendanceForPerson({
         .select("id, device_time")
         .eq("person_id", person.id)
         .eq("event", event)
-        .gte("device_time", duplicateWindowStartIso)
+        .gte("device_time", duplicateWindowStart)
         .order("device_time", { ascending: false })
         .limit(1);
       if (res.error) throw res.error;
@@ -410,7 +423,7 @@ export async function recordAttendanceForPerson({
       try {
         if (offlineQueue) {
           const queued = await offlineQueue.getAllQueue();
-          const found = queued.find((q) => q.person_id === person.id && q.event === event && new Date(q.device_time).getTime() >= new Date(duplicateWindowStartIso).getTime());
+          const found = queued.find((q) => q.person_id === person.id && q.event === event && new Date(q.device_time).getTime() >= new Date(dupDate).getTime());
           if (found) {
             return { inserted: false, blocked: true, event, message: "Duplicate attendance detected in offline queue — skipping duplicate record." };
           }
@@ -511,10 +524,10 @@ export async function autoGenerateMorningOut({ supabase, settings }) {
   const outHHMM = settings.morning_end || '11:59';
   const [oh, om] = outHHMM.split(':').map(Number);
   const outDate = new Date(now.getFullYear(), now.getMonth(), now.getDate(), oh, om, 0, 0);
-  const outIso = outDate.toISOString();
+  const outFormatted = `${year}-${month}-${day} ${String(oh).padStart(2, '0')}:${String(om).padStart(2, '0')}:00`;
 
-  const dayStartIso = `${year}-${month}-${day}T00:00:00.000Z`;
-  const dayEndIso = `${year}-${month}-${day}T23:59:59.999Z`;
+  const dayStart = `${year}-${month}-${day} 00:00:00`;
+  const dayEnd = `${year}-${month}-${day} 23:59:59`;
 
   const { data: persons, error: personsErr } = await supabase.from('persons').select('id, name, department');
   if (personsErr) throw personsErr;
@@ -527,8 +540,8 @@ export async function autoGenerateMorningOut({ supabase, settings }) {
         .from('attendance')
         .select('id,event,device_time,photo')
         .eq('person_id', p.id)
-        .gte('device_time', dayStartIso)
-        .lte('device_time', dayEndIso)
+        .gte('device_time', dayStart)
+        .lte('device_time', dayEnd)
         .order('device_time', { ascending: true });
       if (attErr) {
         console.warn('autoGenerateMorningOut: failed reading attendance for', p.id, attErr);
@@ -560,13 +573,14 @@ export async function autoGenerateMorningOut({ supabase, settings }) {
       if (morningInRow && !hasMorningOut) {
         // Prevent near-duplicate inserts
         const DUPLICATE_WINDOW_MS = 30 * 1000;
-        const dupWindowIso = new Date(outDate.getTime() - DUPLICATE_WINDOW_MS).toISOString();
+        const dupDate = new Date(outDate.getTime() - DUPLICATE_WINDOW_MS);
+        const dupWindow = `${dupDate.getFullYear()}-${String(dupDate.getMonth() + 1).padStart(2, '0')}-${String(dupDate.getDate()).padStart(2, '0')} ${String(dupDate.getHours()).padStart(2, '0')}:${String(dupDate.getMinutes()).padStart(2, '0')}:${String(dupDate.getSeconds()).padStart(2, '0')}`;
         const { data: recentDup } = await supabase
           .from('attendance')
           .select('id')
           .eq('person_id', p.id)
           .eq('event', 'time-out')
-          .gte('device_time', dupWindowIso)
+          .gte('device_time', dupWindow)
           .order('device_time', { ascending: false })
           .limit(1);
         if (Array.isArray(recentDup) && recentDup.length > 0) {
@@ -584,7 +598,7 @@ export async function autoGenerateMorningOut({ supabase, settings }) {
           event: 'time-out',
           point: 'System auto-generated',
           method: 'auto-morning-out',
-          device_time: outIso,
+          device_time: outFormatted,
           status,
           photo: morningInRow.photo || null,
         });

@@ -251,8 +251,9 @@ export async function enqueueAutoMorningOuts() {
         const [hStr, mStr] = (settings.morning_end || '11:59').split(':');
         const h = Number(hStr || 11);
         const mm = Number(mStr || 59);
+        const pad = (n) => String(n).padStart(2, "0");
         const outDate = new Date(now.getFullYear(), now.getMonth(), now.getDate(), h, mm, 0, 0);
-        const deviceTimeIso = outDate.toISOString();
+        const deviceTimeIso = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(h)}:${pad(mm)}:00`;
 
         const status = determineAttendanceStatus(outDate.toTimeString().slice(0,5), 'time-out', settings, true);
 

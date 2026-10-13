@@ -245,10 +245,16 @@ async function recordDeviceSyncStatus({ type, success, error = null }) {
           FROM settings ORDER BY id LIMIT 1;
 
         IF TIME(NEW.device_time) < '03:00:00' THEN
-          SET NEW.event = 'time-out';
-          SET NEW.attendance_slot = 'afternoon_time_out';
-          SET NEW.attendance_work_date = IF(NEW.device_time IS NULL, NULL, DATE(NEW.device_time - INTERVAL 1 DAY));
-          SET NEW.status = 'overtime';
+          IF NEW.event = 'time-in' THEN
+            SET NEW.attendance_slot = 'morning_time_in';
+            SET NEW.attendance_work_date = IF(NEW.device_time IS NULL, NULL, DATE(NEW.device_time));
+            SET NEW.status = 'early-in';
+          ELSE
+            SET NEW.event = 'time-out';
+            SET NEW.attendance_slot = 'afternoon_time_out';
+            SET NEW.attendance_work_date = IF(NEW.device_time IS NULL, NULL, DATE(NEW.device_time - INTERVAL 1 DAY));
+            SET NEW.status = 'overtime';
+          END IF;
         ELSEIF TIME(NEW.device_time) <= configured_morning_end THEN
           SET NEW.event = 'time-in';
           SET NEW.attendance_slot = 'morning_time_in';
@@ -303,10 +309,16 @@ async function recordDeviceSyncStatus({ type, success, error = null }) {
           FROM settings ORDER BY id LIMIT 1;
 
         IF TIME(NEW.device_time) < '03:00:00' THEN
-          SET NEW.event = 'time-out';
-          SET NEW.attendance_slot = 'afternoon_time_out';
-          SET NEW.attendance_work_date = IF(NEW.device_time IS NULL, NULL, DATE(NEW.device_time - INTERVAL 1 DAY));
-          SET NEW.status = 'overtime';
+          IF NEW.event = 'time-in' THEN
+            SET NEW.attendance_slot = 'morning_time_in';
+            SET NEW.attendance_work_date = IF(NEW.device_time IS NULL, NULL, DATE(NEW.device_time));
+            SET NEW.status = 'early-in';
+          ELSE
+            SET NEW.event = 'time-out';
+            SET NEW.attendance_slot = 'afternoon_time_out';
+            SET NEW.attendance_work_date = IF(NEW.device_time IS NULL, NULL, DATE(NEW.device_time - INTERVAL 1 DAY));
+            SET NEW.status = 'overtime';
+          END IF;
         ELSEIF TIME(NEW.device_time) <= configured_morning_end THEN
           SET NEW.event = 'time-in';
           SET NEW.attendance_slot = 'morning_time_in';
@@ -669,12 +681,15 @@ function getPreviousDateStr(dateStr) {
   return `${py}-${pm}-${pd}`;
 }
 
-function getWorkDateFromDeviceTime(deviceTime) {
+function getWorkDateFromDeviceTime(deviceTime, event = null) {
   const match = String(deviceTime).match(/^(\d{4}-\d{2}-\d{2})\s+(\d{2}):(\d{2})/);
   if (!match) return String(deviceTime).slice(0, 10);
   const dateStr = match[1];
   const hour = Number(match[2]);
   if (hour < 3) {
+    if (event === "time-in") {
+      return dateStr;
+    }
     return getPreviousDateStr(dateStr);
   }
   return dateStr;
@@ -718,12 +733,19 @@ function dedupeDahuaAttendanceByPersonDay(records, settings = null) {
     let targetDateStr = dateStr;
     let effectiveMins = mins;
 
-    // Overnight checkout past midnight (< 03:00 AM) applies to PREVIOUS day's afternoon out
+    // Overnight checkout past midnight (< 03:00 AM) applies to PREVIOUS day's afternoon out unless explicitly time-in
     if (mins < 3 * 60) {
-      event = "time-out";
-      status = "overtime";
-      targetDateStr = getPreviousDateStr(dateStr);
-      effectiveMins = 24 * 60 + mins;
+      if (record.event === "time-in") {
+        event = "time-in";
+        status = "early-in";
+        targetDateStr = dateStr;
+        effectiveMins = mins;
+      } else {
+        event = "time-out";
+        status = "overtime";
+        targetDateStr = getPreviousDateStr(dateStr);
+        effectiveMins = 24 * 60 + mins;
+      }
     } else if (mins <= morningEnd) {
       // 03:00 AM to morningEnd: Morning shift time-in (Early-in starting at 3:00 AM)
       event = "time-in";
@@ -1624,12 +1646,12 @@ app.post(["/api/attendance/import", "/attendance/import", "/api/dahua/import", "
     for (const record of payload) {
       try {
         const formattedTime = record.device_time;
-        const workDate = getWorkDateFromDeviceTime(formattedTime);
+        const workDate = getWorkDateFromDeviceTime(formattedTime, record.event);
         const rawDate = formattedTime.slice(0, 10);
 
-        // Delete any previously inserted shifted timestamp for the same person and event on this work shift
+        // Delete any previously inserted shifted timestamp for the same person and event on this work shift (never delete admin-entry)
         await pool.query(
-          "DELETE FROM attendance WHERE person_id = ? AND event = ? AND (attendance_work_date = ? OR (attendance_work_date IS NULL AND device_time LIKE ?)) AND device_time != ?",
+          "DELETE FROM attendance WHERE person_id = ? AND event = ? AND (attendance_work_date = ? OR (attendance_work_date IS NULL AND device_time LIKE ?)) AND device_time != ? AND (method IS NULL OR method != 'admin-entry')",
           [record.person_id, record.event, workDate, `${rawDate}%`, formattedTime]
         ).catch(() => {});
 
@@ -1704,10 +1726,10 @@ app.post("/api/dahua/sync-attendance", async (req, res) => {
       try {
         // device_time is already in "YYYY-MM-DD HH:MM:SS" local format from normalizeDahuaDeviceTime
         const formattedTime = record.device_time;
-        const workDate = getWorkDateFromDeviceTime(formattedTime);
+        const workDate = getWorkDateFromDeviceTime(formattedTime, record.event);
         const rawDate = formattedTime.slice(0, 10);
         await pool.query(
-          "DELETE FROM attendance WHERE person_id = ? AND event = ? AND (attendance_work_date = ? OR (attendance_work_date IS NULL AND device_time LIKE ?)) AND device_time != ?",
+          "DELETE FROM attendance WHERE person_id = ? AND event = ? AND (attendance_work_date = ? OR (attendance_work_date IS NULL AND device_time LIKE ?)) AND device_time != ? AND (method IS NULL OR method != 'admin-entry')",
           [record.person_id, record.event, workDate, `${rawDate}%`, formattedTime]
         ).catch(() => {});
         const [result] = await pool.query(
@@ -2211,8 +2233,11 @@ app.post("/api/db/query", async (req, res) => {
         }
         for (const k in itemObj) {
           if (itemObj[k] instanceof Date) {
-            itemObj[k] = itemObj[k].toISOString().slice(0, 19).replace("T", " ");
+            itemObj[k] = normalizeDahuaDeviceTime(itemObj[k]);
           }
+        }
+        if (table === "attendance" && itemObj.device_time) {
+          itemObj.device_time = normalizeDahuaDeviceTime(itemObj.device_time);
         }
 
         const keys = Object.keys(itemObj);
@@ -2249,6 +2274,9 @@ app.post("/api/db/query", async (req, res) => {
       }
       if (itemObj.detailed_attendance && typeof itemObj.detailed_attendance === "object") {
         itemObj.detailed_attendance = JSON.stringify(itemObj.detailed_attendance);
+      }
+      if (table === "attendance" && itemObj.device_time) {
+        itemObj.device_time = normalizeDahuaDeviceTime(itemObj.device_time);
       }
 
       const keys = Object.keys(itemObj).filter(k => itemObj[k] !== undefined);
@@ -2294,12 +2322,14 @@ app.post("/api/db/query", async (req, res) => {
               const combined = { ...rows[0], ...itemObj };
               const tStr = combined.device_time;
               if (tStr) {
-                const workDate = getWorkDateFromDeviceTime(tStr);
+                const workDate = getWorkDateFromDeviceTime(tStr, combined.event);
                 const d = new Date(tStr);
                 const mins = !isNaN(d.getTime()) ? d.getHours() * 60 + d.getMinutes() : -1;
                 let slot = null;
                 if (mins >= 0) {
-                  if (mins < 3 * 60) slot = "afternoon_time_out";
+                  if (mins < 3 * 60) {
+                    slot = combined.event === "time-in" ? "morning_time_in" : "afternoon_time_out";
+                  }
                   else if (combined.event === "time-in") slot = "morning_time_in";
                   else if (combined.event === "time-out") slot = "afternoon_time_out";
                 }
@@ -2467,9 +2497,9 @@ if (AUTO_SYNC_ATTENDANCE_MINUTES > 0) {
         const dTime = record.device_time;
         if (!pId || !dTime) continue;
         const dateDay = dTime.slice(0, 10);
-        const workDate = getWorkDateFromDeviceTime(dTime);
+        const workDate = getWorkDateFromDeviceTime(dTime, record.event);
         await pool.query(
-          "DELETE FROM attendance WHERE person_id = ? AND event = ? AND (attendance_work_date = ? OR (attendance_work_date IS NULL AND device_time LIKE ?)) AND device_time != ?",
+          "DELETE FROM attendance WHERE person_id = ? AND event = ? AND (attendance_work_date = ? OR (attendance_work_date IS NULL AND device_time LIKE ?)) AND device_time != ? AND (method IS NULL OR method != 'admin-entry')",
           [pId, record.event, workDate, `${dateDay}%`, dTime]
         ).catch(() => {});
         await pool.query(

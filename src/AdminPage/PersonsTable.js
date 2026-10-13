@@ -76,16 +76,15 @@ export default function PersonsTable() {
         try {
           const ids = list.map((p) => p.id).filter(Boolean);
           if (ids.length) {
-            const start = new Date();
-            start.setHours(0, 0, 0, 0);
-            const end = new Date();
-            end.setHours(23, 59, 59, 999);
+            const now = new Date();
+            const pad = (n) => String(n).padStart(2, "0");
+            const todayStr = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
             const { data: atts, error: attErr } = await supabase
               .from("attendance")
               .select("person_id, event, device_time")
               .in("person_id", ids)
-              .gte("device_time", start.toISOString())
-              .lte("device_time", end.toISOString());
+              .gte("device_time", `${todayStr} 00:00:00`)
+              .lte("device_time", `${todayStr} 23:59:59`);
               if (!attErr && Array.isArray(atts)) {
                 const pmap = {};
                 atts.forEach((r) => {
@@ -99,11 +98,13 @@ export default function PersonsTable() {
                   try {
                     const dt = new Date(r.device_time);
                     const hour = dt.getHours();
-                    if ((r.event || "").toLowerCase() === "time-in") {
+                    const evt = (r.event || "").toLowerCase();
+                    if (evt === "time-in" || evt === "time-out") {
                       if (hour < 12) pmap[pid].morning = true;
                       else pmap[pid].afternoon = true;
                     }
-                    // track earliest time-in for the person today
+                    pmap[pid].hasAttendance = true;
+                    // track earliest attendance scan for the person today
                     if (!pmap[pid].firstScan)
                       pmap[pid].firstScan = dt.toISOString();
                     else {
@@ -113,9 +114,9 @@ export default function PersonsTable() {
                     }
                   } catch (e) {}
                 });
-                // mark present if any session true
+                // mark present if any session true or has attendance
                 Object.keys(pmap).forEach((k) => {
-                  pmap[k].present = !!(pmap[k].morning || pmap[k].afternoon);
+                  pmap[k].present = !!(pmap[k].morning || pmap[k].afternoon || pmap[k].hasAttendance);
                 });
                 setPresenceMap(pmap);
               }
@@ -558,10 +559,7 @@ export default function PersonsTable() {
       const formattedTime = `${selectedDate.getFullYear()}-${pad(selectedDate.getMonth() + 1)}-${pad(selectedDate.getDate())} ${pad(selectedDate.getHours())}:${pad(selectedDate.getMinutes())}:${pad(selectedDate.getSeconds() || 0)}`;
       const hhmm = `${pad(selectedDate.getHours())}:${pad(selectedDate.getMinutes())}`;
 
-      let adminEvent = adminModal.event;
-      if (selectedDate.getHours() < 3) {
-        adminEvent = "time-out";
-      }
+      let adminEvent = adminModal.event || "time-in";
 
       let status = "on-time";
       try {
@@ -598,16 +596,18 @@ export default function PersonsTable() {
             try {
               const dt2 = new Date(r.device_time);
               const hour = dt2.getHours();
-              if ((r.event || "").toLowerCase() === "time-in") {
+              const evt = (r.event || "").toLowerCase();
+              if (evt === "time-in" || evt === "time-out") {
                 if (hour < 12) pmap[person.id].morning = true;
                 else pmap[person.id].afternoon = true;
               }
+              pmap[person.id].hasAttendance = true;
               if (!pmap[person.id].firstScan) pmap[person.id].firstScan = dt2.toISOString();
               else if (new Date(pmap[person.id].firstScan).getTime() > dt2.getTime())
                 pmap[person.id].firstScan = dt2.toISOString();
             } catch (e) {}
           });
-          pmap[person.id].present = !!(pmap[person.id].morning || pmap[person.id].afternoon);
+          pmap[person.id].present = !!(pmap[person.id].morning || pmap[person.id].afternoon || pmap[person.id].hasAttendance || atts.length > 0);
           setPresenceMap((prev) => ({ ...prev, ...pmap }));
         }
       } catch (e) {}

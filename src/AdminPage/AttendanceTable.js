@@ -312,9 +312,8 @@ export default function AttendanceTable() {
       const hhmm = time.slice(0, 5);
       const [hStr] = hhmm.split(":");
       const hours = parseInt(hStr, 10);
-
-      if (hours < 3) {
-        event = "time-out";
+      if (!event) {
+        event = hours < 3 ? "time-out" : (rec.event || "time-in");
       }
 
       let currentSettings = settings;
@@ -945,7 +944,7 @@ export default function AttendanceTable() {
                             const morningEndMin = morningEnd[0] * 60 + morningEnd[1];
                             const afternoonStartMin = afternoonStart[0] * 60 + afternoonStart[1];
                             
-                            if (totalMinutes < 3 * 60) value = "Afternoon Shift";
+                            if (totalMinutes < 3 * 60) value = row.event === "time-in" ? "Morning Shift" : "Afternoon Shift";
                             else if (totalMinutes <= morningEndMin) value = "Morning Shift";
                             else if (totalMinutes >= afternoonStartMin) value = "Afternoon Shift";
                             else value = "N/A";
@@ -958,18 +957,12 @@ export default function AttendanceTable() {
                             let label = "";
                             let configTime = "";
                             if (row.event === "time-in" || row.event === "time-out") {
-                              label = "Morning In";
-                              configTime = settings.morning_start;
-                              if (settings.morning_end && settings.afternoon_end) {
-                                const d = new Date(row.device_time);
-                                const minutes = d.getHours() * 60 + d.getMinutes();
-                                const morningEnd = settings.morning_end.split(":").map(Number);
-                                const morningEndMin = morningEnd[0] * 60 + morningEnd[1];
-                                const morningGrace = Number(settings.morning_grace_minutes) || 0;
-                                if (minutes < 3 * 60 || minutes > morningEndMin + morningGrace) {
-                                  label = "Afternoon Out";
-                                  configTime = settings.afternoon_end;
-                                }
+                              if (row.event === "time-in") {
+                                label = "Morning In";
+                                configTime = settings.morning_start;
+                              } else {
+                                label = "Afternoon Out";
+                                configTime = settings.afternoon_end;
                               }
                             } else {
                               value = "N/A";
