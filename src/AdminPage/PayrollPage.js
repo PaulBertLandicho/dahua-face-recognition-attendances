@@ -339,6 +339,11 @@ export default function PayrollPage() {
         parseTime(settingsData.morning_end || "12:00") || 720;
       const schedAfternoonEnd =
         parseTime(settingsData.afternoon_end || "17:00") || 1020;
+      const schedAfternoonGrace = Number.isFinite(
+        Number(settingsData.afternoon_grace_minutes),
+      )
+        ? Number(settingsData.afternoon_grace_minutes)
+        : 0;
       const schedMorningEnd = lunchStart;
 
       const formatYMD = (val) => {
@@ -430,7 +435,7 @@ export default function PayrollPage() {
               const effectiveAOut = aOut < 3 * 60 ? aOut + 24 * 60 : aOut;
               if (effectiveAOut > schedAfternoonEnd) {
                 const otMins = effectiveAOut - schedAfternoonEnd;
-                if (otMins >= 60) dayOtMins += otMins;
+                if (otMins > schedAfternoonGrace) dayOtMins += otMins;
               }
             }
             if (mOut !== null && mOut > schedMorningEnd) {
@@ -460,16 +465,16 @@ export default function PayrollPage() {
           });
 
           basePayroll.daysPresent = Number(attendedDays) || 0;
-          basePayroll.otHours =
-            Number(Math.round(totalOtHours * 100) / 100) || 0;
           const otHourlyRate = Number(
             basePayroll.otHourlyRate ||
               Number(basePayroll.dailyRate || 0) / 8,
           );
           basePayroll.otPay =
             Number(
-              Math.round(otHourlyRate * basePayroll.otHours * 100) / 100,
+              Math.round(otHourlyRate * totalOtHours * 100) / 100,
             ) || 0;
+          basePayroll.otHours =
+            Number(Math.round(totalOtHours * 100) / 100) || 0;
           basePayroll.gross =
             Number(
               Number(basePayroll.dailyRate || 0) * basePayroll.daysPresent +
@@ -1753,6 +1758,11 @@ export default function PayrollPage() {
           const schedMorningStart = sched.morning_start || "08:00";
           const schedMorningEnd = sched.morning_end || "12:00";
           const schedAfternoonEnd = sched.afternoon_end || "17:00";
+          const schedAfternoonGrace = Number.isFinite(
+            Number(sched.afternoon_grace_minutes),
+          )
+            ? Number(sched.afternoon_grace_minutes)
+            : 0;
           (detailedAttendance || []).forEach((rec) => {
             try {
               const mIn =
@@ -1808,7 +1818,7 @@ export default function PayrollPage() {
                 const effectiveAOutMin = aOutMin < 3 * 60 ? aOutMin + 24 * 60 : aOutMin;
                 if (effectiveAOutMin > aEndMin) {
                   const otM = effectiveAOutMin - aEndMin;
-                  if (otM >= 60) totalOtMinutes += otM;
+                  if (otM > schedAfternoonGrace) totalOtMinutes += otM;
                 }
               }
             } catch (e) {}

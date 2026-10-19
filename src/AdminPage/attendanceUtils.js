@@ -120,6 +120,9 @@ export function determineAttendanceStatus(
   const morningGrace = Number.isFinite(Number(settings?.morning_grace_minutes))
     ? Number(settings.morning_grace_minutes)
     : 0;
+  const afternoonGrace = Number.isFinite(Number(settings?.afternoon_grace_minutes))
+    ? Number(settings.afternoon_grace_minutes)
+    : 0;
 
   // Overnight checkout past midnight (< 03:00 AM) is afternoon out overtime unless time-in
   if (nowMinutes < 3 * 60) {
@@ -133,7 +136,7 @@ export function determineAttendanceStatus(
     // System is morning-in / afternoon-out based. Any punch in the afternoon is considered the afternoon out.
     if (nowMinutes < afternoonEnd) {
       return "early-out";
-    } else if (nowMinutes >= afternoonEnd + 60) {
+    } else if (nowMinutes > afternoonEnd + afternoonGrace) {
       return "overtime";
     }
     return "on-time";
@@ -167,7 +170,7 @@ export function getAttendanceStatus(record, settings = {}) {
           afternoon_start: settings.afternoon_start || "13:00",
           afternoon_end: settings.afternoon_end || "17:00",
           morning_grace_minutes: settings.morning_grace_minutes ?? 0,
-          afternoon_grace_minutes: settings.afternoon_grace_minutes ?? 15,
+          afternoon_grace_minutes: settings.afternoon_grace_minutes ?? 0,
         },
       );
     } catch (error) {

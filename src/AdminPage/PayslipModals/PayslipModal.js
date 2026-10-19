@@ -189,6 +189,9 @@ export default function PayslipModal({
       const schedEarlyInLimit = Math.min(schedMorningStart - 60, parseTimeToMinutes("07:00") || 420);
       const schedMorningEnd = sched.morning_end || "12:00";
       const schedAfternoonEnd = sched.afternoon_end || "17:00";
+      const schedAfternoonGrace = Number.isFinite(Number(sched.afternoon_grace_minutes))
+        ? Number(sched.afternoon_grace_minutes)
+        : 0;
       (detailedAttendance || []).forEach((rec) => {
         try {
           const mIn = parseTimeToMinutes(rec.morningIn || rec.attendanceIn);
@@ -219,18 +222,17 @@ export default function PayslipModal({
             typeof aEnd === "number"
           ) {
             const effectiveAOut = aOut < 3 * 60 ? aOut + 24 * 60 : aOut;
-            if (effectiveAOut > aEnd && effectiveAOut - aEnd >= 60) {
+            if (effectiveAOut > aEnd && effectiveAOut - aEnd > schedAfternoonGrace) {
               totalOtMinutesForPdf += effectiveAOut - aEnd;
             }
           }
         } catch (e) {}
       });
     } catch (e) {}
-    const totalOtHoursForPdf =
-      Math.round((totalOtMinutesForPdf / 60) * 100) / 100;
+    const totalOtHoursForPdf = totalOtMinutesForPdf / 60;
     // ensure payroll.otHours is available for older code paths
     try {
-      payroll.otHours = totalOtHoursForPdf;
+      payroll.otHours = Math.round(totalOtHoursForPdf * 100) / 100;
     } catch (e) {}
     await generatePayslipPdf({
       payroll,
@@ -704,6 +706,9 @@ export default function PayslipModal({
     const schedMorningStart = (settings && settings.morning_start) || "08:00";
     const schedMorningEnd = (settings && settings.morning_end) || "12:00";
     const schedAfternoonEnd = (settings && settings.afternoon_end) || "17:00";
+    const schedAfternoonGrace = Number.isFinite(Number(settings && settings.afternoon_grace_minutes))
+      ? Number(settings.afternoon_grace_minutes)
+      : 0;
     const schedMorningStartMin = parseTimeToMinutes(schedMorningStart) || 480;
     const schedEarlyInLimit = Math.min(schedMorningStartMin - 60, parseTimeToMinutes("07:00") || 420);
     const schedMorningEndMin = parseTimeToMinutes(schedMorningEnd);
@@ -720,7 +725,7 @@ export default function PayslipModal({
         const effectiveAOut = aOut < 3 * 60 ? aOut + 24 * 60 : aOut;
         if (effectiveAOut > schedAfternoonEndMin) {
           const mins = effectiveAOut - schedAfternoonEndMin;
-          if (mins >= 60) dynamicOtMinutes += mins;
+          if (mins > schedAfternoonGrace) dynamicOtMinutes += mins;
         }
       }
       if (typeof mOut === "number" && typeof schedMorningEndMin === "number" && mOut > schedMorningEndMin) {
@@ -729,10 +734,9 @@ export default function PayslipModal({
       }
     });
   }
-  // Ensure otHours is rounded to 2 decimals for precision
   const otHours = detailedAttendance && detailedAttendance.length
-    ? Math.round((dynamicOtMinutes / 60) * 100) / 100
-    : Math.round((payroll.otHours ?? 0) * 100) / 100;
+    ? dynamicOtMinutes / 60
+    : Number(payroll.otHours ?? 0);
   // Round OT pay to 2 decimals for display and math
   const otPay = Math.round(hourlyRate * otHours * 100) / 100;
   const deductions = [
@@ -907,6 +911,11 @@ export default function PayslipModal({
                         (settings && settings.morning_end) || "12:00";
                       const scheduledAfternoonEnd =
                         (settings && settings.afternoon_end) || "17:00";
+                      const schedAfternoonGrace = Number.isFinite(
+                        Number(settings && settings.afternoon_grace_minutes),
+                      )
+                        ? Number(settings.afternoon_grace_minutes)
+                        : 0;
                       const schedMorningStartMin =
                         parseTimeToMinutes(scheduledMorningStart) || 480;
                       const schedEarlyInLimit =
@@ -933,7 +942,7 @@ export default function PayslipModal({
                       ) {
                         const earlyMins = schedMorningStartMin - morningInMin;
                         otMinutes += earlyMins;
-                        earlyOtHoursForRow = Math.round((earlyMins / 60) * 100) / 100;
+                        earlyOtHoursForRow = earlyMins / 60;
                       }
 
                       if (
@@ -943,9 +952,9 @@ export default function PayslipModal({
                         const effectiveAfternoonOutMin = afternoonOutMin < 3 * 60 ? afternoonOutMin + 24 * 60 : afternoonOutMin;
                         if (effectiveAfternoonOutMin > schedAfternoonEndMin) {
                           const mins = effectiveAfternoonOutMin - schedAfternoonEndMin;
-                          if (mins >= 60) {
+                          if (mins > schedAfternoonGrace) {
                             otMinutes += mins;
-                            afterOtHoursForRow = Math.round((mins / 60) * 100) / 100;
+                            afterOtHoursForRow = mins / 60;
                           }
                         }
                       }
@@ -962,7 +971,7 @@ export default function PayslipModal({
                       otMinutes = 0;
                     }
 
-                    const recOtHours = Math.round((otMinutes / 60) * 100) / 100;
+                    const recOtHours = otMinutes / 60;
 
                     // Daily Salary and Late Deduction calculations
                     const baseDailyRate = Number(payroll.dailyRate ?? person.daily_rate ?? 0);
@@ -1110,6 +1119,11 @@ export default function PayslipModal({
                       const scheduledMorningStart = (settings && settings.morning_start) || "08:00";
                       const scheduledMorningEnd = (settings && settings.morning_end) || "12:00";
                       const scheduledAfternoonEnd = (settings && settings.afternoon_end) || "17:00";
+                      const schedAfternoonGrace = Number.isFinite(
+                        Number(settings && settings.afternoon_grace_minutes),
+                      )
+                        ? Number(settings.afternoon_grace_minutes)
+                        : 0;
                       const schedMorningStartMin = parseTimeToMinutes(scheduledMorningStart) || 480;
                       const schedEarlyInLimit = Math.min(schedMorningStartMin - 60, parseTimeToMinutes("07:00") || 420);
                       const morningInMin = parseTimeToMinutes(rec.attendanceIn || rec.morningIn);
@@ -1130,7 +1144,7 @@ export default function PayslipModal({
                         const effectiveAfternoonOutMin = afternoonOutMin < 3 * 60 ? afternoonOutMin + 24 * 60 : afternoonOutMin;
                         if (effectiveAfternoonOutMin > schedAfternoonEndMin) {
                           const mins = effectiveAfternoonOutMin - schedAfternoonEndMin;
-                          if (mins >= 60) otM += mins;
+                          if (mins > schedAfternoonGrace) otM += mins;
                         }
                       }
                       const morningOutMin = parseTimeToMinutes(rec.morningOut);
@@ -1141,7 +1155,7 @@ export default function PayslipModal({
                       }
                     } catch (e) {}
 
-                    const otHrs = Math.round((otM / 60) * 100) / 100;
+                    const otHrs = otM / 60;
                     const baseSalary = Math.round(baseDailyRate * frac * 100) / 100;
                     const otPay = Math.round(otHrs * hourlyRateForDaily * 100) / 100;
                     const lCalc = calculateTieredLateDeduction(

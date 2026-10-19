@@ -52,6 +52,9 @@ export function calculatePayroll(
     const afternoonEnd = settings.afternoon_end || "17:00";
     const [endHour, endMinute] = afternoonEnd.split(":").map(Number);
     const endTotal = (endHour || 17) * 60 + (endMinute || 0);
+    const afternoonGrace = Number.isFinite(Number(settings.afternoon_grace_minutes))
+      ? Number(settings.afternoon_grace_minutes)
+      : 0;
 
     // 1. Early-in OT: 3:00 AM up to 7:00 AM
     attendance
@@ -64,7 +67,7 @@ export function calculatePayroll(
         }
       });
 
-    // 2. Afternoon Out OT (past afternoonEnd, including past midnight < 3:00 AM)
+    // 2. Afternoon Out OT (past afternoonEnd + afternoonGrace, e.g. 5:01 PM when grace is 0)
     attendance
       .filter(
         (a) =>
@@ -79,14 +82,14 @@ export function calculatePayroll(
         }
         if (outTotal > endTotal) {
           const otMins = outTotal - endTotal;
-          if (otMins >= 60) {
+          if (otMins > afternoonGrace) {
             otHours += otMins / 60;
           }
         }
       });
 
-    otHours = Math.round(otHours * 100) / 100;
     const otPay = Math.round(otHourlyRate * otHours * 100) / 100;
+    otHours = Math.round(otHours * 100) / 100;
 
     // --- End OT Calculation ---
 

@@ -10,7 +10,7 @@ const DEFAULT_SETTINGS = {
   afternoon_start: "13:00",
   afternoon_end: "17:00",
   morning_grace_minutes: 0,
-  afternoon_grace_minutes: 15,
+  afternoon_grace_minutes: 0,
   late_count_limit: 5,
   payroll_period_days: 15,
   late_base_fee: 40,

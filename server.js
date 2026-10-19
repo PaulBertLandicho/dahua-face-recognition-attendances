@@ -240,14 +240,16 @@ async function recordDeviceSyncStatus({ type, success, error = null }) {
         DECLARE configured_morning_end TIME DEFAULT '11:59:00';
         DECLARE configured_afternoon_start TIME DEFAULT '13:00:00';
         DECLARE configured_afternoon_end TIME DEFAULT '17:00:00';
-        DECLARE configured_morning_grace INT DEFAULT 15;
+        DECLARE configured_morning_grace INT DEFAULT 0;
+        DECLARE configured_afternoon_grace INT DEFAULT 0;
 
         SELECT COALESCE(morning_start, '08:00:00'),
                COALESCE(morning_end, '11:59:00'),
                COALESCE(afternoon_start, '13:00:00'),
                COALESCE(afternoon_end, '17:00:00'),
-               COALESCE(morning_grace_minutes, 15)
-          INTO configured_morning_start, configured_morning_end, configured_afternoon_start, configured_afternoon_end, configured_morning_grace
+               COALESCE(morning_grace_minutes, 0),
+               COALESCE(afternoon_grace_minutes, 0)
+          INTO configured_morning_start, configured_morning_end, configured_afternoon_start, configured_afternoon_end, configured_morning_grace, configured_afternoon_grace
           FROM settings ORDER BY id LIMIT 1;
 
         IF TIME(NEW.device_time) < '03:00:00' THEN
@@ -268,7 +270,7 @@ async function recordDeviceSyncStatus({ type, success, error = null }) {
           IF NEW.status IS NULL OR NEW.status = '' OR NEW.status = 'present' OR NEW.status = 'on-time' THEN
             IF TIME(NEW.device_time) < configured_morning_start THEN
               SET NEW.status = 'early-in';
-            ELSEIF TIME(NEW.device_time) <= ADDTIME(configured_morning_start, SEC_TO_TIME(configured_morning_grace * 60)) THEN
+            ELSEIF TIME(NEW.device_time) < ADDTIME(configured_morning_start, SEC_TO_TIME((configured_morning_grace + 1) * 60)) THEN
               SET NEW.status = 'on-time';
             ELSE
               SET NEW.status = 'late';
@@ -281,7 +283,7 @@ async function recordDeviceSyncStatus({ type, success, error = null }) {
           IF NEW.status IS NULL OR NEW.status = '' OR NEW.status = 'present' OR NEW.status = 'on-time' THEN
             IF TIME(NEW.device_time) < configured_afternoon_end THEN
               SET NEW.status = 'early-out';
-            ELSEIF TIME(NEW.device_time) >= ADDTIME(configured_afternoon_end, '01:00:00') THEN
+            ELSEIF TIME(NEW.device_time) >= ADDTIME(configured_afternoon_end, SEC_TO_TIME((configured_afternoon_grace + 1) * 60)) THEN
               SET NEW.status = 'overtime';
             ELSE
               SET NEW.status = 'on-time';
@@ -304,14 +306,16 @@ async function recordDeviceSyncStatus({ type, success, error = null }) {
         DECLARE configured_morning_end TIME DEFAULT '11:59:00';
         DECLARE configured_afternoon_start TIME DEFAULT '13:00:00';
         DECLARE configured_afternoon_end TIME DEFAULT '17:00:00';
-        DECLARE configured_morning_grace INT DEFAULT 15;
+        DECLARE configured_morning_grace INT DEFAULT 0;
+        DECLARE configured_afternoon_grace INT DEFAULT 0;
 
         SELECT COALESCE(morning_start, '08:00:00'),
                COALESCE(morning_end, '11:59:00'),
                COALESCE(afternoon_start, '13:00:00'),
                COALESCE(afternoon_end, '17:00:00'),
-               COALESCE(morning_grace_minutes, 15)
-          INTO configured_morning_start, configured_morning_end, configured_afternoon_start, configured_afternoon_end, configured_morning_grace
+               COALESCE(morning_grace_minutes, 0),
+               COALESCE(afternoon_grace_minutes, 0)
+          INTO configured_morning_start, configured_morning_end, configured_afternoon_start, configured_afternoon_end, configured_morning_grace, configured_afternoon_grace
           FROM settings ORDER BY id LIMIT 1;
 
         IF TIME(NEW.device_time) < '03:00:00' THEN
@@ -332,7 +336,7 @@ async function recordDeviceSyncStatus({ type, success, error = null }) {
           IF NEW.status IS NULL OR NEW.status = '' OR NEW.status = OLD.status OR NEW.status = 'present' OR NEW.status = 'on-time' THEN
             IF TIME(NEW.device_time) < configured_morning_start THEN
               SET NEW.status = 'early-in';
-            ELSEIF TIME(NEW.device_time) <= ADDTIME(configured_morning_start, SEC_TO_TIME(configured_morning_grace * 60)) THEN
+            ELSEIF TIME(NEW.device_time) < ADDTIME(configured_morning_start, SEC_TO_TIME((configured_morning_grace + 1) * 60)) THEN
               SET NEW.status = 'on-time';
             ELSE
               SET NEW.status = 'late';
@@ -345,7 +349,7 @@ async function recordDeviceSyncStatus({ type, success, error = null }) {
           IF NEW.status IS NULL OR NEW.status = '' OR NEW.status = OLD.status OR NEW.status = 'present' OR NEW.status = 'on-time' THEN
             IF TIME(NEW.device_time) < configured_afternoon_end THEN
               SET NEW.status = 'early-out';
-            ELSEIF TIME(NEW.device_time) >= ADDTIME(configured_afternoon_end, '01:00:00') THEN
+            ELSEIF TIME(NEW.device_time) >= ADDTIME(configured_afternoon_end, SEC_TO_TIME((configured_afternoon_grace + 1) * 60)) THEN
               SET NEW.status = 'overtime';
             ELSE
               SET NEW.status = 'on-time';
@@ -712,6 +716,9 @@ function dedupeDahuaAttendanceByPersonDay(records, settings = null) {
   const morningGrace = Number.isFinite(Number(settings?.morning_grace_minutes))
     ? Number(settings.morning_grace_minutes)
     : 0;
+  const afternoonGrace = Number.isFinite(Number(settings?.afternoon_grace_minutes))
+    ? Number(settings.afternoon_grace_minutes)
+    : 0;
 
   // Helper: extract HH:MM minutes from a local time string "YYYY-MM-DD HH:MM:SS"
   function minutesFromLocalTime(deviceTime) {
@@ -768,7 +775,7 @@ function dedupeDahuaAttendanceByPersonDay(records, settings = null) {
       event = "time-out";
       if (mins < afternoonEnd) {
         status = "early-out";
-      } else if (mins >= afternoonEnd + 60) {
+      } else if (mins > afternoonEnd + afternoonGrace) {
         status = "overtime";
       } else {
         status = "on-time";
