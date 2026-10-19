@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback } from "react";
+import React, { useEffect, useState, useCallback, useRef } from "react";
 import Swal from "sweetalert2";
 import { calculatePayroll, calculateTieredLateDeduction } from "./Payroll";
 import PayslipModal from "../AdminPage/PayslipModals/PayslipModal";
@@ -25,9 +25,154 @@ import {
   FiCheckCircle,
   FiSend,
   FiClock,
+  FiArrowUp,
+  FiArrowDown,
 } from "react-icons/fi";
 
 import { supabase } from "../mysqlClient";
+
+const MONTH_NAMES = [
+  "January",
+  "February",
+  "March",
+  "April",
+  "May",
+  "June",
+  "July",
+  "August",
+  "September",
+  "October",
+  "November",
+  "December",
+];
+
+function formatDisplayDate(ymd) {
+  if (!ymd) return "mm/dd/yyyy";
+  const parts = String(ymd).split("-");
+  if (parts.length !== 3) return ymd;
+  return `${parts[1]}/${parts[2]}/${parts[0]}`;
+}
+
+function InlineCalendarPopup({ value, viewDate, onViewDateChange, onSelectDate, onClear, onToday }) {
+  const year = viewDate.getFullYear();
+  const month = viewDate.getMonth();
+  const pad = (n) => String(n).padStart(2, "0");
+
+  const now = new Date();
+  const todayStr = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+
+  const firstDayOfWeek = new Date(year, month, 1).getDay();
+  const daysInMonth = new Date(year, month + 1, 0).getDate();
+  const prevMonthDays = new Date(year, month, 0).getDate();
+
+  const cells = [];
+  for (let i = firstDayOfWeek - 1; i >= 0; i--) {
+    const d = prevMonthDays - i;
+    const prevDate = new Date(year, month - 1, d);
+    const dateStr = `${prevDate.getFullYear()}-${pad(prevDate.getMonth() + 1)}-${pad(prevDate.getDate())}`;
+    cells.push({ day: d, dateStr, inMonth: false });
+  }
+  for (let d = 1; d <= daysInMonth; d++) {
+    const dateStr = `${year}-${pad(month + 1)}-${pad(d)}`;
+    cells.push({ day: d, dateStr, inMonth: true });
+  }
+  const remaining = 42 - cells.length;
+  for (let d = 1; d <= remaining; d++) {
+    const nextDate = new Date(year, month + 1, d);
+    const dateStr = `${nextDate.getFullYear()}-${pad(nextDate.getMonth() + 1)}-${pad(nextDate.getDate())}`;
+    cells.push({ day: d, dateStr, inMonth: false });
+  }
+
+  return (
+    <div
+      className="absolute top-[calc(100%+4px)] left-0 w-[224px] bg-white border border-gray-300 rounded-md shadow-[0_8px_24px_rgba(0,0,0,0.14)] p-3 z-50 select-none"
+      onClick={(e) => e.stopPropagation()}
+    >
+      {/* Header */}
+      <div className="flex items-center justify-between mb-2.5 px-1">
+        <div className="text-[13px] font-bold text-gray-900 flex items-center gap-1">
+          <span>
+            {MONTH_NAMES[month]} {year}
+          </span>
+          <span className="text-[10px] text-gray-600">▾</span>
+        </div>
+        <div className="flex items-center gap-1.5">
+          <button
+            type="button"
+            onClick={() => onViewDateChange(new Date(year, month - 1, 1))}
+            title="Previous month"
+            className="p-1 text-gray-700 hover:bg-gray-100 rounded border-none bg-transparent cursor-pointer inline-flex items-center justify-center"
+          >
+            <FiArrowUp size={14} />
+          </button>
+          <button
+            type="button"
+            onClick={() => onViewDateChange(new Date(year, month + 1, 1))}
+            title="Next month"
+            className="p-1 text-gray-700 hover:bg-gray-100 rounded border-none bg-transparent cursor-pointer inline-flex items-center justify-center"
+          >
+            <FiArrowDown size={14} />
+          </button>
+        </div>
+      </div>
+
+      {/* Weekdays */}
+      <div className="grid grid-cols-7 text-center text-[11px] font-medium text-gray-700 mb-1">
+        <div>Su</div>
+        <div>Mo</div>
+        <div>Tu</div>
+        <div>We</div>
+        <div>Th</div>
+        <div>Fr</div>
+        <div>Sa</div>
+      </div>
+
+      {/* Days Grid */}
+      <div className="grid grid-cols-7 gap-y-0.5 text-center">
+        {cells.map((cell) => {
+          const isSelected = value === cell.dateStr;
+          const isToday = todayStr === cell.dateStr;
+          return (
+            <button
+              key={cell.dateStr}
+              type="button"
+              onClick={() => onSelectDate(cell.dateStr)}
+              className={`h-7 w-7 mx-auto text-[12px] flex items-center justify-center rounded-sm cursor-pointer border transition-colors ${
+                isSelected
+                  ? "!bg-[#005fb8] !text-white !border-[#005fb8] font-bold"
+                  : isToday
+                    ? "bg-white text-gray-900 border-gray-700 font-semibold hover:bg-gray-100"
+                    : cell.inMonth
+                      ? "bg-transparent text-gray-900 border-transparent hover:bg-gray-100"
+                      : "bg-transparent text-gray-400 border-transparent hover:bg-gray-50"
+              }`}
+            >
+              {cell.day}
+            </button>
+          );
+        })}
+      </div>
+
+      {/* Footer */}
+      <div className="flex items-center justify-between mt-2.5 pt-1.5 px-1 text-[12px]">
+        <button
+          type="button"
+          onClick={onClear}
+          className="text-[#005fb8] hover:underline bg-transparent border-none p-0 cursor-pointer font-medium"
+        >
+          Clear
+        </button>
+        <button
+          type="button"
+          onClick={() => onToday(todayStr, now)}
+          className="text-[#005fb8] hover:underline bg-transparent border-none p-0 cursor-pointer font-medium"
+        >
+          Today
+        </button>
+      </div>
+    </div>
+  );
+}
 
 export default function PayrollPage() {
   const [persons, setPersons] = useState([]);
@@ -53,6 +198,37 @@ export default function PayrollPage() {
   const [endDate, setEndDate] = useState("");
   const [isRecalculating, setIsRecalculating] = useState(false);
   const [releasingAll, setReleasingAll] = useState(false);
+  const [openPickers, setOpenPickers] = useState({ from: false, to: false });
+  const [fromViewDate, setFromViewDate] = useState(() => new Date());
+  const [toViewDate, setToViewDate] = useState(() => new Date());
+  const datePickerContainerRef = useRef(null);
+
+  useEffect(() => {
+    if (startDate) {
+      const [y, m] = startDate.split("-").map(Number);
+      if (y && m) setFromViewDate(new Date(y, m - 1, 1));
+    }
+  }, [startDate]);
+
+  useEffect(() => {
+    if (endDate) {
+      const [y, m] = endDate.split("-").map(Number);
+      if (y && m) setToViewDate(new Date(y, m - 1, 1));
+    }
+  }, [endDate]);
+
+  useEffect(() => {
+    const handleClickOutside = (e) => {
+      if (
+        datePickerContainerRef.current &&
+        !datePickerContainerRef.current.contains(e.target)
+      ) {
+        setOpenPickers({ from: false, to: false });
+      }
+    };
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
 
   // Expenses Modal State
   const [showExpensesModal, setShowExpensesModal] = useState(false);
@@ -589,29 +765,51 @@ export default function PayrollPage() {
   }, [computePayrollForPeriod]);
 
   // Quick Preset Selection Handlers
-  const handlePresetCutoff = (type) => {
-    let baseDate = new Date();
-    if (startDate) {
-      const parsed = new Date(startDate);
-      if (!isNaN(parsed.getTime())) baseDate = parsed;
+  const parseYmdParts = (dateStr) => {
+    if (!dateStr) return null;
+    const parts = String(dateStr).split("-").map(Number);
+    if (parts.length !== 3 || parts.some((n) => !Number.isFinite(n))) return null;
+    return { year: parts[0], month: parts[1] - 1, day: parts[2] };
+  };
+
+  const getOrdinalDay = (n) => {
+    const s = ["th", "st", "nd", "rd"];
+    const v = n % 100;
+    return `${n}${s[(v - 20) % 10] || s[v] || s[0]}`;
+  };
+
+  const activeMonthLastDay = (() => {
+    const parsed = parseYmdParts(startDate) || parseYmdParts(endDate);
+    if (parsed) {
+      return new Date(parsed.year, parsed.month + 1, 0).getDate();
     }
-    const year = baseDate.getFullYear();
-    const month = baseDate.getMonth();
+    const now = new Date();
+    return new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
+  })();
+
+  const handlePresetCutoff = (type) => {
+    const parsed = parseYmdParts(startDate) || parseYmdParts(endDate);
+    const now = new Date();
+    const year = parsed ? parsed.year : now.getFullYear();
+    const month = parsed ? parsed.month : now.getMonth();
     const pad = (n) => String(n).padStart(2, "0");
     const yStr = String(year);
     const mStr = pad(month + 1);
+    const lastDay = new Date(year, month + 1, 0).getDate();
 
     let s = "";
     let e = "";
     if (type === "1-15") {
       s = `${yStr}-${mStr}-01`;
       e = `${yStr}-${mStr}-15`;
-    } else if (type === "16-end") {
-      const lastDay = new Date(year, month + 1, 0).getDate();
+    } else if (type === "16-30") {
+      const endDay = Math.min(30, lastDay);
+      s = `${yStr}-${mStr}-16`;
+      e = `${yStr}-${mStr}-${pad(endDay)}`;
+    } else if (type === "16-31" || type === "16-end") {
       s = `${yStr}-${mStr}-16`;
       e = `${yStr}-${mStr}-${pad(lastDay)}`;
     } else if (type === "month") {
-      const lastDay = new Date(year, month + 1, 0).getDate();
       s = `${yStr}-${mStr}-01`;
       e = `${yStr}-${mStr}-${pad(lastDay)}`;
     }
@@ -622,14 +820,11 @@ export default function PayrollPage() {
   };
 
   const handlePrevPeriod = () => {
-    let baseDate = new Date();
-    if (startDate) {
-      const parsed = new Date(startDate);
-      if (!isNaN(parsed.getTime())) baseDate = parsed;
-    }
-    const day = baseDate.getDate();
-    const year = baseDate.getFullYear();
-    const month = baseDate.getMonth();
+    const parsed = parseYmdParts(startDate);
+    const now = new Date();
+    const year = parsed ? parsed.year : now.getFullYear();
+    const month = parsed ? parsed.month : now.getMonth();
+    const day = parsed ? parsed.day : now.getDate();
     const pad = (n) => String(n).padStart(2, "0");
 
     let s = "";
@@ -652,14 +847,11 @@ export default function PayrollPage() {
   };
 
   const handleNextPeriod = () => {
-    let baseDate = new Date();
-    if (startDate) {
-      const parsed = new Date(startDate);
-      if (!isNaN(parsed.getTime())) baseDate = parsed;
-    }
-    const day = baseDate.getDate();
-    const year = baseDate.getFullYear();
-    const month = baseDate.getMonth();
+    const parsed = parseYmdParts(startDate);
+    const now = new Date();
+    const year = parsed ? parsed.year : now.getFullYear();
+    const month = parsed ? parsed.month : now.getMonth();
+    const day = parsed ? parsed.day : now.getDate();
     const pad = (n) => String(n).padStart(2, "0");
 
     let s = "";
@@ -691,6 +883,8 @@ export default function PayrollPage() {
     if (sy !== ey || sm !== em) return false;
     const lastDay = new Date(sy, sm, 0).getDate();
     if (type === "1-15") return sd === 1 && ed === 15;
+    if (type === "16-30") return sd === 16 && ed === 30;
+    if (type === "16-31") return sd === 16 && ed === 31;
     if (type === "16-end") return sd === 16 && ed === lastDay;
     if (type === "month") return sd === 1 && ed === lastDay;
     return false;
@@ -1538,13 +1732,17 @@ export default function PayrollPage() {
           },
         ];
 
-        const lateCountLimit =
-          payroll.lateCountLimit || payroll.late_count_limit || 5;
-        const latePenalty = person.late_penalty || 0;
-        const lateDeduction =
-          payroll.lateCount >= lateCountLimit
-            ? payroll.lateCount * latePenalty
-            : 0;
+        const lateDeduction = Number(
+          payroll.totalLateDeduction ??
+            calculateTieredLateDeduction({
+              detailedAttendance: detailedAttendance || [],
+              lateCount: Number(payroll.lateCount || 0),
+              dailyRate: Number(payroll.dailyRate || 0),
+              employeeLatePenalty: Number(person.late_penalty || 0),
+              settings: payroll.settings || {},
+            }).totalLateDeduction ??
+            0,
+        );
         const totalDeductions =
           lateDeduction + deductions.reduce((acc, d) => acc + d.value, 0);
 
@@ -1820,81 +2018,96 @@ export default function PayrollPage() {
               </p>
             </div>
           </div>
-
-          {/* Quick Cutoff Preset Controls */}
-          <div className="flex flex-wrap items-center gap-2">
-            <button
-              type="button"
-              onClick={handlePrevPeriod}
-              title="Previous Period"
-              className="p-2 rounded-lg border border-gray-300 bg-white text-gray-700 hover:bg-gray-50 cursor-pointer text-xs font-semibold inline-flex items-center transition-colors"
-            >
-              <FiChevronLeft size={16} />
-            </button>
-            <button
-              type="button"
-              onClick={() => handlePresetCutoff("1-15")}
-              className={`px-3 py-1.5 rounded-lg text-xs font-semibold cursor-pointer border transition-colors ${
-                isPresetActive("1-15")
-                  ? "!bg-[#237227] !text-white !border-[#237227]"
-                  : "bg-white text-gray-700 border-gray-300 hover:bg-gray-50"
-              }`}
-            >
-              1st – 15th
-            </button>
-            <button
-              type="button"
-              onClick={() => handlePresetCutoff("16-end")}
-              className={`px-3 py-1.5 rounded-lg text-xs font-semibold cursor-pointer border transition-colors ${
-                isPresetActive("16-end")
-                  ? "!bg-[#237227] !text-white !border-[#237227]"
-                  : "bg-white text-gray-700 border-gray-300 hover:bg-gray-50"
-              }`}
-            >
-              16th – End
-            </button>
-            <button
-              type="button"
-              onClick={() => handlePresetCutoff("month")}
-              className={`px-3 py-1.5 rounded-lg text-xs font-semibold cursor-pointer border transition-colors ${
-                isPresetActive("month")
-                  ? "!bg-[#237227] !text-white !border-[#237227]"
-                  : "bg-white text-gray-700 border-gray-300 hover:bg-gray-50"
-              }`}
-            >
-              Full Month
-            </button>
-            <button
-              type="button"
-              onClick={handleNextPeriod}
-              title="Next Period"
-              className="p-2 rounded-lg border border-gray-300 bg-white text-gray-700 hover:bg-gray-50 cursor-pointer text-xs font-semibold inline-flex items-center transition-colors"
-            >
-              <FiChevronRight size={16} />
-            </button>
-          </div>
         </div>
 
-        {/* Date Inputs, Recalculate button & options */}
-        <div className="mt-4 pt-3.5 border-t border-gray-100 flex flex-wrap items-center justify-between gap-4">
-          <div className="flex flex-wrap items-center gap-3">
+        {/* Date Inputs, Recalculate button & Cutoff Preset Dropdown */}
+        <div className="mt-4 pt-3.5 border-t border-gray-100 flex flex-col items-start gap-3">
+          <div className="flex flex-wrap items-center gap-3" ref={datePickerContainerRef}>
             <div className="flex items-center gap-2">
               <label className="text-xs font-bold uppercase text-gray-600 tracking-wider">From:</label>
-              <input
-                type="date"
-                value={startDate}
-                onChange={(e) => setStartDate(e.target.value)}
-                className="py-1.5 px-3 text-sm rounded-lg border border-gray-300 bg-white text-gray-800 outline-none focus:border-[#237227]"
-              />
+              <div className="relative">
+                <button
+                  type="button"
+                  onClick={() =>
+                    setOpenPickers((prev) => ({ from: !prev.from, to: false }))
+                  }
+                  className="w-[170px] py-1.5 px-3 text-sm rounded-lg border border-gray-300 bg-white text-gray-800 outline-none hover:border-[#237227] flex items-center justify-between cursor-pointer font-normal"
+                >
+                  <span>{formatDisplayDate(startDate)}</span>
+                  <FiCalendar className="text-gray-600 shrink-0" size={15} />
+                </button>
+                {openPickers.from && (
+                  <InlineCalendarPopup
+                    value={startDate}
+                    viewDate={fromViewDate}
+                    onViewDateChange={setFromViewDate}
+                    onSelectDate={(dateStr) => {
+                      setStartDate(dateStr);
+                      const parsed = parseYmdParts(dateStr);
+                      if (parsed) {
+                        const pad = (n) => String(n).padStart(2, "0");
+                        const lastDay = new Date(parsed.year, parsed.month + 1, 0).getDate();
+                        setToViewDate(new Date(parsed.year, parsed.month, 1));
+                        const endParsed = parseYmdParts(endDate);
+                        if (parsed.day === 16) {
+                          setEndDate(`${parsed.year}-${pad(parsed.month + 1)}-${pad(lastDay)}`);
+                        } else if (parsed.day === 1 && endParsed && endParsed.day === 15) {
+                          setEndDate(`${parsed.year}-${pad(parsed.month + 1)}-15`);
+                        } else if (
+                          endParsed &&
+                          (endParsed.day >= 28 ||
+                            endParsed.month !== parsed.month ||
+                            endParsed.year !== parsed.year)
+                        ) {
+                          const clampedDay =
+                            endParsed.day >= 28 ? lastDay : Math.min(endParsed.day, lastDay);
+                          setEndDate(`${parsed.year}-${pad(parsed.month + 1)}-${pad(clampedDay)}`);
+                        }
+                      }
+                      setOpenPickers({ from: false, to: true });
+                    }}
+                    onClear={() => setStartDate("")}
+                    onToday={(todayStr, now) => {
+                      setStartDate(todayStr);
+                      setFromViewDate(new Date(now.getFullYear(), now.getMonth(), 1));
+                      setToViewDate(new Date(now.getFullYear(), now.getMonth(), 1));
+                      setOpenPickers({ from: false, to: true });
+                    }}
+                  />
+                )}
+              </div>
             </div>
             <div className="flex items-center gap-2">
               <label className="text-xs font-bold uppercase text-gray-600 tracking-wider">To:</label>
-              <input
-                type="date"
-                value={endDate}
-                onChange={(e) => setEndDate(e.target.value)}
-                className="py-1.5 px-3 text-sm rounded-lg border border-gray-300 bg-white text-gray-800 outline-none focus:border-[#237227]"
-              />
+              <div className="relative">
+                <button
+                  type="button"
+                  onClick={() =>
+                    setOpenPickers((prev) => ({ from: false, to: !prev.to }))
+                  }
+                  className="w-[170px] py-1.5 px-3 text-sm rounded-lg border border-gray-300 bg-white text-gray-800 outline-none hover:border-[#237227] flex items-center justify-between cursor-pointer font-normal"
+                >
+                  <span>{formatDisplayDate(endDate)}</span>
+                  <FiCalendar className="text-gray-600 shrink-0" size={15} />
+                </button>
+                {openPickers.to && (
+                  <InlineCalendarPopup
+                    value={endDate}
+                    viewDate={toViewDate}
+                    onViewDateChange={setToViewDate}
+                    onSelectDate={(dateStr) => {
+                      setEndDate(dateStr);
+                      setOpenPickers({ from: false, to: false });
+                    }}
+                    onClear={() => setEndDate("")}
+                    onToday={(todayStr, now) => {
+                      setEndDate(todayStr);
+                      setToViewDate(new Date(now.getFullYear(), now.getMonth(), 1));
+                      setOpenPickers({ from: false, to: false });
+                    }}
+                  />
+                )}
+              </div>
             </div>
             <button
               type="button"
@@ -1905,10 +2118,61 @@ export default function PayrollPage() {
               <FiRefreshCw className={isRecalculating ? "animate-spin" : ""} size={14} />
               {isRecalculating ? "Calculating..." : "Apply Period"}
             </button>
+
+            {/* Quick Cutoff Preset Dropdown on the right side of Apply Period */}
+            <div className="flex items-center gap-1.5">
+              <button
+                type="button"
+                onClick={handlePrevPeriod}
+                title="Previous Period"
+                className="p-2 rounded-lg border border-gray-300 bg-white text-gray-700 hover:bg-gray-50 cursor-pointer text-xs font-semibold inline-flex items-center transition-colors"
+              >
+                <FiChevronLeft size={16} />
+              </button>
+              <select
+                value={
+                  isPresetActive("1-15")
+                    ? "1-15"
+                    : isPresetActive("16-30")
+                      ? "16-30"
+                      : isPresetActive("16-31")
+                        ? "16-31"
+                        : isPresetActive("month")
+                          ? "month"
+                          : "custom"
+                }
+                onChange={(e) => {
+                  if (e.target.value !== "custom") {
+                    handlePresetCutoff(e.target.value);
+                  }
+                }}
+                aria-label="Select cutoff preset"
+                className="py-1.5 px-3 text-sm rounded-lg border border-gray-300 bg-white text-gray-800 font-semibold cursor-pointer outline-none focus:border-[#237227]"
+              >
+                <option value="1-15">1st – 15th</option>
+                <option value="16-30">16th – 30th</option>
+                <option value="16-31">16th – 31st</option>
+                <option value="month">Full Month (1st – {getOrdinalDay(activeMonthLastDay)})</option>
+                {!isPresetActive("1-15") &&
+                  !isPresetActive("16-30") &&
+                  !isPresetActive("16-31") &&
+                  !isPresetActive("month") && (
+                    <option value="custom">Custom Range</option>
+                  )}
+              </select>
+              <button
+                type="button"
+                onClick={handleNextPeriod}
+                title="Next Period"
+                className="p-2 rounded-lg border border-gray-300 bg-white text-gray-700 hover:bg-gray-50 cursor-pointer text-xs font-semibold inline-flex items-center transition-colors"
+              >
+                <FiChevronRight size={16} />
+              </button>
+            </div>
           </div>
 
-          {/* Active Period Display Badge */}
-          <div className="bg-[#237227]/10 text-[#237227] px-3.5 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5">
+          {/* Active Period Display Badge below the controls */}
+          <div className="bg-[#237227]/10 text-[#237227] px-3.5 py-1.5 rounded-lg text-xs font-bold inline-flex items-center gap-1.5">
             <FiCheckCircle size={14} />
             <span>Active Period: {formatPeriod(`${startDate}_to_${endDate}`)}</span>
           </div>

@@ -1235,7 +1235,7 @@ export default function PersonsTable() {
                   )}
                   <button
                     onClick={() => handleDeletePerson(p)}
-                    className="w-full py-1.5 px-3 rounded-md bg-red-50 hover:bg-red-100 text-red-600 text-xs font-semibold transition-colors cursor-pointer border border-red-200 focus:outline-none"
+                    className="w-full py-1.5 px-3 rounded-md bg-[#D9361E] text-white text-xs font-semibold cursor-pointer border-none focus:outline-none"
                   >
                     Delete
                   </button>

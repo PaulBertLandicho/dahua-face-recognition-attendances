@@ -204,6 +204,12 @@ async function recordDeviceSyncStatus({ type, success, error = null }) {
   try {
     const [cols] = await pool.query("SHOW COLUMNS FROM settings");
     const colNames = (cols || []).map((c) => c.Field);
+    if (!colNames.includes("late_base_fee")) {
+      await pool.query("ALTER TABLE settings ADD COLUMN late_base_fee DECIMAL(10,2) NOT NULL DEFAULT 40.00");
+    }
+    if (!colNames.includes("late_per_minute_fee")) {
+      await pool.query("ALTER TABLE settings ADD COLUMN late_per_minute_fee DECIMAL(10,2) NOT NULL DEFAULT 1.00");
+    }
     if (!colNames.includes("late_tier_minor_fee")) {
       await pool.query("ALTER TABLE settings ADD COLUMN late_tier_minor_fee DECIMAL(10,2) NOT NULL DEFAULT 10.00");
     }
@@ -703,7 +709,9 @@ function dedupeDahuaAttendanceByPersonDay(records, settings = null) {
   const morningEnd = parseHHMMToMinutes(settings?.morning_end || "11:59", 11 * 60 + 59);
   const afternoonStart = parseHHMMToMinutes(settings?.afternoon_start || "13:00", 13 * 60);
   const afternoonEnd = parseHHMMToMinutes(settings?.afternoon_end || "17:00", 17 * 60);
-  const morningGrace = Number(settings?.morning_grace_minutes) || 15;
+  const morningGrace = Number.isFinite(Number(settings?.morning_grace_minutes))
+    ? Number(settings.morning_grace_minutes)
+    : 0;
 
   // Helper: extract HH:MM minutes from a local time string "YYYY-MM-DD HH:MM:SS"
   function minutesFromLocalTime(deviceTime) {
@@ -881,12 +889,18 @@ async function generatePayrollPeriodsFromAttendance(attendanceRows = []) {
         );
 
         const morningStart = Number((settings?.morning_start || "08:00").split(":")[0] || 8) * 60 + Number((settings?.morning_start || "08:00").split(":")[1] || 0);
-        const morningGrace = Number(settings?.morning_grace_minutes || 15);
+        const morningGrace = Number.isFinite(Number(settings?.morning_grace_minutes))
+          ? Number(settings.morning_grace_minutes)
+          : 0;
         const afternoonStart = Number((settings?.afternoon_start || "13:00").split(":")[0] || 13) * 60 + Number((settings?.afternoon_start || "13:00").split(":")[1] || 0);
         const afternoonGrace = Number(settings?.afternoon_grace_minutes || 15);
         const afternoonEnd = Number((settings?.afternoon_end || "17:00").split(":")[0] || 17) * 60 + Number((settings?.afternoon_end || "17:00").split(":")[1] || 0);
 
+        const lateBaseFee = Number(settings?.late_base_fee ?? 40);
+        const latePerMinuteFee = Number(settings?.late_per_minute_fee ?? 1);
+
         let lateCount = 0;
+        let totalLateDeduction = 0;
         let daysPresent = 0;
         
         for (const dateKey of uniqueDates) {
@@ -911,12 +925,11 @@ async function generatePayrollPeriodsFromAttendance(attendanceRows = []) {
             // Only apply late penalties for days they are actually paid for
             const morningDt = new Date(morningRecord.device_time);
             const morningMinutes = morningDt.getHours() * 60 + morningDt.getMinutes();
-            if (morningMinutes > morningStart + morningGrace) lateCount += 1;
-            
-            const afternoonDt = new Date(afternoonRecord.device_time);
-            let afternoonMinutes = afternoonDt.getHours() * 60 + afternoonDt.getMinutes();
-            if (afternoonDt.getHours() < 3) afternoonMinutes += 24 * 60;
-            if (afternoonMinutes > afternoonEnd + afternoonGrace) lateCount += 1;
+            if (morningMinutes > morningStart + morningGrace) {
+              lateCount += 1;
+              const minsLate = Math.max(1, morningMinutes - morningStart);
+              totalLateDeduction += lateBaseFee + minsLate * latePerMinuteFee;
+            }
           }
         }
 
@@ -926,13 +939,13 @@ async function generatePayrollPeriodsFromAttendance(attendanceRows = []) {
         );
         const rate = departmentRate[0]?.[0] || {};
         const dailyRate = Number(person.daily_rate ?? rate.daily_rate ?? 0);
-        const latePenalty = Number(person.late_penalty ?? rate.late_penalty ?? 0);
+        const latePenalty = Number(person.late_penalty ?? rate.late_penalty ?? lateBaseFee);
         const sss = Number(rate.sss ?? 0);
         const pagIbig = Number(rate.pag_ibig ?? 0);
         const philhealth = Number(rate.philhealth ?? 0);
         const cashAdvance = Number(person.cash_advance ?? 0);
 
-        const totalLateDeduction = lateCount * latePenalty;
+        totalLateDeduction = Number(totalLateDeduction.toFixed(2));
         const totalDeductions = sss + pagIbig + philhealth + cashAdvance + totalLateDeduction;
         const gross = dailyRate * daysPresent;
         let net = gross - totalDeductions;

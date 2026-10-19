@@ -117,7 +117,9 @@ export function determineAttendanceStatus(
   const morningStart = toMinutes(settings?.morning_start || "08:00");
   const morningEnd = toMinutes(settings?.morning_end || "11:59");
   const afternoonEnd = toMinutes(settings?.afternoon_end || "17:00");
-  const morningGrace = Number(settings?.morning_grace_minutes) || 15;
+  const morningGrace = Number.isFinite(Number(settings?.morning_grace_minutes))
+    ? Number(settings.morning_grace_minutes)
+    : 0;
 
   // Overnight checkout past midnight (< 03:00 AM) is afternoon out overtime unless time-in
   if (nowMinutes < 3 * 60) {
@@ -151,29 +153,33 @@ export function getAttendanceStatus(record, settings = {}) {
   const deviceDate = new Date(record?.device_time);
   const isValidDate = !Number.isNaN(deviceDate.getTime());
 
-  // If status is specifically set to late, early-out, early-in, overtime, preserve it
+  if (!isValidDate) return record?.status || "present";
+
+  // When settings are loaded, dynamically evaluate status against current work hours & grace period
+  if (settings && Object.keys(settings).length > 0) {
+    try {
+      return determineAttendanceStatus(
+        deviceDate.toTimeString().slice(0, 5),
+        record?.event || "time-in",
+        {
+          morning_start: settings.morning_start || "08:00",
+          morning_end: settings.morning_end || "11:59",
+          afternoon_start: settings.afternoon_start || "13:00",
+          afternoon_end: settings.afternoon_end || "17:00",
+          morning_grace_minutes: settings.morning_grace_minutes ?? 0,
+          afternoon_grace_minutes: settings.afternoon_grace_minutes ?? 15,
+        },
+      );
+    } catch (error) {
+      return record?.status || "present";
+    }
+  }
+
   if (record?.status && record.status !== "on-time" && record.status !== "present") {
     return record.status;
   }
 
-  if (!isValidDate) return record?.status || "present";
-
-  try {
-    return determineAttendanceStatus(
-      deviceDate.toTimeString().slice(0, 5),
-      record?.event || "time-in",
-      {
-        morning_start: settings.morning_start || "08:00",
-        morning_end: settings.morning_end || "12:00",
-        afternoon_start: settings.afternoon_start || "13:00",
-        afternoon_end: settings.afternoon_end || "17:00",
-        morning_grace_minutes: settings.morning_grace_minutes,
-        afternoon_grace_minutes: settings.afternoon_grace_minutes,
-      },
-    );
-  } catch (error) {
-    return record?.status || "present";
-  }
+  return record?.status || "present";
 }
 
 function buildBlockedMessage(eventToRecord, settings) {

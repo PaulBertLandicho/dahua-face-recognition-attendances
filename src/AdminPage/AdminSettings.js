@@ -9,10 +9,12 @@ const DEFAULT_SETTINGS = {
   morning_end: "11:59",
   afternoon_start: "13:00",
   afternoon_end: "17:00",
-  morning_grace_minutes: 15,
+  morning_grace_minutes: 0,
   afternoon_grace_minutes: 15,
   late_count_limit: 5,
   payroll_period_days: 15,
+  late_base_fee: 40,
+  late_per_minute_fee: 1,
   late_tier_minor_fee: 10,
   late_tier_mid_fee: 25,
   late_tier_major_mode: "employee_hourly",
@@ -55,31 +57,39 @@ export default function AdminSettings() {
             afternoon_end: data.afternoon_end
               ? data.afternoon_end.slice(0, 5)
               : DEFAULT_SETTINGS.afternoon_end,
-            morning_grace_minutes: Number.isFinite(data.morning_grace_minutes)
-              ? data.morning_grace_minutes
+            morning_grace_minutes: Number.isFinite(Number(data.morning_grace_minutes))
+              ? Number(data.morning_grace_minutes)
               : DEFAULT_SETTINGS.morning_grace_minutes,
             afternoon_grace_minutes: Number.isFinite(
-              data.afternoon_grace_minutes,
+              Number(data.afternoon_grace_minutes),
             )
-              ? data.afternoon_grace_minutes
+              ? Number(data.afternoon_grace_minutes)
               : DEFAULT_SETTINGS.afternoon_grace_minutes,
-            late_count_limit: Number.isFinite(data.late_count_limit)
-              ? data.late_count_limit
+            late_count_limit: Number.isFinite(Number(data.late_count_limit))
+              ? Number(data.late_count_limit)
               : DEFAULT_SETTINGS.late_count_limit,
-            payroll_period_days: Number.isFinite(data.payroll_period_days)
-              ? data.payroll_period_days
+            payroll_period_days: Number.isFinite(Number(data.payroll_period_days))
+              ? Number(data.payroll_period_days)
               : DEFAULT_SETTINGS.payroll_period_days,
-            late_tier_minor_fee: Number.isFinite(data.late_tier_minor_fee)
-              ? data.late_tier_minor_fee
+            late_base_fee:
+              data.late_base_fee !== undefined && data.late_base_fee !== null
+                ? Number(data.late_base_fee)
+                : localTier?.late_base_fee ?? DEFAULT_SETTINGS.late_base_fee,
+            late_per_minute_fee:
+              data.late_per_minute_fee !== undefined && data.late_per_minute_fee !== null
+                ? Number(data.late_per_minute_fee)
+                : localTier?.late_per_minute_fee ?? DEFAULT_SETTINGS.late_per_minute_fee,
+            late_tier_minor_fee: Number.isFinite(Number(data.late_tier_minor_fee))
+              ? Number(data.late_tier_minor_fee)
               : localTier?.late_tier_minor_fee ?? DEFAULT_SETTINGS.late_tier_minor_fee,
-            late_tier_mid_fee: Number.isFinite(data.late_tier_mid_fee)
-              ? data.late_tier_mid_fee
+            late_tier_mid_fee: Number.isFinite(Number(data.late_tier_mid_fee))
+              ? Number(data.late_tier_mid_fee)
               : localTier?.late_tier_mid_fee ?? DEFAULT_SETTINGS.late_tier_mid_fee,
             late_tier_major_mode: data.late_tier_major_mode
               ? data.late_tier_major_mode
               : localTier?.late_tier_major_mode || DEFAULT_SETTINGS.late_tier_major_mode,
-            late_tier_major_fee: Number.isFinite(data.late_tier_major_fee)
-              ? data.late_tier_major_fee
+            late_tier_major_fee: Number.isFinite(Number(data.late_tier_major_fee))
+              ? Number(data.late_tier_major_fee)
               : localTier?.late_tier_major_fee ?? DEFAULT_SETTINGS.late_tier_major_fee,
           });
         } else if (!error) {
@@ -96,7 +106,7 @@ export default function AdminSettings() {
     const { name, value, type } = e.target;
     setSettings({
       ...settings,
-      [name]: type === "number" ? parseInt(value) || 0 : value,
+      [name]: type === "number" ? (value === "" ? 0 : Number(value)) : value,
     });
   };
 
@@ -130,6 +140,12 @@ export default function AdminSettings() {
       afternoon_grace_minutes: Number(settings.afternoon_grace_minutes) || 0,
       late_count_limit: Number(settings.late_count_limit) || 0,
       payroll_period_days: Number(settings.payroll_period_days) || 15,
+      late_base_fee:
+        settings.late_base_fee !== undefined ? Number(settings.late_base_fee) : 40,
+      late_per_minute_fee:
+        settings.late_per_minute_fee !== undefined
+          ? Number(settings.late_per_minute_fee)
+          : 1,
       late_tier_minor_fee: Number(settings.late_tier_minor_fee) || 10,
       late_tier_mid_fee: Number(settings.late_tier_mid_fee) || 25,
       late_tier_major_mode: settings.late_tier_major_mode || "employee_hourly",
@@ -142,6 +158,8 @@ export default function AdminSettings() {
       localStorage.setItem(
         "late_tier_settings",
         JSON.stringify({
+          late_base_fee: payload.late_base_fee,
+          late_per_minute_fee: payload.late_per_minute_fee,
           late_tier_minor_fee: payload.late_tier_minor_fee,
           late_tier_mid_fee: payload.late_tier_mid_fee,
           late_tier_major_mode: payload.late_tier_major_mode,
@@ -468,50 +486,50 @@ export default function AdminSettings() {
           </div>
 
           {/* Late Deduction Tier Rules Card */}
-          <div className="p-6 mb-8 bg-white border shadow-sm rounded-3xl sm:p-7 border-emerald-100">
+          <div className="p-6 mb-8 bg-white border shadow-sm rounded-3xl sm:p-7 border-[#237227]/20">
             <div className="flex flex-wrap items-center justify-between gap-2 pb-4 mb-6 border-b border-gray-100">
               <div className="flex items-center gap-3">
-                <span className="p-2.5 bg-emerald-50 text-emerald-700 rounded-2xl">
+                <span className="p-2.5 bg-[#237227]/10 text-[#237227] rounded-2xl">
                   <FiDollarSign size={24} aria-label="Late Tiers" />
                 </span>
                 <div>
                   <h2 className="m-0 text-xl font-bold text-gray-800">Late Deduction Tier Rules</h2>
                   <p className="text-xs text-gray-500 m-0 mt-0.5">
-                    Configure late penalty deductions based on late duration (minutes vs. hours)
+                    Per-minute progressive late penalty: Base Penalty + (Minutes Late × Per-Minute Increment)
                   </p>
                 </div>
               </div>
-              <span className="px-3 py-1 text-xs font-semibold rounded-full bg-emerald-100 text-emerald-800">
-                Active Tier Model
+              <span className="px-3 py-1 text-xs font-semibold rounded-full bg-[#237227] text-white">
+                ₱{Number(settings.late_base_fee ?? 40)} Base + ₱{Number(settings.late_per_minute_fee ?? 1)}/min
               </span>
             </div>
 
             <div className="grid grid-cols-1 gap-6 md:grid-cols-3">
-              {/* Tier 1: 1 - 15 Minutes */}
+              {/* Base Late Penalty */}
               <div className="flex flex-col justify-between p-5 border border-gray-200 bg-gray-50 rounded-2xl">
                 <div>
                   <div className="flex items-center justify-between mb-2">
-                    <span className="text-xs font-bold uppercase tracking-wider text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded">
-                      Tier 1
+                    <span className="text-xs font-bold uppercase tracking-wider text-[#237227] bg-[#237227]/10 px-2 py-0.5 rounded">
+                      Step 1 · Base Penalty
                     </span>
-                    <span className="text-xs font-semibold text-gray-500">1 – 15 Mins</span>
+                    <span className="text-xs font-semibold text-gray-500">Fixed Starting Fee</span>
                   </div>
-                  <h3 className="mb-1 text-base font-semibold text-gray-800">Minor Late Fee</h3>
+                  <h3 className="mb-1 text-base font-semibold text-gray-800">Base Late Deduction</h3>
                   <p className="mb-4 text-xs text-gray-500">
-                    Charged when late is between 1 and 15 minutes past start/grace.
+                    Fixed base amount charged immediately as soon as an employee is late (default: ₱40).
                   </p>
                 </div>
                 <div>
-                  <label htmlFor="late_tier_minor_fee" className="block text-xs font-semibold text-gray-600 mb-1.5 uppercase tracking-wide">
-                    Deduction (₱)
+                  <label htmlFor="late_base_fee" className="block text-xs font-semibold text-gray-600 mb-1.5 uppercase tracking-wide">
+                    Base Penalty (₱)
                   </label>
                   <div className="flex items-center gap-2">
                     <span className="text-base font-semibold text-gray-500">₱</span>
                     <input
                       type="number"
-                      id="late_tier_minor_fee"
-                      name="late_tier_minor_fee"
-                      value={settings.late_tier_minor_fee}
+                      id="late_base_fee"
+                      name="late_base_fee"
+                      value={settings.late_base_fee}
                       onChange={handleChange}
                       min="0"
                       step="1"
@@ -521,86 +539,84 @@ export default function AdminSettings() {
                 </div>
               </div>
 
-              {/* Tier 2: 16 - 30 Minutes */}
+              {/* Per-Minute Increment */}
               <div className="flex flex-col justify-between p-5 border border-gray-200 bg-gray-50 rounded-2xl">
                 <div>
                   <div className="flex items-center justify-between mb-2">
                     <span className="text-xs font-bold uppercase tracking-wider text-amber-700 bg-amber-50 px-2 py-0.5 rounded">
-                      Tier 2
+                      Step 2 · Per-Minute Rate
                     </span>
-                    <span className="text-xs font-semibold text-gray-500">16 – 30 Mins</span>
+                    <span className="text-xs font-semibold text-gray-500">+ Per Minute Late</span>
                   </div>
-                  <h3 className="mb-1 text-base font-semibold text-gray-800">Moderate Late Fee</h3>
+                  <h3 className="mb-1 text-base font-semibold text-gray-800">Per-Minute Increment</h3>
                   <p className="mb-4 text-xs text-gray-500">
-                    Charged when late is between 16 and 30 minutes.
+                    Additional amount added for every minute past scheduled time (default: ₱1/min).
                   </p>
                 </div>
                 <div>
-                  <label htmlFor="late_tier_mid_fee" className="block text-xs font-semibold text-gray-600 mb-1.5 uppercase tracking-wide">
-                    Deduction (₱)
+                  <label htmlFor="late_per_minute_fee" className="block text-xs font-semibold text-gray-600 mb-1.5 uppercase tracking-wide">
+                    Per-Minute Fee (₱ / min)
                   </label>
                   <div className="flex items-center gap-2">
                     <span className="text-base font-semibold text-gray-500">₱</span>
                     <input
                       type="number"
-                      id="late_tier_mid_fee"
-                      name="late_tier_mid_fee"
-                      value={settings.late_tier_mid_fee}
+                      id="late_per_minute_fee"
+                      name="late_per_minute_fee"
+                      value={settings.late_per_minute_fee}
                       onChange={handleChange}
                       min="0"
-                      step="1"
+                      step="0.5"
                       className="w-full px-4 py-2.5 text-base rounded-xl border border-gray-300 bg-white text-gray-800 outline-none focus:outline-none focus:ring-0 focus:border-[#237227]"
                     />
                   </div>
                 </div>
               </div>
 
-              {/* Tier 3: 31 - 60 Minutes (Almost 1 hr) & > 60 Mins */}
-              <div className="flex flex-col justify-between p-5 border border-gray-200 bg-gray-50 rounded-2xl">
+              {/* Live Formula Preview */}
+              <div className="flex flex-col justify-between p-5 border border-[#237227]/25 bg-[#237227]/[0.05] rounded-2xl">
                 <div>
                   <div className="flex items-center justify-between mb-2">
-                    <span className="text-xs font-bold uppercase tracking-wider text-rose-700 bg-rose-50 px-2 py-0.5 rounded">
-                      Tier 3 &amp; Beyond
+                    <span className="text-xs font-bold uppercase tracking-wider text-white bg-[#237227] px-2.5 py-0.5 rounded">
+                      Live Preview
                     </span>
-                    <span className="text-xs font-semibold text-gray-500">31+ Mins (Almost 1 hr)</span>
+                    <span className="text-xs font-semibold text-[#237227]">
+                      Start: {settings.morning_start || "08:00"}
+                    </span>
                   </div>
-                  <h3 className="mb-1 text-base font-semibold text-gray-800">Major / Hourly Rate Basis</h3>
+                  <h3 className="mb-1 text-base font-semibold text-gray-800">Sample Late Deductions</h3>
                   <p className="mb-3 text-xs text-gray-500">
-                    Basis for almost 1 hour late (31–60 mins = 1 hr deduction, &gt;60 mins = pro-rated).
+                    Formula: ₱{Number(settings.late_base_fee || 0)} + (Mins Late × ₱{Number(settings.late_per_minute_fee || 0)})
                   </p>
                 </div>
-                <div>
-                  <label htmlFor="late_tier_major_mode" className="block text-xs font-semibold text-gray-600 mb-1.5 uppercase tracking-wide">
-                    Rate Source
-                  </label>
-                  <select
-                    id="late_tier_major_mode"
-                    name="late_tier_major_mode"
-                    value={settings.late_tier_major_mode}
-                    onChange={handleChange}
-                    className="w-full px-3 py-2 text-sm rounded-xl border border-gray-300 bg-white text-gray-800 outline-none focus:outline-none focus:ring-0 focus:border-[#237227] mb-2"
-                  >
-                    <option value="employee_hourly">Employee Hourly Rate (Daily Rate / 8)</option>
-                    <option value="employee_penalty">Employee Custom Late Penalty (Rates table)</option>
-                    <option value="custom_flat">Fixed Custom Amount</option>
-                  </select>
-
-                  {settings.late_tier_major_mode === "custom_flat" && (
-                    <div className="flex items-center gap-2 mt-2">
-                      <span className="text-sm font-semibold text-gray-500">₱</span>
-                      <input
-                        type="number"
-                        id="late_tier_major_fee"
-                        name="late_tier_major_fee"
-                        value={settings.late_tier_major_fee}
-                        onChange={handleChange}
-                        min="0"
-                        step="1"
-                        placeholder="Fixed Hourly Fee"
-                        className="w-full px-3 py-2 text-sm text-gray-800 bg-white border border-gray-300 outline-none rounded-xl"
-                      />
-                    </div>
-                  )}
+                <div className="space-y-1.5 text-xs">
+                  {[1, 2, 5, 15, 30].map((sampleMins) => {
+                    const base = Number(settings.late_base_fee || 0);
+                    const perMin = Number(settings.late_per_minute_fee || 0);
+                    const total = base + sampleMins * perMin;
+                    const [startH, startM] = String(settings.morning_start || "08:00")
+                      .split(":")
+                      .map((n) => Number(n || 0));
+                    const totalStartMins = startH * 60 + startM + sampleMins;
+                    const h24 = Math.floor(totalStartMins / 60) % 24;
+                    const m = totalStartMins % 60;
+                    const ampm = h24 >= 12 ? "PM" : "AM";
+                    const h12 = h24 % 12 === 0 ? 12 : h24 % 12;
+                    const timeLabel = `${h12}:${String(m).padStart(2, "0")} ${ampm}`;
+                    return (
+                      <div
+                        key={sampleMins}
+                        className="flex items-center justify-between px-3 py-1.5 bg-white rounded-lg border border-[#237227]/20"
+                      >
+                        <span className="font-medium text-gray-700">
+                          {timeLabel} <span className="text-gray-400">({sampleMins}m late)</span>
+                        </span>
+                        <span className="font-bold text-[#237227]">
+                          ₱{total.toFixed(2).replace(/\.00$/, "")}
+                        </span>
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
             </div>

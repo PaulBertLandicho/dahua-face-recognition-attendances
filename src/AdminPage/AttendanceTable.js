@@ -978,13 +978,13 @@ export default function AttendanceTable() {
                           if (lowerVal === "on-time" || lowerVal === "on time") {
                             badgeClass = "bg-[#237227]/10 text-[#237227] border border-[#237227]/30";
                           } else if (lowerVal === "early-in" || lowerVal === "early in") {
-                            badgeClass = "bg-teal-50 text-teal-700 border border-teal-200";
+                            badgeClass = "bg-[#237227] text-white border border-[#237227]";
                           } else if (lowerVal === "late") {
                             badgeClass = "bg-red-50 text-red-600 border border-red-200";
                           } else if (lowerVal === "early-out" || lowerVal === "early out") {
                             badgeClass = "bg-orange-50 text-orange-600 border border-orange-200";
                           } else if (lowerVal === "overtime") {
-                            badgeClass = "bg-blue-50 text-blue-600 border border-blue-200";
+                            badgeClass = "bg-[#97D7FF] text-white border border-[#97D7FF]";
                           }
 
                           return (

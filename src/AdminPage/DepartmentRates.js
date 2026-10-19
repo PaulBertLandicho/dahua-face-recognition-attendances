@@ -518,7 +518,7 @@ export default function DepartmentRates() {
                     />
                     Employer Share
                   </h3>
-                  <span className="text-[0.68rem] font-bold uppercase tracking-wider text-[#237227] bg-green-50 border border-green-200 px-2 py-0.5 rounded-md">
+                  <span className="text-[0.68rem] font-bold uppercase tracking-wider text-white bg-[#237227] px-2.5 py-0.5 rounded-md">
                     Company Paid
                   </span>
                 </div>

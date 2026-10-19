@@ -1435,7 +1435,7 @@ export default function PayslipModal({
                 <td className="py-2.5 px-2 border-b border-gray-200 text-gray-800">
                   <div className="flex items-center justify-between">
                     <span className="font-semibold">Employer Share (Total):</span>
-                    <span className="text-[0.68rem] text-[#237227] font-bold uppercase bg-green-100 border border-green-200 px-2 py-0.5 rounded ml-2">
+                    <span className="text-[0.68rem] text-white font-bold uppercase bg-[#237227] px-2.5 py-0.5 rounded ml-2">
                       Company Paid
                     </span>
                   </div>
