@@ -253,16 +253,10 @@ async function recordDeviceSyncStatus({ type, success, error = null }) {
           FROM settings ORDER BY id LIMIT 1;
 
         IF TIME(NEW.device_time) < '03:00:00' THEN
-          IF NEW.event = 'time-in' THEN
-            SET NEW.attendance_slot = 'morning_time_in';
-            SET NEW.attendance_work_date = IF(NEW.device_time IS NULL, NULL, DATE(NEW.device_time));
-            SET NEW.status = 'early-in';
-          ELSE
-            SET NEW.event = 'time-out';
-            SET NEW.attendance_slot = 'afternoon_time_out';
-            SET NEW.attendance_work_date = IF(NEW.device_time IS NULL, NULL, DATE(NEW.device_time - INTERVAL 1 DAY));
-            SET NEW.status = 'overtime';
-          END IF;
+          SET NEW.event = 'time-out';
+          SET NEW.attendance_slot = 'afternoon_time_out';
+          SET NEW.attendance_work_date = IF(NEW.device_time IS NULL, NULL, DATE(NEW.device_time - INTERVAL 1 DAY));
+          SET NEW.status = 'overtime';
         ELSEIF TIME(NEW.device_time) <= configured_morning_end THEN
           SET NEW.event = 'time-in';
           SET NEW.attendance_slot = 'morning_time_in';
@@ -319,16 +313,10 @@ async function recordDeviceSyncStatus({ type, success, error = null }) {
           FROM settings ORDER BY id LIMIT 1;
 
         IF TIME(NEW.device_time) < '03:00:00' THEN
-          IF NEW.event = 'time-in' THEN
-            SET NEW.attendance_slot = 'morning_time_in';
-            SET NEW.attendance_work_date = IF(NEW.device_time IS NULL, NULL, DATE(NEW.device_time));
-            SET NEW.status = 'early-in';
-          ELSE
-            SET NEW.event = 'time-out';
-            SET NEW.attendance_slot = 'afternoon_time_out';
-            SET NEW.attendance_work_date = IF(NEW.device_time IS NULL, NULL, DATE(NEW.device_time - INTERVAL 1 DAY));
-            SET NEW.status = 'overtime';
-          END IF;
+          SET NEW.event = 'time-out';
+          SET NEW.attendance_slot = 'afternoon_time_out';
+          SET NEW.attendance_work_date = IF(NEW.device_time IS NULL, NULL, DATE(NEW.device_time - INTERVAL 1 DAY));
+          SET NEW.status = 'overtime';
         ELSEIF TIME(NEW.device_time) <= configured_morning_end THEN
           SET NEW.event = 'time-in';
           SET NEW.attendance_slot = 'morning_time_in';
@@ -697,9 +685,6 @@ function getWorkDateFromDeviceTime(deviceTime, event = null) {
   const dateStr = match[1];
   const hour = Number(match[2]);
   if (hour < 3) {
-    if (event === "time-in") {
-      return dateStr;
-    }
     return getPreviousDateStr(dateStr);
   }
   return dateStr;
@@ -748,19 +733,12 @@ function dedupeDahuaAttendanceByPersonDay(records, settings = null) {
     let targetDateStr = dateStr;
     let effectiveMins = mins;
 
-    // Overnight checkout past midnight (< 03:00 AM) applies to PREVIOUS day's afternoon out unless explicitly time-in
+    // Overnight checkout past midnight (< 03:00 AM) always applies to PREVIOUS day's afternoon out overtime
     if (mins < 3 * 60) {
-      if (record.event === "time-in") {
-        event = "time-in";
-        status = "early-in";
-        targetDateStr = dateStr;
-        effectiveMins = mins;
-      } else {
-        event = "time-out";
-        status = "overtime";
-        targetDateStr = getPreviousDateStr(dateStr);
-        effectiveMins = 24 * 60 + mins;
-      }
+      event = "time-out";
+      status = "overtime";
+      targetDateStr = getPreviousDateStr(dateStr);
+      effectiveMins = 24 * 60 + mins;
     } else if (mins <= morningEnd) {
       // 03:00 AM to morningEnd: Morning shift time-in (Early-in starting at 3:00 AM)
       event = "time-in";
@@ -2348,7 +2326,7 @@ app.post("/api/db/query", async (req, res) => {
                 let slot = null;
                 if (mins >= 0) {
                   if (mins < 3 * 60) {
-                    slot = combined.event === "time-in" ? "morning_time_in" : "afternoon_time_out";
+                    slot = "afternoon_time_out";
                   }
                   else if (combined.event === "time-in") slot = "morning_time_in";
                   else if (combined.event === "time-out") slot = "afternoon_time_out";

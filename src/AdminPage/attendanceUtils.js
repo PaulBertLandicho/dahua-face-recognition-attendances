@@ -124,11 +124,8 @@ export function determineAttendanceStatus(
     ? Number(settings.afternoon_grace_minutes)
     : 0;
 
-  // Overnight checkout past midnight (< 03:00 AM) is afternoon out overtime unless time-in
+  // Overnight checkout past midnight (< 03:00 AM) is always afternoon out overtime
   if (nowMinutes < 3 * 60) {
-    if (eventToRecord === "time-in") {
-      return "early-in";
-    }
     return "overtime";
   }
 

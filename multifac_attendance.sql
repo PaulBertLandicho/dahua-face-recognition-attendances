@@ -86,16 +86,10 @@ CREATE TRIGGER `attendance_before_insert_slot` BEFORE INSERT ON `attendance` FOR
     FROM settings ORDER BY id LIMIT 1;
 
   IF TIME(NEW.device_time) < '03:00:00' THEN
-    IF NEW.event = 'time-in' THEN
-      SET NEW.attendance_slot = 'morning_time_in';
-      SET NEW.attendance_work_date = IF(NEW.device_time IS NULL, NULL, DATE(NEW.device_time));
-      SET NEW.status = 'early-in';
-    ELSE
-      SET NEW.event = 'time-out';
-      SET NEW.attendance_slot = 'afternoon_time_out';
-      SET NEW.attendance_work_date = IF(NEW.device_time IS NULL, NULL, DATE(NEW.device_time - INTERVAL 1 DAY));
-      SET NEW.status = 'overtime';
-    END IF;
+    SET NEW.event = 'time-out';
+    SET NEW.attendance_slot = 'afternoon_time_out';
+    SET NEW.attendance_work_date = IF(NEW.device_time IS NULL, NULL, DATE(NEW.device_time - INTERVAL 1 DAY));
+    SET NEW.status = 'overtime';
   ELSEIF TIME(NEW.device_time) <= configured_morning_end THEN
     SET NEW.event = 'time-in';
     SET NEW.attendance_slot = 'morning_time_in';
@@ -146,16 +140,10 @@ CREATE TRIGGER `attendance_before_update_slot` BEFORE UPDATE ON `attendance` FOR
     FROM settings ORDER BY id LIMIT 1;
 
   IF TIME(NEW.device_time) < '03:00:00' THEN
-    IF NEW.event = 'time-in' THEN
-      SET NEW.attendance_slot = 'morning_time_in';
-      SET NEW.attendance_work_date = IF(NEW.device_time IS NULL, NULL, DATE(NEW.device_time));
-      SET NEW.status = 'early-in';
-    ELSE
-      SET NEW.event = 'time-out';
-      SET NEW.attendance_slot = 'afternoon_time_out';
-      SET NEW.attendance_work_date = IF(NEW.device_time IS NULL, NULL, DATE(NEW.device_time - INTERVAL 1 DAY));
-      SET NEW.status = 'overtime';
-    END IF;
+    SET NEW.event = 'time-out';
+    SET NEW.attendance_slot = 'afternoon_time_out';
+    SET NEW.attendance_work_date = IF(NEW.device_time IS NULL, NULL, DATE(NEW.device_time - INTERVAL 1 DAY));
+    SET NEW.status = 'overtime';
   ELSEIF TIME(NEW.device_time) <= configured_morning_end THEN
     SET NEW.event = 'time-in';
     SET NEW.attendance_slot = 'morning_time_in';

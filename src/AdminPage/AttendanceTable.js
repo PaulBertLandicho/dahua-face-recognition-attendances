@@ -312,8 +312,10 @@ export default function AttendanceTable() {
       const hhmm = time.slice(0, 5);
       const [hStr] = hhmm.split(":");
       const hours = parseInt(hStr, 10);
-      if (!event) {
-        event = hours < 3 ? "time-out" : (rec.event || "time-in");
+      if (hours < 3) {
+        event = "time-out";
+      } else if (!event) {
+        event = rec.event || "time-in";
       }
 
       let currentSettings = settings;
@@ -944,7 +946,7 @@ export default function AttendanceTable() {
                             const morningEndMin = morningEnd[0] * 60 + morningEnd[1];
                             const afternoonStartMin = afternoonStart[0] * 60 + afternoonStart[1];
                             
-                            if (totalMinutes < 3 * 60) value = row.event === "time-in" ? "Morning Shift" : "Afternoon Shift";
+                            if (totalMinutes < 3 * 60) value = "Afternoon Shift";
                             else if (totalMinutes <= morningEndMin) value = "Morning Shift";
                             else if (totalMinutes >= afternoonStartMin) value = "Afternoon Shift";
                             else value = "N/A";
@@ -957,7 +959,11 @@ export default function AttendanceTable() {
                             let label = "";
                             let configTime = "";
                             if (row.event === "time-in" || row.event === "time-out") {
-                              if (row.event === "time-in") {
+                              const rowHour = row.device_time ? new Date(row.device_time).getHours() : -1;
+                              if (rowHour >= 0 && rowHour < 3) {
+                                label = "Afternoon Out";
+                                configTime = settings.afternoon_end;
+                              } else if (row.event === "time-in") {
                                 label = "Morning In";
                                 configTime = settings.morning_start;
                               } else {

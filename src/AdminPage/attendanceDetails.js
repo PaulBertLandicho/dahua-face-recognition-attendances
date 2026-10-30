@@ -12,8 +12,8 @@ export function getDetailedAttendance(attendance, personId, settings = {}) {
       if (r.attendance_work_date) {
         dateStr = String(r.attendance_work_date).slice(0, 10);
       } else {
-        // Fallback: scans before 3:00 AM belong to previous shift day UNLESS event is time-in
-        if (dt.getHours() < 3 && r.event !== "time-in") {
+        // Fallback: scans before 3:00 AM always belong to previous shift day
+        if (dt.getHours() < 3) {
           const prev = new Date(dt);
           prev.setDate(prev.getDate() - 1);
           const y = prev.getFullYear();
@@ -40,11 +40,11 @@ export function getDetailedAttendance(attendance, personId, settings = {}) {
     settings.afternoon_late_minutes ?? settings.afternoon_grace_minutes ?? 0
   );
 
-  function isEarlyIn(dt, event = "time-in") {
+  function isEarlyIn(dt) {
     const mins = dt.getHours() * 60 + dt.getMinutes();
     const [h, m] = morningStart.split(":").map(Number);
     const startMins = h * 60 + m;
-    if (mins < 3 * 60) return event === "time-in";
+    if (mins < 3 * 60) return false;
     return mins < startMins;
   }
 
@@ -94,15 +94,8 @@ export function getDetailedAttendance(attendance, personId, settings = {}) {
         minute: "2-digit",
       });
       if (hour < 3) {
-        if (r.event === "time-in") {
-          if (!morningIn) {
-            morningIn = timeStr;
-            morningInStatus = "early-in";
-          }
-        } else {
-          // Overnight punch past midnight (< 3:00 AM) is afternoon out
-          afternoonOut = timeStr;
-        }
+        // Overnight punch past midnight (< 3:00 AM) is always afternoon out
+        afternoonOut = timeStr;
       } else if (hour < 12) {
         // Morning punch (3:00 AM to 11:59 AM) - only morning arrivals are evaluated for lateness
         if (!morningIn) {
@@ -148,7 +141,7 @@ export function getDetailedAttendance(attendance, personId, settings = {}) {
         minute: "2-digit",
       });
       const singleHour = recs[0].dt.getHours();
-      if (recs[0].event === "time-in" || (singleHour >= 3 && singleHour < 12)) {
+      if (singleHour >= 3 && (recs[0].event === "time-in" || singleHour < 12)) {
         attendanceIn = singleTime;
         attendanceOut = null;
       } else {

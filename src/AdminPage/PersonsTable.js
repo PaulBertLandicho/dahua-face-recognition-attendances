@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import { supabase } from "../mysqlClient";
 import Swal from "sweetalert2";
 import * as XLSX from "xlsx";
@@ -12,9 +12,58 @@ import {
   FiPlusCircle,
   FiRefreshCw,
   FiSearch,
+  FiAlertCircle,
+  FiCheckCircle,
+  FiCalendar,
+  FiClock,
+  FiPlus,
 } from "react-icons/fi";
 import { determineAttendanceStatus } from "./attendanceUtils";
 import { syncDahuaUsers } from "../utils/dahuaApi";
+
+
+function DateTimeInput({ value, onChange, className, id, name }) {
+  const inputRef = useRef(null);
+  const isTypingRef = useRef(false);
+
+  useEffect(() => {
+    if (inputRef.current) {
+      const currentVal = inputRef.current.value;
+      const targetVal = value ? String(value).slice(0, 16) : "";
+      if (!isTypingRef.current && currentVal !== targetVal) {
+        inputRef.current.value = targetVal;
+      }
+    }
+  }, [value]);
+
+  return (
+    <input
+      ref={inputRef}
+      id={id}
+      name={name}
+      type="datetime-local"
+      defaultValue={value ? String(value).slice(0, 16) : ""}
+      onFocus={() => {
+        isTypingRef.current = true;
+      }}
+      onBlur={(e) => {
+        isTypingRef.current = false;
+        if (e.target.value && onChange) {
+          onChange(e.target.value);
+        }
+      }}
+      onKeyDown={() => {
+        isTypingRef.current = true;
+      }}
+      onChange={(e) => {
+        if (e.target.value && onChange) {
+          onChange(e.target.value);
+        }
+      }}
+      className={className}
+    />
+  );
+}
 
 export default function PersonsTable() {
   const [search, setSearch] = useState("");
@@ -38,6 +87,12 @@ export default function PersonsTable() {
   const [newCashNote, setNewCashNote] = useState("");
   const [actionLoading, setActionLoading] = useState(false);
   const [adminModal, setAdminModal] = useState({ visible: false, person: null, event: "time-in", datetime: "", photo: null, note: "" });
+  const [missingRecords, setMissingRecords] = useState([]);
+  const [loadingMissing, setLoadingMissing] = useState(false);
+  const [missingPeriod, setMissingPeriod] = useState("current");
+  const [missingFilter, setMissingFilter] = useState("all");
+  const [adminSettings, setAdminSettings] = useState(null);
+  const [adminHolidays, setAdminHolidays] = useState([]);
 
   useEffect(() => {
     async function fetchPersons() {
@@ -518,7 +573,271 @@ export default function PersonsTable() {
     }
   };
 
-  // Admin: record attendance on behalf of a person (customize attendance)
+  const getPeriodRange = (type, refDate = new Date()) => {
+    const pad = (n) => String(n).padStart(2, "0");
+    const y = refDate.getFullYear();
+    const m = refDate.getMonth();
+    const d = refDate.getDate();
+
+    if (type === "previous") {
+      if (d <= 15) {
+        const prevMonthLastDay = new Date(y, m, 0).getDate();
+        const prevDate = new Date(y, m - 1, 1);
+        const py = prevDate.getFullYear();
+        const pm = pad(prevDate.getMonth() + 1);
+        return {
+          start: `${py}-${pm}-16`,
+          end: `${py}-${pm}-${pad(prevMonthLastDay)}`,
+          label: `Previous Cutoff (${py}-${pm}-16 to ${pad(prevMonthLastDay)})`,
+        };
+      } else {
+        return {
+          start: `${y}-${pad(m + 1)}-01`,
+          end: `${y}-${pad(m + 1)}-15`,
+          label: `Previous Cutoff (${y}-${pad(m + 1)}-01 to 15)`,
+        };
+      }
+    }
+
+    if (type === "last30") {
+      const past = new Date(refDate);
+      past.setDate(past.getDate() - 30);
+      const py = past.getFullYear();
+      const pm = pad(past.getMonth() + 1);
+      const pd = pad(past.getDate());
+      const ty = y;
+      const tm = pad(m + 1);
+      const td = pad(d);
+      return {
+        start: `${py}-${pm}-${pd}`,
+        end: `${ty}-${tm}-${td}`,
+        label: `Last 30 Days (${py}-${pm}-${pd} to ${td})`,
+      };
+    }
+
+    // Default: current cutoff
+    if (d <= 15) {
+      return {
+        start: `${y}-${pad(m + 1)}-01`,
+        end: `${y}-${pad(m + 1)}-15`,
+        label: `Current Cutoff (${y}-${pad(m + 1)}-01 to 15)`,
+      };
+    } else {
+      const lastDay = new Date(y, m + 1, 0).getDate();
+      return {
+        start: `${y}-${pad(m + 1)}-16`,
+        end: `${y}-${pad(m + 1)}-${pad(lastDay)}`,
+        label: `Current Cutoff (${y}-${pad(m + 1)}-16 to ${pad(lastDay)})`,
+      };
+    }
+  };
+
+  const fetchMissingRecordsForPerson = async (person, periodType = "current") => {
+    if (!person || !person.id) return;
+    setLoadingMissing(true);
+    try {
+      let settings = adminSettings;
+      if (!settings) {
+        const { data: sData } = await supabase.from("settings").select("*").eq("id", 1).maybeSingle();
+        if (sData) {
+          settings = sData;
+          setAdminSettings(sData);
+        }
+      }
+      let holidays = adminHolidays;
+      if (!holidays || !holidays.length) {
+        const { data: hData } = await supabase.from("holidays").select("*");
+        if (hData) {
+          holidays = hData;
+          setAdminHolidays(hData);
+        }
+      }
+
+      const { start, end } = getPeriodRange(periodType);
+      const pad = (n) => String(n).padStart(2, "0");
+
+      const morningEnd = settings?.morning_end || "11:59";
+      const afternoonEnd = settings?.afternoon_end || "17:00";
+
+      const now = new Date();
+      const todayStr = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+      const nowMinutes = now.getHours() * 60 + now.getMinutes();
+
+      const [mEndH, mEndM] = morningEnd.split(":").map(Number);
+      const morningEndMin = (mEndH || 11) * 60 + (mEndM || 59);
+
+      const [aEndH, aEndM] = afternoonEnd.split(":").map(Number);
+      const afternoonEndMin = (aEndH || 17) * 60 + (aEndM || 0);
+
+      const holidaySet = new Set((holidays || []).map((h) => (h.date ? String(h.date).slice(0, 10) : "")));
+
+      const nextDay = new Date(end);
+      nextDay.setDate(nextDay.getDate() + 1);
+      const nextDayStr = `${nextDay.getFullYear()}-${pad(nextDay.getMonth() + 1)}-${pad(nextDay.getDate())}`;
+
+      const { data: attData } = await supabase
+        .from("attendance")
+        .select("id, event, device_time, attendance_work_date, attendance_slot, status, archived")
+        .eq("person_id", person.id)
+        .gte("device_time", `${start} 00:00:00`)
+        .lte("device_time", `${nextDayStr} 04:00:00`);
+
+      const validRecords = (attData || []).filter((r) => !r.archived);
+
+      const byDate = {};
+      validRecords.forEach((r) => {
+        if (!r.device_time) return;
+        let workDate = r.attendance_work_date ? String(r.attendance_work_date).slice(0, 10) : null;
+        if (!workDate) {
+          const match = String(r.device_time).match(/^(\d{4}-\d{2}-\d{2})\s+(\d{2}):(\d{2})/);
+          if (match) {
+            const dStr = match[1];
+            const h = Number(match[2]);
+            if (h < 3) {
+              const [yy, mm, dd] = dStr.split("-").map(Number);
+              const prev = new Date(yy, mm - 1, dd - 1);
+              workDate = `${prev.getFullYear()}-${pad(prev.getMonth() + 1)}-${pad(prev.getDate())}`;
+            } else {
+              workDate = dStr;
+            }
+          } else {
+            workDate = String(r.device_time).slice(0, 10);
+          }
+        }
+        if (!byDate[workDate]) byDate[workDate] = [];
+        byDate[workDate].push(r);
+      });
+
+      const missingList = [];
+      const sObj = new Date(start);
+      const eObj = new Date(end);
+
+      for (let cur = new Date(sObj); cur <= eObj; cur.setDate(cur.getDate() + 1)) {
+        const dateStr = `${cur.getFullYear()}-${pad(cur.getMonth() + 1)}-${pad(cur.getDate())}`;
+        if (dateStr > todayStr) continue;
+
+        const isWeekend = cur.getDay() === 0 || cur.getDay() === 6;
+        const hasPunches = Array.isArray(byDate[dateStr]) && byDate[dateStr].length > 0;
+        const isHoliday = holidaySet.has(dateStr);
+
+        if ((isWeekend || isHoliday) && !hasPunches) continue;
+
+        const dayRecords = byDate[dateStr] || [];
+        const inRec = dayRecords.find((r) => r.event === "time-in" || (r.attendance_slot && r.attendance_slot.includes("in")));
+        const outRec = dayRecords.find((r) => r.event === "time-out" || (r.attendance_slot && r.attendance_slot.includes("out")));
+
+        const hasIn = Boolean(inRec);
+        const hasOut = Boolean(outRec);
+        const isToday = dateStr === todayStr;
+
+        const formatPunchTime = (rec) => {
+          if (!rec || !rec.device_time) return null;
+          const match = String(rec.device_time).match(/(\d{2}):(\d{2})/);
+          if (!match) return null;
+          let [hh, mm] = [Number(match[1]), Number(match[2])];
+          const ampm = hh >= 12 ? "PM" : "AM";
+          hh = hh % 12 || 12;
+          return `${pad(hh)}:${pad(mm)} ${ampm}`;
+        };
+
+        if (isToday) {
+          const morningPassed = nowMinutes > morningEndMin;
+          const afternoonPassed = nowMinutes > afternoonEndMin;
+
+          if (morningPassed && !hasIn && afternoonPassed && !hasOut) {
+            missingList.push({
+              date: dateStr,
+              type: "missing-both",
+              label: "Missing Time In & Out",
+              hasIn: false,
+              hasOut: false,
+              recordedIn: null,
+              recordedOut: null,
+              isToday: true,
+            });
+          } else if (morningPassed && !hasIn) {
+            missingList.push({
+              date: dateStr,
+              type: "missing-in",
+              label: "Missing Time In",
+              hasIn: false,
+              hasOut: true,
+              recordedIn: null,
+              recordedOut: formatPunchTime(outRec),
+              isToday: true,
+            });
+          } else if (afternoonPassed && !hasOut) {
+            missingList.push({
+              date: dateStr,
+              type: "missing-out",
+              label: "Missing Time Out",
+              hasIn: true,
+              hasOut: false,
+              recordedIn: formatPunchTime(inRec),
+              recordedOut: null,
+              isToday: true,
+            });
+          }
+        } else {
+          if (!hasIn && !hasOut) {
+            missingList.push({
+              date: dateStr,
+              type: "missing-both",
+              label: "No Records (Full Day)",
+              hasIn: false,
+              hasOut: false,
+              recordedIn: null,
+              recordedOut: null,
+              isToday: false,
+            });
+          } else if (!hasIn && hasOut) {
+            missingList.push({
+              date: dateStr,
+              type: "missing-in",
+              label: "Missing Time In",
+              hasIn: false,
+              hasOut: true,
+              recordedIn: null,
+              recordedOut: formatPunchTime(outRec),
+              isToday: false,
+            });
+          } else if (hasIn && !hasOut) {
+            missingList.push({
+              date: dateStr,
+              type: "missing-out",
+              label: "Missing Time Out",
+              hasIn: true,
+              hasOut: false,
+              recordedIn: formatPunchTime(inRec),
+              recordedOut: null,
+              isToday: false,
+            });
+          }
+        }
+      }
+
+      setMissingRecords(missingList.sort((a, b) => b.date.localeCompare(a.date)));
+    } catch (err) {
+      console.error("Error fetching missing records:", err);
+      setMissingRecords([]);
+    } finally {
+      setLoadingMissing(false);
+    }
+  };
+
+  const handleFillMissing = (item, eventType) => {
+    const morningTime = adminSettings?.morning_start ? adminSettings.morning_start.slice(0, 5) : "08:00";
+    const afternoonTime = adminSettings?.afternoon_end ? adminSettings.afternoon_end.slice(0, 5) : "17:00";
+    const fillTime = eventType === "time-in" ? morningTime : afternoonTime;
+    const newDatetime = `${item.date}T${fillTime}`;
+
+    setAdminModal((prev) => ({
+      ...prev,
+      event: eventType,
+      datetime: newDatetime,
+    }));
+  };
+
   // Admin: record attendance on behalf of a person (customize attendance)
   const handleAdminAttendance = (person) => {
     if (!person || !person.id) return;
@@ -535,13 +854,18 @@ export default function PersonsTable() {
       photo: null,
       note: "",
     });
+    setMissingPeriod("current");
+    setMissingFilter("all");
+    fetchMissingRecordsForPerson(person, "current");
   };
+
 
   // Admin attendance modal handlers
   const submitAdminAttendance = async () => {
     if (!adminModal.visible || !adminModal.person) return;
     const person = adminModal.person;
-    const dtStr = adminModal.datetime;
+    const dtInput = document.getElementById("admin-attendance-datetime");
+    const dtStr = (dtInput && dtInput.value) || adminModal.datetime;
     if (!dtStr) {
       Swal.fire("Validation", "Please provide date & time.", "warning");
       return;
@@ -628,6 +952,7 @@ export default function PersonsTable() {
         },
       });
       setAdminModal({ visible: false, person: null, event: "time-in", datetime: "", photo: null, note: "" });
+      setMissingRecords([]);
     } catch (err) {
       console.error(err);
       Swal.fire({
@@ -1639,8 +1964,198 @@ export default function PersonsTable() {
                 <label className="block text-xs font-semibold text-gray-700 mb-1.5">
                   Person
                 </label>
-                <div className="py-2.5 px-3.5 bg-gray-50 rounded-xl border border-gray-200 text-sm text-gray-800 font-medium">
-                  {adminModal.person.name} • ID: {adminModal.person.id}
+                <div className="py-2.5 px-3.5 bg-gray-50 rounded-xl border border-gray-200 text-sm text-gray-800 font-medium flex items-center justify-between">
+                  <span>
+                    <strong className="text-[#0f3d16]">{adminModal.person.name}</strong> • ID: {adminModal.person.id}
+                  </span>
+                  {adminModal.person.department && (
+                    <span className="text-xs bg-[#237227]/10 text-[#237227] font-semibold px-2.5 py-0.5 rounded-full">
+                      {adminModal.person.department}
+                    </span>
+                  )}
+                </div>
+              </div>
+
+              {/* Missing Attendance Section */}
+              <div className="col-span-1 sm:col-span-2 bg-[#f8faf8] rounded-2xl p-4 border border-[#e2ece3]">
+                <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
+                  <div className="flex items-center gap-2">
+                    <span className="flex items-center justify-center w-7 h-7 rounded-lg bg-[#237227]/10 text-[#237227]">
+                      <FiAlertCircle className="text-base" />
+                    </span>
+                    <div>
+                      <h4 className="text-xs font-bold uppercase tracking-wider text-[#0f3d16] m-0">
+                        Missing Attendance Records
+                      </h4>
+                      <p className="text-[11px] text-gray-500 m-0">
+                        Select a missing date below to auto-fill the record form
+                      </p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    <select
+                      value={missingPeriod}
+                      onChange={(e) => {
+                        const newPeriod = e.target.value;
+                        setMissingPeriod(newPeriod);
+                        fetchMissingRecordsForPerson(adminModal.person, newPeriod);
+                      }}
+                      className="text-xs font-medium py-1.5 px-2.5 rounded-lg border border-gray-300 bg-white text-gray-700 outline-none focus:border-[#237227] cursor-pointer"
+                    >
+                      <option value="current">Current Cutoff</option>
+                      <option value="previous">Previous Cutoff</option>
+                      <option value="last30">Last 30 Days</option>
+                    </select>
+                  </div>
+                </div>
+
+                {/* Filter Pills */}
+                {missingRecords.length > 0 && (
+                  <div className="flex flex-wrap gap-1.5 mb-2.5">
+                    {[
+                      { key: "all", label: `All (${missingRecords.length})` },
+                      { key: "missing-in", label: `Missing In (${missingRecords.filter((r) => r.type === "missing-in").length})` },
+                      { key: "missing-out", label: `Missing Out (${missingRecords.filter((r) => r.type === "missing-out").length})` },
+                      { key: "missing-both", label: `No Records (${missingRecords.filter((r) => r.type === "missing-both").length})` },
+                    ].map((f) => (
+                      <button
+                        key={f.key}
+                        type="button"
+                        onClick={() => setMissingFilter(f.key)}
+                        className={`text-[11px] font-semibold px-2.5 py-1 rounded-lg border transition-colors cursor-pointer ${
+                          missingFilter === f.key
+                            ? "bg-[#237227] text-white border-[#237227]"
+                            : "bg-white text-gray-600 border-gray-200 hover:border-gray-300"
+                        }`}
+                      >
+                        {f.label}
+                      </button>
+                    ))}
+                  </div>
+                )}
+
+                {/* Missing List Display */}
+                <div className="max-h-[200px] overflow-y-auto pr-1 flex flex-col gap-2">
+                  {loadingMissing ? (
+                    <div className="py-6 text-center text-xs text-gray-500 font-medium">
+                      Scanning attendance logs for missing punches...
+                    </div>
+                  ) : missingRecords.length === 0 ? (
+                    <div className="py-4 px-3 bg-white rounded-xl border border-emerald-100 flex items-center gap-2 text-xs text-emerald-700 font-medium">
+                      <FiCheckCircle className="text-base text-emerald-600 shrink-0" />
+                      <span>All attendance records are complete for this period. No missing time-in or time-out detected.</span>
+                    </div>
+                  ) : (
+                    (() => {
+                      const filtered = missingRecords.filter((item) => {
+                        if (missingFilter === "all") return true;
+                        return item.type === missingFilter;
+                      });
+                      if (filtered.length === 0) {
+                        return (
+                          <div className="py-4 text-center text-xs text-gray-400">
+                            No records matching this filter.
+                          </div>
+                        );
+                      }
+                      return filtered.map((item) => {
+                        const dt = new Date(item.date + "T00:00:00");
+                        const dateFormatted = !isNaN(dt.getTime())
+                          ? dt.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric", year: "numeric" })
+                          : item.date;
+
+                        return (
+                          <div
+                            key={item.date}
+                            className="bg-white rounded-xl p-3 border border-gray-200/80 shadow-[0_1px_3px_rgba(0,0,0,0.02)] flex flex-wrap sm:flex-nowrap items-center justify-between gap-2.5 hover:border-[#237227]/40 transition-colors"
+                          >
+                            <div className="flex flex-col gap-0.5">
+                              <div className="flex items-center gap-2">
+                                <span className="font-bold text-xs text-gray-800 font-mono">
+                                  {dateFormatted}
+                                </span>
+                                {item.isToday && (
+                                  <span className="text-[10px] font-bold px-1.5 py-0.2 bg-emerald-100 text-emerald-800 rounded">
+                                    TODAY
+                                  </span>
+                                )}
+                              </div>
+                              <div className="flex items-center gap-1.5 text-[11px]">
+                                {item.type === "missing-in" && (
+                                  <>
+                                    <span className="font-semibold text-rose-600 bg-rose-50 px-2 py-0.5 rounded-md border border-rose-200">
+                                      Missing Time In
+                                    </span>
+                                    {item.recordedOut && (
+                                      <span className="text-gray-500">
+                                        (Time Out: <span className="font-medium text-gray-700">{item.recordedOut}</span>)
+                                      </span>
+                                    )}
+                                  </>
+                                )}
+                                {item.type === "missing-out" && (
+                                  <>
+                                    <span className="font-semibold text-amber-600 bg-amber-50 px-2 py-0.5 rounded-md border border-amber-200">
+                                      Missing Time Out
+                                    </span>
+                                    {item.recordedIn && (
+                                      <span className="text-gray-500">
+                                        (Time In: <span className="font-medium text-gray-700">{item.recordedIn}</span>)
+                                      </span>
+                                    )}
+                                  </>
+                                )}
+                                {item.type === "missing-both" && (
+                                  <span className="font-semibold text-gray-600 bg-gray-100 px-2 py-0.5 rounded-md border border-gray-200">
+                                    No Attendance Recorded (Full Day)
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+
+                            <div className="flex items-center gap-1.5 shrink-0 ml-auto">
+                              {item.type === "missing-in" && (
+                                <button
+                                  type="button"
+                                  onClick={() => handleFillMissing(item, "time-in")}
+                                  className="text-xs font-semibold py-1 px-3 rounded-lg bg-[#237227] hover:bg-[#1c5c20] text-white border-none cursor-pointer flex items-center gap-1 transition-colors shadow-none"
+                                >
+                                  <FiPlus className="text-xs" /> Fill Time In
+                                </button>
+                              )}
+                              {item.type === "missing-out" && (
+                                <button
+                                  type="button"
+                                  onClick={() => handleFillMissing(item, "time-out")}
+                                  className="text-xs font-semibold py-1 px-3 rounded-lg bg-amber-600 hover:bg-amber-700 text-white border-none cursor-pointer flex items-center gap-1 transition-colors shadow-none"
+                                >
+                                  <FiPlus className="text-xs" /> Fill Time Out
+                                </button>
+                              )}
+                              {item.type === "missing-both" && (
+                                <div className="flex items-center gap-1">
+                                  <button
+                                    type="button"
+                                    onClick={() => handleFillMissing(item, "time-in")}
+                                    className="text-xs font-semibold py-1 px-2.5 rounded-lg bg-[#237227] hover:bg-[#1c5c20] text-white border-none cursor-pointer flex items-center gap-0.5 transition-colors shadow-none"
+                                  >
+                                    <FiPlus className="text-xs" /> Time In
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleFillMissing(item, "time-out")}
+                                    className="text-xs font-semibold py-1 px-2.5 rounded-lg bg-amber-600 hover:bg-amber-700 text-white border-none cursor-pointer flex items-center gap-0.5 transition-colors shadow-none"
+                                  >
+                                    <FiPlus className="text-xs" /> Time Out
+                                  </button>
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      });
+                    })()
+                  )}
                 </div>
               </div>
 
@@ -1672,13 +2187,12 @@ export default function PersonsTable() {
                 >
                   Date & time
                 </label>
-                <input
+                <DateTimeInput
                   id="admin-attendance-datetime"
                   name="admin-attendance-datetime"
-                  type="datetime-local"
                   value={adminModal.datetime}
-                  onChange={(e) =>
-                    setAdminModal((s) => ({ ...s, datetime: e.target.value }))
+                  onChange={(val) =>
+                    setAdminModal((s) => ({ ...s, datetime: val }))
                   }
                   className="w-full py-2.5 px-3.5 rounded-xl border border-gray-200 bg-white text-gray-900 outline-none focus:border-[#237227] focus:ring-0 text-sm"
                 />
