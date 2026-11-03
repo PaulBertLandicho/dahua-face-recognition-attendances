@@ -257,20 +257,7 @@ async function recordDeviceSyncStatus({ type, success, error = null }) {
           SET NEW.attendance_slot = 'afternoon_time_out';
           SET NEW.attendance_work_date = IF(NEW.device_time IS NULL, NULL, DATE(NEW.device_time - INTERVAL 1 DAY));
           SET NEW.status = 'overtime';
-        ELSEIF TIME(NEW.device_time) <= configured_morning_end THEN
-          SET NEW.event = 'time-in';
-          SET NEW.attendance_slot = 'morning_time_in';
-          SET NEW.attendance_work_date = IF(NEW.device_time IS NULL, NULL, DATE(NEW.device_time));
-          IF NEW.status IS NULL OR NEW.status = '' OR NEW.status = 'present' OR NEW.status = 'on-time' THEN
-            IF TIME(NEW.device_time) < configured_morning_start THEN
-              SET NEW.status = 'early-in';
-            ELSEIF TIME(NEW.device_time) < ADDTIME(configured_morning_start, SEC_TO_TIME((configured_morning_grace + 1) * 60)) THEN
-              SET NEW.status = 'on-time';
-            ELSE
-              SET NEW.status = 'late';
-            END IF;
-          END IF;
-        ELSEIF TIME(NEW.device_time) >= configured_afternoon_start THEN
+        ELSEIF NEW.event = 'time-out' OR TIME(NEW.device_time) > configured_morning_end THEN
           SET NEW.event = 'time-out';
           SET NEW.attendance_slot = 'afternoon_time_out';
           SET NEW.attendance_work_date = IF(NEW.device_time IS NULL, NULL, DATE(NEW.device_time));
@@ -281,6 +268,19 @@ async function recordDeviceSyncStatus({ type, success, error = null }) {
               SET NEW.status = 'overtime';
             ELSE
               SET NEW.status = 'on-time';
+            END IF;
+          END IF;
+        ELSEIF TIME(NEW.device_time) <= configured_morning_end THEN
+          SET NEW.event = 'time-in';
+          SET NEW.attendance_slot = 'morning_time_in';
+          SET NEW.attendance_work_date = IF(NEW.device_time IS NULL, NULL, DATE(NEW.device_time));
+          IF NEW.status IS NULL OR NEW.status = '' OR NEW.status = 'present' OR NEW.status = 'on-time' THEN
+            IF TIME(NEW.device_time) <= '07:00:59' AND TIME(NEW.device_time) < configured_morning_start THEN
+              SET NEW.status = 'early-in';
+            ELSEIF TIME(NEW.device_time) < ADDTIME(configured_morning_start, SEC_TO_TIME((configured_morning_grace + 1) * 60)) THEN
+              SET NEW.status = 'on-time';
+            ELSE
+              SET NEW.status = 'late';
             END IF;
           END IF;
         ELSE
@@ -317,30 +317,30 @@ async function recordDeviceSyncStatus({ type, success, error = null }) {
           SET NEW.attendance_slot = 'afternoon_time_out';
           SET NEW.attendance_work_date = IF(NEW.device_time IS NULL, NULL, DATE(NEW.device_time - INTERVAL 1 DAY));
           SET NEW.status = 'overtime';
-        ELSEIF TIME(NEW.device_time) <= configured_morning_end THEN
-          SET NEW.event = 'time-in';
-          SET NEW.attendance_slot = 'morning_time_in';
-          SET NEW.attendance_work_date = IF(NEW.device_time IS NULL, NULL, DATE(NEW.device_time));
-          IF NEW.status IS NULL OR NEW.status = '' OR NEW.status = OLD.status OR NEW.status = 'present' OR NEW.status = 'on-time' THEN
-            IF TIME(NEW.device_time) < configured_morning_start THEN
-              SET NEW.status = 'early-in';
-            ELSEIF TIME(NEW.device_time) < ADDTIME(configured_morning_start, SEC_TO_TIME((configured_morning_grace + 1) * 60)) THEN
-              SET NEW.status = 'on-time';
-            ELSE
-              SET NEW.status = 'late';
-            END IF;
-          END IF;
-        ELSEIF TIME(NEW.device_time) >= configured_afternoon_start THEN
+        ELSEIF NEW.event = 'time-out' OR TIME(NEW.device_time) > configured_morning_end THEN
           SET NEW.event = 'time-out';
           SET NEW.attendance_slot = 'afternoon_time_out';
           SET NEW.attendance_work_date = IF(NEW.device_time IS NULL, NULL, DATE(NEW.device_time));
-          IF NEW.status IS NULL OR NEW.status = '' OR NEW.status = OLD.status OR NEW.status = 'present' OR NEW.status = 'on-time' THEN
+          IF NEW.status IS NULL OR NEW.status = '' OR NEW.status = OLD.status OR OLD.event != 'time-out' OR NEW.status = 'present' OR NEW.status = 'on-time' THEN
             IF TIME(NEW.device_time) < configured_afternoon_end THEN
               SET NEW.status = 'early-out';
             ELSEIF TIME(NEW.device_time) >= ADDTIME(configured_afternoon_end, SEC_TO_TIME((configured_afternoon_grace + 1) * 60)) THEN
               SET NEW.status = 'overtime';
             ELSE
               SET NEW.status = 'on-time';
+            END IF;
+          END IF;
+        ELSEIF TIME(NEW.device_time) <= configured_morning_end THEN
+          SET NEW.event = 'time-in';
+          SET NEW.attendance_slot = 'morning_time_in';
+          SET NEW.attendance_work_date = IF(NEW.device_time IS NULL, NULL, DATE(NEW.device_time));
+          IF NEW.status IS NULL OR NEW.status = '' OR NEW.status = OLD.status OR OLD.event != 'time-in' OR NEW.status = 'present' OR NEW.status = 'on-time' THEN
+            IF TIME(NEW.device_time) <= '07:00:59' AND TIME(NEW.device_time) < configured_morning_start THEN
+              SET NEW.status = 'early-in';
+            ELSEIF TIME(NEW.device_time) < ADDTIME(configured_morning_start, SEC_TO_TIME((configured_morning_grace + 1) * 60)) THEN
+              SET NEW.status = 'on-time';
+            ELSE
+              SET NEW.status = 'late';
             END IF;
           END IF;
         ELSE
@@ -740,16 +740,17 @@ function dedupeDahuaAttendanceByPersonDay(records, settings = null) {
       targetDateStr = getPreviousDateStr(dateStr);
       effectiveMins = 24 * 60 + mins;
     } else if (mins <= morningEnd) {
-      // 03:00 AM to morningEnd: Morning shift time-in (Early-in starting at 3:00 AM)
+      // 03:00 AM to morningEnd: Morning shift time-in (Early-in starting at 3:00 AM to 7:00 AM)
       event = "time-in";
-      if (mins < morningStart) {
+      if (mins >= 3 * 60 && mins <= 7 * 60 && mins < morningStart) {
         status = "early-in";
       } else if (mins <= morningStart + morningGrace) {
         status = "on-time";
       } else {
         status = "late";
       }
-    } else if (mins >= afternoonStart) {
+    } else {
+      // Any scan after morningEnd (> 11:59 AM) is a time-out
       event = "time-out";
       if (mins < afternoonEnd) {
         status = "early-out";
@@ -758,9 +759,6 @@ function dedupeDahuaAttendanceByPersonDay(records, settings = null) {
       } else {
         status = "on-time";
       }
-    } else {
-      // Outside both windows (e.g. lunch period)
-      continue;
     }
 
     const dateKey = `${record.person_id}|${targetDateStr}`;
@@ -788,7 +786,20 @@ function dedupeDahuaAttendanceByPersonDay(records, settings = null) {
       .sort((a, b) => a._minutes - b._minutes);
 
     const morningIn = morningInCandidates[0];
-    const afternoonOut = afternoonOutCandidates.length ? afternoonOutCandidates[afternoonOutCandidates.length - 1] : null;
+    let afternoonOut = afternoonOutCandidates.length ? afternoonOutCandidates[afternoonOutCandidates.length - 1] : null;
+
+    // If the employee has 2+ morning scans (e.g. 05:54 AM in and 10:00 AM out) and no afternoon out scan,
+    // treat the last morning scan as their Time Out (Early Out) so it isn't lost or overwritten.
+    if (!afternoonOut && morningInCandidates.length >= 2) {
+      const lastMorningScan = morningInCandidates[morningInCandidates.length - 1];
+      if (lastMorningScan._minutes - morningIn._minutes >= 5) {
+        afternoonOut = {
+          ...lastMorningScan,
+          event: "time-out",
+          status: "early-out",
+        };
+      }
+    }
 
     if (morningIn) finalRecords.push(morningIn);
     if (afternoonOut) finalRecords.push(afternoonOut);
@@ -1649,10 +1660,16 @@ app.post(["/api/attendance/import", "/attendance/import", "/api/dahua/import", "
 
         // Delete any previously inserted shifted timestamp for the same person and event on this work shift (never delete admin-entry)
         await pool.query(
-          "DELETE FROM attendance WHERE person_id = ? AND event = ? AND (attendance_work_date = ? OR (attendance_work_date IS NULL AND device_time LIKE ?)) AND device_time != ? AND (method IS NULL OR method != 'admin-entry')",
-          [record.person_id, record.event, workDate, `${rawDate}%`, formattedTime]
+          "DELETE FROM attendance WHERE person_id = ? AND ((event = ? AND (attendance_work_date = ? OR (attendance_work_date IS NULL AND device_time LIKE ?)) AND device_time != ?) OR (device_time = ? AND event != ?)) AND (method IS NULL OR method != 'admin-entry')",
+          [record.person_id, record.event, workDate, `${rawDate}%`, formattedTime, formattedTime, record.event]
         ).catch(() => {});
 
+        if (record.person_id) {
+          await pool.query(
+            "INSERT IGNORE INTO persons (id, name) VALUES (?, ?)",
+            [record.person_id, record.name || `User ${record.person_id}`]
+          ).catch(() => {});
+        }
         const [result] = await pool.query(
           "INSERT IGNORE INTO attendance (person_id, name, event, point, method, device_time, status) VALUES (?, ?, ?, ?, ?, ?, ?)",
           [record.person_id, record.name, record.event, record.point, record.method, formattedTime, record.status || null]
@@ -1690,7 +1707,7 @@ app.post(["/api/attendance/import", "/attendance/import", "/api/dahua/import", "
 
 app.post("/api/dahua/sync-attendance", async (req, res) => {
   try {
-    const limit = Number(req.body?.limit || 1000);
+    const limit = Math.max(Number(req.body?.limit || 5000), 1000);
     const query = `/cgi-bin/recordFinder.cgi?action=find&name=AccessControlCardRec&count=${limit}`;
 
     let records;
@@ -1727,9 +1744,15 @@ app.post("/api/dahua/sync-attendance", async (req, res) => {
         const workDate = getWorkDateFromDeviceTime(formattedTime, record.event);
         const rawDate = formattedTime.slice(0, 10);
         await pool.query(
-          "DELETE FROM attendance WHERE person_id = ? AND event = ? AND (attendance_work_date = ? OR (attendance_work_date IS NULL AND device_time LIKE ?)) AND device_time != ? AND (method IS NULL OR method != 'admin-entry')",
-          [record.person_id, record.event, workDate, `${rawDate}%`, formattedTime]
+          "DELETE FROM attendance WHERE person_id = ? AND ((event = ? AND (attendance_work_date = ? OR (attendance_work_date IS NULL AND device_time LIKE ?)) AND device_time != ?) OR (device_time = ? AND event != ?)) AND (method IS NULL OR method != 'admin-entry')",
+          [record.person_id, record.event, workDate, `${rawDate}%`, formattedTime, formattedTime, record.event]
         ).catch(() => {});
+        if (record.person_id) {
+          await pool.query(
+            "INSERT IGNORE INTO persons (id, name) VALUES (?, ?)",
+            [record.person_id, record.name || `User ${record.person_id}`]
+          ).catch(() => {});
+        }
         const [result] = await pool.query(
           "INSERT IGNORE INTO attendance (person_id, name, event, point, method, device_time, status) VALUES (?, ?, ?, ?, ?, ?, ?)",
           [record.person_id, record.name, record.event, record.point, record.method, formattedTime, record.status || null]
@@ -2497,8 +2520,8 @@ if (AUTO_SYNC_ATTENDANCE_MINUTES > 0) {
         const dateDay = dTime.slice(0, 10);
         const workDate = getWorkDateFromDeviceTime(dTime, record.event);
         await pool.query(
-          "DELETE FROM attendance WHERE person_id = ? AND event = ? AND (attendance_work_date = ? OR (attendance_work_date IS NULL AND device_time LIKE ?)) AND device_time != ? AND (method IS NULL OR method != 'admin-entry')",
-          [pId, record.event, workDate, `${dateDay}%`, dTime]
+          "DELETE FROM attendance WHERE person_id = ? AND ((event = ? AND (attendance_work_date = ? OR (attendance_work_date IS NULL AND device_time LIKE ?)) AND device_time != ?) OR (device_time = ? AND event != ?)) AND (method IS NULL OR method != 'admin-entry')",
+          [pId, record.event, workDate, `${dateDay}%`, dTime, dTime, record.event]
         ).catch(() => {});
         await pool.query(
           "INSERT IGNORE INTO attendance (person_id, name, event, point, method, device_time, status) VALUES (?, ?, ?, ?, ?, ?, ?)",

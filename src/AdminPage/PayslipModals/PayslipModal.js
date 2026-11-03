@@ -186,8 +186,6 @@ export default function PayslipModal({
     try {
       const sched = payroll && payroll.settings ? payroll.settings : {};
       const schedMorningStart = parseTimeToMinutes(sched.morning_start || "08:00") || 480;
-      const schedEarlyInLimit = Math.min(schedMorningStart - 60, parseTimeToMinutes("07:00") || 420);
-      const schedMorningEnd = sched.morning_end || "12:00";
       const schedAfternoonEnd = sched.afternoon_end || "17:00";
       const schedAfternoonGrace = Number.isFinite(Number(sched.afternoon_grace_minutes))
         ? Number(sched.afternoon_grace_minutes)
@@ -195,28 +193,19 @@ export default function PayslipModal({
       (detailedAttendance || []).forEach((rec) => {
         try {
           const mIn = parseTimeToMinutes(rec.morningIn || rec.attendanceIn);
-          const mOut = parseTimeToMinutes(rec.morningOut);
-          const aOut = parseTimeToMinutes(rec.afternoonOut || rec.attendanceOut);
-          const mEnd = parseTimeToMinutes(schedMorningEnd);
+          const aOut = parseTimeToMinutes(rec.afternoonOut || rec.morningOut || rec.attendanceOut);
           const aEnd = parseTimeToMinutes(schedAfternoonEnd);
 
-          // Early-in overtime (3:00 AM up to 7:00 AM)
+          // Early-in computation: 03:00 AM - 07:00 AM only added to OT
           if (
             typeof mIn === "number" &&
             mIn >= 3 * 60 &&
-            mIn <= schedEarlyInLimit &&
+            mIn <= 7 * 60 &&
             mIn < schedMorningStart
           ) {
             totalOtMinutesForPdf += schedMorningStart - mIn;
           }
 
-          if (
-            typeof mOut === "number" &&
-            typeof mEnd === "number" &&
-            mOut > mEnd &&
-            mOut - mEnd >= 60
-          )
-            totalOtMinutesForPdf += mOut - mEnd;
           if (
             typeof aOut === "number" &&
             typeof aEnd === "number"
@@ -234,6 +223,11 @@ export default function PayslipModal({
     try {
       payroll.otHours = Math.round(totalOtHoursForPdf * 100) / 100;
     } catch (e) {}
+    const totalLateMinutes = (allLateDetails || []).reduce(
+      (sum, item) => sum + (Number(item.minutesLate) || 0),
+      0
+    );
+
     await generatePayslipPdf({
       payroll,
       person,
@@ -241,6 +235,8 @@ export default function PayslipModal({
       holidayPayDetails,
       totalHolidayPay,
       absentCount,
+      lateDeduction,
+      lateMinutes: totalLateMinutes,
       totalDeductions: computedDeductionsSum,
       daysWorked,
       standardPayAmount,
@@ -529,7 +525,7 @@ export default function PayslipModal({
           // Default 2-session expectation
           if (morningEnded && afternoonEnded) {
             if (!hasMorning && !hasAfternoon)
-              return { date: dateStr, missing: "Full Day" };
+              return { date: dateStr, missing: "Whole Day" };
             if (!hasMorning) return { date: dateStr, missing: "Morning" };
             if (!hasAfternoon) return { date: dateStr, missing: "Afternoon" };
             return null;
@@ -704,21 +700,23 @@ export default function PayslipModal({
   let dynamicOtMinutes = 0;
   if (detailedAttendance && detailedAttendance.length) {
     const schedMorningStart = (settings && settings.morning_start) || "08:00";
-    const schedMorningEnd = (settings && settings.morning_end) || "12:00";
     const schedAfternoonEnd = (settings && settings.afternoon_end) || "17:00";
     const schedAfternoonGrace = Number.isFinite(Number(settings && settings.afternoon_grace_minutes))
       ? Number(settings.afternoon_grace_minutes)
       : 0;
     const schedMorningStartMin = parseTimeToMinutes(schedMorningStart) || 480;
-    const schedEarlyInLimit = Math.min(schedMorningStartMin - 60, parseTimeToMinutes("07:00") || 420);
-    const schedMorningEndMin = parseTimeToMinutes(schedMorningEnd);
     const schedAfternoonEndMin = parseTimeToMinutes(schedAfternoonEnd);
 
     detailedAttendance.forEach((rec) => {
       const mIn = parseTimeToMinutes(rec.attendanceIn || rec.morningIn);
-      const mOut = parseTimeToMinutes(rec.morningOut);
-      const aOut = parseTimeToMinutes(rec.attendanceOut || rec.afternoonOut);
-      if (typeof mIn === "number" && mIn >= 3 * 60 && mIn <= schedEarlyInLimit && mIn < schedMorningStartMin) {
+      const aOut = parseTimeToMinutes(rec.attendanceOut || rec.afternoonOut || rec.morningOut);
+      // Early-in computation: 03:00 AM - 07:00 AM only added to OT
+      if (
+        typeof mIn === "number" &&
+        mIn >= 3 * 60 &&
+        mIn <= 7 * 60 &&
+        mIn < schedMorningStartMin
+      ) {
         dynamicOtMinutes += schedMorningStartMin - mIn;
       }
       if (typeof aOut === "number" && typeof schedAfternoonEndMin === "number") {
@@ -727,10 +725,6 @@ export default function PayslipModal({
           const mins = effectiveAOut - schedAfternoonEndMin;
           if (mins > schedAfternoonGrace) dynamicOtMinutes += mins;
         }
-      }
-      if (typeof mOut === "number" && typeof schedMorningEndMin === "number" && mOut > schedMorningEndMin) {
-        const mins = mOut - schedMorningEndMin;
-        if (mins >= 60) dynamicOtMinutes += mins;
       }
     });
   }
@@ -859,7 +853,7 @@ export default function PayslipModal({
                   <th className="bg-gray-50 text-gray-600 font-semibold py-3 px-2 text-left border-b-2 border-gray-200 uppercase text-sm tracking-wide">Time Out</th>
                   <th className="bg-gray-50 text-gray-600 font-semibold py-3 px-2 text-left border-b-2 border-gray-200 uppercase text-sm tracking-wide">OT</th>
                   <th className="bg-gray-50 text-gray-600 font-semibold py-3 px-2 text-left border-b-2 border-gray-200 uppercase text-sm tracking-wide">Late Count</th>
-                  <th className="bg-gray-50 text-gray-600 font-semibold py-3 px-2 text-left border-b-2 border-gray-200 uppercase text-sm tracking-wide">Late Details</th>
+                  <th className="bg-gray-50 text-gray-600 font-semibold py-3 px-2 text-left border-b-2 border-gray-200 uppercase text-sm tracking-wide whitespace-nowrap">Late Details</th>
                   <th className="bg-gray-50 text-gray-600 font-semibold py-3 px-2 text-left border-b-2 border-gray-200 uppercase text-sm tracking-wide">Daily Rate</th>
                   <th className="bg-gray-50 text-gray-600 font-semibold py-3 px-2 text-left border-b-2 border-gray-200 uppercase text-sm tracking-wide">Late Deduct</th>
                   <th className="bg-gray-50 text-gray-600 font-semibold py-3 px-2 text-left border-b-2 border-gray-200 uppercase text-sm tracking-wide">Daily Salary</th>
@@ -891,7 +885,7 @@ export default function PayslipModal({
 
                     // Attendance Out (2nd / last attempt of attendance)
                     let attendanceOutDisplay = "N/A";
-                    const outTime = rec.attendanceOut || rec.afternoonOut;
+                    const outTime = rec.attendanceOut || rec.afternoonOut || rec.morningOut;
                     if (outTime) {
                       attendanceOutDisplay = outTime;
                     } else if (isWeekend || isHolidayDate) {
@@ -900,15 +894,15 @@ export default function PayslipModal({
                       attendanceOutDisplay = "Not time-out";
                     }
 
-                    // Compute per-row overtime (minutes) by comparing out times to scheduled end times.
+                    // Compute per-row overtime (minutes) by comparing afternoon out time to scheduled afternoon end time.
+                    // Also compute Early In (3:00 AM - 7:00 AM) and Early Out (< 17:00).
                     let otMinutes = 0;
-                    let earlyOtHoursForRow = 0;
+                    let earlyInHoursForRow = 0;
                     let afterOtHoursForRow = 0;
+                    let isEarlyOutForRow = false;
                     try {
                       const scheduledMorningStart =
                         (settings && settings.morning_start) || "08:00";
-                      const scheduledMorningEnd =
-                        (settings && settings.morning_end) || "12:00";
                       const scheduledAfternoonEnd =
                         (settings && settings.afternoon_end) || "17:00";
                       const schedAfternoonGrace = Number.isFinite(
@@ -918,31 +912,26 @@ export default function PayslipModal({
                         : 0;
                       const schedMorningStartMin =
                         parseTimeToMinutes(scheduledMorningStart) || 480;
-                      const schedEarlyInLimit =
-                        Math.min(schedMorningStartMin - 60, parseTimeToMinutes("07:00") || 420);
                       const morningInMin = parseTimeToMinutes(
-                        rec.attendanceIn || rec.morningIn
+                        rec.attendanceIn || rec.morningIn,
                       );
-                      const morningOutMin = parseTimeToMinutes(rec.morningOut);
                       const afternoonOutMin = parseTimeToMinutes(
-                        rec.attendanceOut || rec.afternoonOut,
+                        rec.attendanceOut || rec.afternoonOut || rec.morningOut,
                       );
-                      const schedMorningEndMin =
-                        parseTimeToMinutes(scheduledMorningEnd);
                       const schedAfternoonEndMin = parseTimeToMinutes(
                         scheduledAfternoonEnd,
                       );
 
-                      // Early-in overtime (triggers at 3:00 AM up to 7:00 AM)
+                      // Early In (03:00 AM to 07:00 AM only) - computed and added to Afternoon OT
                       if (
                         typeof morningInMin === "number" &&
                         morningInMin >= 3 * 60 &&
-                        morningInMin <= schedEarlyInLimit &&
+                        morningInMin <= 7 * 60 &&
                         morningInMin < schedMorningStartMin
                       ) {
                         const earlyMins = schedMorningStartMin - morningInMin;
                         otMinutes += earlyMins;
-                        earlyOtHoursForRow = earlyMins / 60;
+                        earlyInHoursForRow = earlyMins / 60;
                       }
 
                       if (
@@ -956,16 +945,9 @@ export default function PayslipModal({
                             otMinutes += mins;
                             afterOtHoursForRow = mins / 60;
                           }
+                        } else if (effectiveAfternoonOutMin < schedAfternoonEndMin) {
+                          isEarlyOutForRow = true;
                         }
-                      }
-                      // include morning overtime if present (rare)
-                      if (
-                        typeof morningOutMin === "number" &&
-                        typeof schedMorningEndMin === "number" &&
-                        morningOutMin > schedMorningEndMin
-                      ) {
-                        const mins = morningOutMin - schedMorningEndMin;
-                        if (mins >= 60) otMinutes += mins;
                       }
                     } catch (e) {
                       otMinutes = 0;
@@ -1011,9 +993,9 @@ export default function PayslipModal({
                         <td className="py-2.5 px-2 border-b border-gray-200 text-gray-800 font-mono text-sm font-semibold">{rec.date}</td>
                         <td className={`py-2.5 px-2 border-b border-gray-200 ${rec.morningInStatus === 'late' ? 'text-red-500' : 'text-gray-800'}`}>
                           {attendanceInDisplay}
-                          {earlyOtHoursForRow > 0 && (
+                          {earlyInHoursForRow > 0 && (
                             <span className="block text-[11px] text-[#237227] font-semibold mt-0.5">
-                              Early-In OT: {getHourMinute(earlyOtHoursForRow)}
+                              Early In: {getHourMinute(earlyInHoursForRow)}
                             </span>
                           )}
                         </td>
@@ -1024,14 +1006,19 @@ export default function PayslipModal({
                               Overtime: {getHourMinute(afterOtHoursForRow)}
                             </span>
                           )}
+                          {isEarlyOutForRow && (
+                            <span className="block text-[11px] text-orange-600 font-semibold mt-0.5">
+                              Early Out
+                            </span>
+                          )}
                         </td>
                         <td className="py-2.5 px-2 border-b border-gray-200 text-gray-800">
                           {recOtHours > 0 ? `${getHourMinute(recOtHours)} (${recOtHours.toFixed(2)})` : "N/A"}
                         </td>
                         <td className="py-2.5 px-2 border-b border-gray-200 text-gray-800">{rec.lateCount || 0}</td>
-                        <td className="py-2.5 px-2 border-b border-gray-200 text-gray-800">
+                        <td className="py-2.5 px-2 border-b border-gray-200 text-gray-800 whitespace-nowrap">
                           {rec.lateDetails && rec.lateDetails.length ? (
-                            <ul className="m-0 pl-4">
+                            <div className="flex flex-col gap-1 whitespace-nowrap">
                               {rec.lateDetails.map((d, idx) => {
                                 const itemCalc = calculateTieredLateDeduction(
                                   [d],
@@ -1040,14 +1027,14 @@ export default function PayslipModal({
                                   payroll.settings || {}
                                 );
                                 return (
-                                  <li key={idx} className="text-red-500 text-xs">
+                                  <span key={idx} className="text-red-500 text-xs whitespace-nowrap inline-block">
                                     {d.session}: {d.time}{" "}
                                     {d.minutesLate ? `(${d.minutesLate}m late)` : `(${d.status})`}{" "}
-                                    <span className="font-semibold text-red-600">[-₱{itemCalc.totalLateDeduction.toFixed(2)}]</span>
-                                  </li>
+                                    <span className="font-semibold text-red-600 whitespace-nowrap">[-₱{itemCalc.totalLateDeduction.toFixed(2)}]</span>
+                                  </span>
                                 );
                               })}
-                            </ul>
+                            </div>
                           ) : (
                             "N/A"
                           )}
@@ -1117,7 +1104,6 @@ export default function PayslipModal({
                     let otM = 0;
                     try {
                       const scheduledMorningStart = (settings && settings.morning_start) || "08:00";
-                      const scheduledMorningEnd = (settings && settings.morning_end) || "12:00";
                       const scheduledAfternoonEnd = (settings && settings.afternoon_end) || "17:00";
                       const schedAfternoonGrace = Number.isFinite(
                         Number(settings && settings.afternoon_grace_minutes),
@@ -1125,16 +1111,15 @@ export default function PayslipModal({
                         ? Number(settings.afternoon_grace_minutes)
                         : 0;
                       const schedMorningStartMin = parseTimeToMinutes(scheduledMorningStart) || 480;
-                      const schedEarlyInLimit = Math.min(schedMorningStartMin - 60, parseTimeToMinutes("07:00") || 420);
                       const morningInMin = parseTimeToMinutes(rec.attendanceIn || rec.morningIn);
-                      const afternoonOutMin = parseTimeToMinutes(rec.attendanceOut || rec.afternoonOut);
+                      const afternoonOutMin = parseTimeToMinutes(rec.attendanceOut || rec.afternoonOut || rec.morningOut);
                       const schedAfternoonEndMin = parseTimeToMinutes(scheduledAfternoonEnd);
 
-                      // Early-in overtime (3:00 AM up to 7:00 AM)
+                      // Early-in computation: 03:00 AM - 07:00 AM only added to OT
                       if (
                         typeof morningInMin === "number" &&
                         morningInMin >= 3 * 60 &&
-                        morningInMin <= schedEarlyInLimit &&
+                        morningInMin <= 7 * 60 &&
                         morningInMin < schedMorningStartMin
                       ) {
                         otM += schedMorningStartMin - morningInMin;
@@ -1146,12 +1131,6 @@ export default function PayslipModal({
                           const mins = effectiveAfternoonOutMin - schedAfternoonEndMin;
                           if (mins > schedAfternoonGrace) otM += mins;
                         }
-                      }
-                      const morningOutMin = parseTimeToMinutes(rec.morningOut);
-                      const schedMorningEndMin = parseTimeToMinutes(scheduledMorningEnd);
-                      if (typeof morningOutMin === "number" && typeof schedMorningEndMin === "number" && morningOutMin > schedMorningEndMin) {
-                        const mins = morningOutMin - schedMorningEndMin;
-                        if (mins >= 60) otM += mins;
                       }
                     } catch (e) {}
 

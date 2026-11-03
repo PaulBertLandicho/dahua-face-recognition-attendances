@@ -32,9 +32,11 @@ export function determineExpectedEvent(currentTime, lastEvent, settings, lastEve
   }
 
   // Morning shift: time-in (supports early-in starting at 3:00 AM before morningStartMinutes)
+  // If the employee already timed in during the morning, a subsequent morning scan is their morning time-out (early-out).
   if (nowMinutes <= morningEndMinutes) {
-    if (!lastEvent || lastEvent === "time-out") return "time-in";
-    if (lastEvent === "time-in") return "already-timed-in";
+    if (!lastEvent) return "time-in";
+    if (lastEvent === "time-in") return "time-out";
+    if (lastEvent === "time-out") return "attendance-closed";
     return "attendance-closed";
   }
   // Morning shift: time-out after morning window
@@ -129,8 +131,8 @@ export function determineAttendanceStatus(
     return "overtime";
   }
 
-  if (nowMinutes > morningEnd) {
-    // System is morning-in / afternoon-out based. Any punch in the afternoon is considered the afternoon out.
+  if (nowMinutes > morningEnd || String(eventToRecord || "").toLowerCase() === "time-out") {
+    // System is morning-in / afternoon-out based. Any time-out or afternoon punch is evaluated against afternoonEnd.
     if (nowMinutes < afternoonEnd) {
       return "early-out";
     } else if (nowMinutes > afternoonEnd + afternoonGrace) {
@@ -138,8 +140,8 @@ export function determineAttendanceStatus(
     }
     return "on-time";
   } else {
-    // Morning punch (time-in starting at 3:00 AM)
-    if (nowMinutes < morningStart) {
+    // Morning punch (early-in is 03:00 AM to 07:00 AM only)
+    if (nowMinutes >= 3 * 60 && nowMinutes <= 7 * 60 && nowMinutes < morningStart) {
       return "early-in";
     } else if (nowMinutes <= morningStart + morningGrace) {
       return "on-time";

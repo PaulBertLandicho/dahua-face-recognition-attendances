@@ -44,8 +44,7 @@ export function getDetailedAttendance(attendance, personId, settings = {}) {
     const mins = dt.getHours() * 60 + dt.getMinutes();
     const [h, m] = morningStart.split(":").map(Number);
     const startMins = h * 60 + m;
-    if (mins < 3 * 60) return false;
-    return mins < startMins;
+    return mins >= 3 * 60 && mins <= 7 * 60 && mins < startMins;
   }
 
   function isLate(dt, session) {
@@ -82,6 +81,7 @@ export function getDetailedAttendance(attendance, personId, settings = {}) {
     recs.sort((a, b) => a.dt - b.dt);
     // Find morning/afternoon in/out
     let morningIn = null,
+      morningOut = null,
       afternoonOut = null;
     let morningInStatus = null;
     let lateCount = 0;
@@ -93,12 +93,13 @@ export function getDetailedAttendance(attendance, personId, settings = {}) {
         hour: "2-digit",
         minute: "2-digit",
       });
+      const isExplicitTimeOut = String(r.event || "").toLowerCase() === "time-out";
       if (hour < 3) {
         // Overnight punch past midnight (< 3:00 AM) is always afternoon out
         afternoonOut = timeStr;
       } else if (hour < 12) {
-        // Morning punch (3:00 AM to 11:59 AM) - only morning arrivals are evaluated for lateness
-        if (!morningIn) {
+        // Morning punch (3:00 AM to 11:59 AM)
+        if (!morningIn && !isExplicitTimeOut) {
           morningIn = timeStr;
           if (r.status === "late" || isLate(r.dt, "morning")) {
             morningInStatus = "late";
@@ -115,6 +116,9 @@ export function getDetailedAttendance(attendance, personId, settings = {}) {
           } else {
             morningInStatus = "on-time";
           }
+        } else {
+          // Second morning punch or explicit morning time-out (e.g. 10:00 AM early out)
+          morningOut = timeStr;
         }
       } else {
         // Afternoon punch (>= 12:00 PM)
@@ -141,7 +145,8 @@ export function getDetailedAttendance(attendance, personId, settings = {}) {
         minute: "2-digit",
       });
       const singleHour = recs[0].dt.getHours();
-      if (singleHour >= 3 && (recs[0].event === "time-in" || singleHour < 12)) {
+      const isExplicitOut = String(recs[0].event || "").toLowerCase() === "time-out";
+      if (singleHour >= 3 && !isExplicitOut && (recs[0].event === "time-in" || singleHour < 12)) {
         attendanceIn = singleTime;
         attendanceOut = null;
       } else {
@@ -150,10 +155,10 @@ export function getDetailedAttendance(attendance, personId, settings = {}) {
       }
     }
 
-    // Overtime calculation (supports Early-In at 7:00 AM and below, plus Afternoon Out OT)
+    // Overtime calculation (03:00-07:00 AM Early-In OT + Afternoon Out OT after 17:00)
     let status = "on-time";
     let otHours = 0;
-    const checkoutTime = attendanceOut || afternoonOut;
+    const checkoutTime = attendanceOut || afternoonOut || morningOut;
     const checkinTime = attendanceIn || morningIn;
 
     function parseTimeToMinutes(timeStr) {
@@ -175,18 +180,19 @@ export function getDetailedAttendance(attendance, personId, settings = {}) {
 
     const schedMorningStart = (settings && settings.morning_start) || "08:00";
     const schedAfternoonEnd = (settings && settings.afternoon_end) || "17:00";
+    const afternoonGrace = Number.isFinite(Number(settings && settings.afternoon_grace_minutes))
+      ? Number(settings.afternoon_grace_minutes)
+      : 0;
     const startTotal = parseTimeToMinutes(schedMorningStart) || 480;
     const endTotal = parseTimeToMinutes(schedAfternoonEnd) || 1020;
-    // Early-in overtime triggers at 7:00 AM and below
-    const earlyOtLimit = Math.min(startTotal - 60, parseTimeToMinutes("07:00") || 420);
 
     let dayOtMinutes = 0;
 
     if (checkinTime) {
       const inTotal = parseTimeToMinutes(checkinTime);
-      // Early in OT: from 3:00 AM (180 mins) up to earlyOtLimit (<= 7:00 AM)
-      if (inTotal >= 3 * 60 && inTotal <= earlyOtLimit && inTotal < startTotal) {
-        dayOtMinutes += (startTotal - inTotal);
+      // Early in OT: 03:00 AM to 07:00 AM only
+      if (inTotal >= 3 * 60 && inTotal <= 7 * 60 && inTotal < startTotal) {
+        dayOtMinutes += startTotal - inTotal;
       }
     }
 
@@ -198,7 +204,7 @@ export function getDetailedAttendance(attendance, personId, settings = {}) {
       }
       if (outTotal > endTotal) {
         const afterMins = outTotal - endTotal;
-        if (afterMins >= 60) {
+        if (afterMins > afternoonGrace) {
           dayOtMinutes += afterMins;
         }
       }
@@ -213,6 +219,7 @@ export function getDetailedAttendance(attendance, personId, settings = {}) {
       attendanceIn,
       attendanceOut,
       morningIn,
+      morningOut,
       afternoonOut,
       morningInStatus,
       lateCount,

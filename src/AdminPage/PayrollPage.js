@@ -331,10 +331,6 @@ export default function PayrollPage() {
 
       const schedMorningStart =
         parseTime(settingsData.morning_start || "08:00") || 480;
-      const schedEarlyInLimit = Math.min(
-        schedMorningStart - 60,
-        parseTime("07:00") || 420,
-      );
       const lunchStart =
         parseTime(settingsData.morning_end || "12:00") || 720;
       const schedAfternoonEnd =
@@ -344,7 +340,6 @@ export default function PayrollPage() {
       )
         ? Number(settingsData.afternoon_grace_minutes)
         : 0;
-      const schedMorningEnd = lunchStart;
 
       const formatYMD = (val) => {
         if (!val) return "";
@@ -419,14 +414,14 @@ export default function PayrollPage() {
           let totalOtHours = 0;
           detailed.forEach((rec) => {
             const mIn = parseTime(rec.morningIn || rec.attendanceIn);
-            const mOut = parseTime(rec.morningOut);
             const aOut = parseTime(rec.afternoonOut || rec.attendanceOut);
             let dayOtMins = 0;
 
+            // Early-in computation: 03:00 AM - 07:00 AM only added to OT
             if (
               mIn !== null &&
               mIn >= 3 * 60 &&
-              mIn <= schedEarlyInLimit &&
+              mIn <= 7 * 60 &&
               mIn < schedMorningStart
             ) {
               dayOtMins += schedMorningStart - mIn;
@@ -437,10 +432,6 @@ export default function PayrollPage() {
                 const otMins = effectiveAOut - schedAfternoonEnd;
                 if (otMins > schedAfternoonGrace) dayOtMins += otMins;
               }
-            }
-            if (mOut !== null && mOut > schedMorningEnd) {
-              const otMins = mOut - schedMorningEnd;
-              if (otMins >= 60) dayOtMins += otMins;
             }
             if (dayOtMins > 0) totalOtHours += dayOtMins / 60;
           });
@@ -1756,7 +1747,6 @@ export default function PayrollPage() {
         try {
           const sched = payroll && payroll.settings ? payroll.settings : {};
           const schedMorningStart = sched.morning_start || "08:00";
-          const schedMorningEnd = sched.morning_end || "12:00";
           const schedAfternoonEnd = sched.afternoon_end || "17:00";
           const schedAfternoonGrace = Number.isFinite(
             Number(sched.afternoon_grace_minutes),
@@ -1768,8 +1758,6 @@ export default function PayrollPage() {
               const mIn =
                 (rec.morningIn || rec.attendanceIn) &&
                 String(rec.morningIn || rec.attendanceIn).trim();
-              const mOut =
-                (rec.morningOut && String(rec.morningOut).trim()) || null;
               const aOut =
                 (rec.afternoonOut || rec.attendanceOut) &&
                 String(rec.afternoonOut || rec.attendanceOut).trim();
@@ -1790,27 +1778,19 @@ export default function PayrollPage() {
                 return hour * 60 + minute;
               };
               const mInMin = parseT(mIn);
-              const mOutMin = parseT(mOut);
               const aOutMin = parseT(aOut);
               const mStartMin = parseT(schedMorningStart) || 480;
-              const schedEarlyInLimit = Math.min(mStartMin - 60, 7 * 60);
-              const mEndMin = parseT(schedMorningEnd);
               const aEndMin = parseT(schedAfternoonEnd);
 
+              // Early-in computation: 03:00 AM - 07:00 AM only added to OT
               if (
                 typeof mInMin === "number" &&
                 mInMin >= 3 * 60 &&
-                mInMin <= schedEarlyInLimit &&
+                mInMin <= 7 * 60 &&
                 mInMin < mStartMin
               ) {
                 totalOtMinutes += mStartMin - mInMin;
               }
-              if (
-                typeof mOutMin === "number" &&
-                typeof mEndMin === "number" &&
-                mOutMin > mEndMin
-              )
-                totalOtMinutes += mOutMin - mEndMin;
               if (
                 typeof aOutMin === "number" &&
                 typeof aEndMin === "number"
@@ -1836,6 +1816,7 @@ export default function PayrollPage() {
           holidayPayDetails,
           totalHolidayPay,
           absentCount,
+          lateDeduction,
           totalDeductions,
           cashAdvanceEntries,
           cashAdvanceTotalInPeriod,

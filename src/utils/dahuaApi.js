@@ -118,7 +118,7 @@ export async function syncDahuaUsers() {
   });
 }
 
-export async function syncDahuaAttendance(limit = 100) {
+export async function syncDahuaAttendance(limit = 5000) {
   return fetchDahuaApi("/api/dahua/sync-attendance", {
     method: "POST",
     body: JSON.stringify({ limit }),

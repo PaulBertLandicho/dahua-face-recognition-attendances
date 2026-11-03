@@ -136,7 +136,7 @@ export default function AttendanceTable() {
     });
 
     try {
-      const data = await syncDahuaAttendance(100);
+      const data = await syncDahuaAttendance(5000);
 
       Swal.fire({
         icon: "success",

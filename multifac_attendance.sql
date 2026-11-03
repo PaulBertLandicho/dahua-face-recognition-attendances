@@ -90,30 +90,30 @@ CREATE TRIGGER `attendance_before_insert_slot` BEFORE INSERT ON `attendance` FOR
     SET NEW.attendance_slot = 'afternoon_time_out';
     SET NEW.attendance_work_date = IF(NEW.device_time IS NULL, NULL, DATE(NEW.device_time - INTERVAL 1 DAY));
     SET NEW.status = 'overtime';
-  ELSEIF TIME(NEW.device_time) <= configured_morning_end THEN
-    SET NEW.event = 'time-in';
-    SET NEW.attendance_slot = 'morning_time_in';
-    SET NEW.attendance_work_date = IF(NEW.device_time IS NULL, NULL, DATE(NEW.device_time));
-    IF NEW.status IS NULL OR NEW.status = '' OR NEW.status = 'present' OR NEW.status = 'on-time' THEN
-      IF TIME(NEW.device_time) < configured_morning_start THEN
-        SET NEW.status = 'early-in';
-      ELSEIF TIME(NEW.device_time) <= ADDTIME(configured_morning_start, SEC_TO_TIME(configured_morning_grace * 60)) THEN
-        SET NEW.status = 'on-time';
-      ELSE
-        SET NEW.status = 'late';
-      END IF;
-    END IF;
-  ELSEIF TIME(NEW.device_time) >= configured_afternoon_start THEN
+  ELSEIF NEW.event = 'time-out' OR TIME(NEW.device_time) > configured_morning_end THEN
     SET NEW.event = 'time-out';
     SET NEW.attendance_slot = 'afternoon_time_out';
     SET NEW.attendance_work_date = IF(NEW.device_time IS NULL, NULL, DATE(NEW.device_time));
     IF NEW.status IS NULL OR NEW.status = '' OR NEW.status = 'present' OR NEW.status = 'on-time' THEN
       IF TIME(NEW.device_time) < configured_afternoon_end THEN
         SET NEW.status = 'early-out';
-      ELSEIF TIME(NEW.device_time) >= ADDTIME(configured_afternoon_end, '01:00:00') THEN
+      ELSEIF TIME(NEW.device_time) > configured_afternoon_end THEN
         SET NEW.status = 'overtime';
       ELSE
         SET NEW.status = 'on-time';
+      END IF;
+    END IF;
+  ELSEIF TIME(NEW.device_time) <= configured_morning_end THEN
+    SET NEW.event = 'time-in';
+    SET NEW.attendance_slot = 'morning_time_in';
+    SET NEW.attendance_work_date = IF(NEW.device_time IS NULL, NULL, DATE(NEW.device_time));
+    IF NEW.status IS NULL OR NEW.status = '' OR NEW.status = 'present' OR NEW.status = 'on-time' THEN
+      IF TIME(NEW.device_time) <= '07:00:59' AND TIME(NEW.device_time) < configured_morning_start THEN
+        SET NEW.status = 'early-in';
+      ELSEIF TIME(NEW.device_time) <= ADDTIME(configured_morning_start, SEC_TO_TIME(configured_morning_grace * 60)) THEN
+        SET NEW.status = 'on-time';
+      ELSE
+        SET NEW.status = 'late';
       END IF;
     END IF;
   ELSE
@@ -144,30 +144,30 @@ CREATE TRIGGER `attendance_before_update_slot` BEFORE UPDATE ON `attendance` FOR
     SET NEW.attendance_slot = 'afternoon_time_out';
     SET NEW.attendance_work_date = IF(NEW.device_time IS NULL, NULL, DATE(NEW.device_time - INTERVAL 1 DAY));
     SET NEW.status = 'overtime';
+  ELSEIF NEW.event = 'time-out' OR TIME(NEW.device_time) > configured_morning_end THEN
+    SET NEW.event = 'time-out';
+    SET NEW.attendance_slot = 'afternoon_time_out';
+    SET NEW.attendance_work_date = IF(NEW.device_time IS NULL, NULL, DATE(NEW.device_time));
+    IF NEW.status IS NULL OR NEW.status = '' OR NEW.status = OLD.status OR OLD.event != 'time-out' OR NEW.status = 'present' OR NEW.status = 'on-time' THEN
+      IF TIME(NEW.device_time) < configured_afternoon_end THEN
+        SET NEW.status = 'early-out';
+      ELSEIF TIME(NEW.device_time) > configured_afternoon_end THEN
+        SET NEW.status = 'overtime';
+      ELSE
+        SET NEW.status = 'on-time';
+      END IF;
+    END IF;
   ELSEIF TIME(NEW.device_time) <= configured_morning_end THEN
     SET NEW.event = 'time-in';
     SET NEW.attendance_slot = 'morning_time_in';
     SET NEW.attendance_work_date = IF(NEW.device_time IS NULL, NULL, DATE(NEW.device_time));
-    IF NEW.status IS NULL OR NEW.status = '' OR NEW.status = OLD.status OR NEW.status = 'present' OR NEW.status = 'on-time' THEN
-      IF TIME(NEW.device_time) < configured_morning_start THEN
+    IF NEW.status IS NULL OR NEW.status = '' OR NEW.status = OLD.status OR OLD.event != 'time-in' OR NEW.status = 'present' OR NEW.status = 'on-time' THEN
+      IF TIME(NEW.device_time) <= '07:00:59' AND TIME(NEW.device_time) < configured_morning_start THEN
         SET NEW.status = 'early-in';
       ELSEIF TIME(NEW.device_time) <= ADDTIME(configured_morning_start, SEC_TO_TIME(configured_morning_grace * 60)) THEN
         SET NEW.status = 'on-time';
       ELSE
         SET NEW.status = 'late';
-      END IF;
-    END IF;
-  ELSEIF TIME(NEW.device_time) >= configured_afternoon_start THEN
-    SET NEW.event = 'time-out';
-    SET NEW.attendance_slot = 'afternoon_time_out';
-    SET NEW.attendance_work_date = IF(NEW.device_time IS NULL, NULL, DATE(NEW.device_time));
-    IF NEW.status IS NULL OR NEW.status = '' OR NEW.status = OLD.status OR NEW.status = 'present' OR NEW.status = 'on-time' THEN
-      IF TIME(NEW.device_time) < configured_afternoon_end THEN
-        SET NEW.status = 'early-out';
-      ELSEIF TIME(NEW.device_time) >= ADDTIME(configured_afternoon_end, '01:00:00') THEN
-        SET NEW.status = 'overtime';
-      ELSE
-        SET NEW.status = 'on-time';
       END IF;
     END IF;
   ELSE

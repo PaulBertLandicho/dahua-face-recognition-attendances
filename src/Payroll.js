@@ -45,19 +45,21 @@ export function calculatePayroll(
     const morningStart = settings.morning_start || "08:00";
     const [startHour, startMinute] = morningStart.split(":").map(Number);
     const startTotal = (startHour || 8) * 60 + (startMinute || 0);
-    const earlyOtLimit = Math.min(startTotal - 60, 7 * 60);
 
     const afternoonEnd = settings.afternoon_end || "17:00";
     const [endHour, endMinute] = afternoonEnd.split(":").map(Number);
     const endTotal = (endHour || 17) * 60 + (endMinute || 0);
+    const afternoonGrace = Number.isFinite(Number(settings.afternoon_grace_minutes))
+      ? Number(settings.afternoon_grace_minutes)
+      : 0;
 
-    // 1. Early-in OT: 3:00 AM up to 7:00 AM
+    // 1. Early-in OT: 03:00 AM - 07:00 AM only
     attendance
       .filter((a) => a.person_id === person.id && a.event === "time-in")
       .forEach((a) => {
         const dt = new Date(a.device_time);
         const inTotal = dt.getHours() * 60 + dt.getMinutes();
-        if (inTotal >= 3 * 60 && inTotal <= earlyOtLimit && inTotal < startTotal) {
+        if (inTotal >= 3 * 60 && inTotal <= 7 * 60 && inTotal < startTotal) {
           otHours += (startTotal - inTotal) / 60;
         }
       });
@@ -77,7 +79,7 @@ export function calculatePayroll(
         }
         if (outTotal > endTotal) {
           const otMins = outTotal - endTotal;
-          if (otMins >= 60) {
+          if (otMins > afternoonGrace) {
             otHours += otMins / 60;
           }
         }
