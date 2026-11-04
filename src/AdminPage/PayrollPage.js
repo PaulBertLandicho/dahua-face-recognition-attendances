@@ -412,10 +412,14 @@ export default function PayrollPage() {
           );
 
           let totalOtHours = 0;
+          let totalNsdHours = 0;
+          const hasNsdEnabled = person.night_shift_diff !== 0;
+
           detailed.forEach((rec) => {
             const mIn = parseTime(rec.morningIn || rec.attendanceIn);
             const aOut = parseTime(rec.afternoonOut || rec.attendanceOut);
             let dayOtMins = 0;
+            let dayNsdMins = 0;
 
             // Early-in computation: 03:00 AM - 07:00 AM only added to OT
             if (
@@ -430,11 +434,23 @@ export default function PayrollPage() {
               const effectiveAOut = aOut < 3 * 60 ? aOut + 24 * 60 : aOut;
               if (effectiveAOut > schedAfternoonEnd) {
                 const otMins = effectiveAOut - schedAfternoonEnd;
-                if (otMins > schedAfternoonGrace) dayOtMins += otMins;
+                if (otMins > schedAfternoonGrace) {
+                  dayOtMins += otMins;
+                  // Night shift differential (work past 22:00 = 10:00 PM)
+                  if (hasNsdEnabled && effectiveAOut > 22 * 60) {
+                    dayNsdMins += Math.min(effectiveAOut - 22 * 60, otMins);
+                  }
+                }
               }
             }
             if (dayOtMins > 0) totalOtHours += dayOtMins / 60;
+            if (dayNsdMins > 0) totalNsdHours += dayNsdMins / 60;
           });
+
+          const manualNsd = Number(person.night_shift_diff || 0);
+          if (manualNsd > 0 && totalNsdHours === 0) {
+            totalNsdHours = manualNsd;
+          }
 
           let attendedDays = 0;
           detailed.forEach((rec) => {
@@ -456,16 +472,19 @@ export default function PayrollPage() {
           });
 
           basePayroll.daysPresent = Number(attendedDays) || 0;
-          const otHourlyRate = Number(
+          const baseHourlyRate = Number(
             basePayroll.otHourlyRate ||
               Number(basePayroll.dailyRate || 0) / 8,
           );
-          basePayroll.otPay =
-            Number(
-              Math.round(otHourlyRate * totalOtHours * 100) / 100,
-            ) || 0;
-          basePayroll.otHours =
-            Number(Math.round(totalOtHours * 100) / 100) || 0;
+          // Standard OT is at 1.25x rate under PH labor law when matching Excel, or flat when not
+          const otMultiplier = 1.25;
+          const nsdMultiplier = 0.10; // extra 10% on night diff hours
+          const standardOtPay = Math.round(baseHourlyRate * otMultiplier * totalOtHours * 100) / 100;
+          const nsdPay = Math.round(baseHourlyRate * otMultiplier * nsdMultiplier * totalNsdHours * 100) / 100;
+          basePayroll.otPay = Math.round((standardOtPay + nsdPay) * 100) / 100;
+          basePayroll.otHours = Number(Math.round(totalOtHours * 100) / 100) || 0;
+          basePayroll.nsdHours = Number(Math.round(totalNsdHours * 100) / 100) || 0;
+          basePayroll.nsdPay = nsdPay;
 
           // Compute Holiday Pay for holidays in this period where the employee attended
           const personDeptNorm = String(person.department || "")

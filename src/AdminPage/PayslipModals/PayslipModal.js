@@ -701,9 +701,12 @@ export default function PayslipModal({
   const standardPayAmount =
     Math.round(daysWorked * (payroll.dailyRate ?? 0) * 100) / 100;
 
-  // Overtime calculation: always use dailyRate/8 (no premium) for display and calculation, and round to 2 decimals for all math
-  const hourlyRate = Math.round(((payroll.dailyRate ?? 0) / 8) * 100) / 100;
+  // Overtime calculation: includes 1.25x OT rate & Night Shift Differential (past 10:00 PM) when enabled
+  const baseHourlyRate = Math.round(((payroll.dailyRate ?? 0) / 8) * 100) / 100;
+  const hasNsdEnabled = person.night_shift_diff !== 0;
   let dynamicOtMinutes = 0;
+  let dynamicNsdMinutes = 0;
+
   if (detailedAttendance && detailedAttendance.length) {
     const schedMorningStart = (settings && settings.morning_start) || "08:00";
     const schedAfternoonEnd = (settings && settings.afternoon_end) || "17:00";
@@ -729,16 +732,34 @@ export default function PayslipModal({
         const effectiveAOut = aOut < 3 * 60 ? aOut + 24 * 60 : aOut;
         if (effectiveAOut > schedAfternoonEndMin) {
           const mins = effectiveAOut - schedAfternoonEndMin;
-          if (mins > schedAfternoonGrace) dynamicOtMinutes += mins;
+          if (mins > schedAfternoonGrace) {
+            dynamicOtMinutes += mins;
+            // Night shift differential (work past 22:00 = 10:00 PM)
+            if (hasNsdEnabled && effectiveAOut > 22 * 60) {
+              dynamicNsdMinutes += Math.min(effectiveAOut - 22 * 60, mins);
+            }
+          }
         }
       }
     });
   }
+
+  const manualNsd = Number(person.night_shift_diff || 0);
   const otHours = detailedAttendance && detailedAttendance.length
     ? dynamicOtMinutes / 60
     : Number(payroll.otHours ?? 0);
-  // Round OT pay to 2 decimals for display and math
-  const otPay = Math.round(hourlyRate * otHours * 100) / 100;
+  const nsdHours =
+    manualNsd > 0 && dynamicNsdMinutes === 0
+      ? manualNsd
+      : detailedAttendance && detailedAttendance.length
+      ? Math.max(dynamicNsdMinutes / 60, manualNsd)
+      : Number(payroll.nsdHours ?? manualNsd ?? 0);
+
+  const otMultiplier = 1.25;
+  const nsdMultiplier = 0.10;
+  const standardOtPay = Math.round(baseHourlyRate * otMultiplier * otHours * 100) / 100;
+  const nsdPay = Math.round(baseHourlyRate * otMultiplier * nsdMultiplier * nsdHours * 100) / 100;
+  const otPay = Math.round((standardOtPay + nsdPay) * 100) / 100;
   const deductions = [
     { label: "SSS", value: person.sss ? Number(payroll.sss) : 0 },
     {
@@ -1335,10 +1356,17 @@ export default function PayslipModal({
                 </td>
               </tr>
               <tr className="bg-white">
-                <td className="py-2.5 px-2 border-b border-gray-200 text-gray-800">Overtime Pay</td>
+                <td className="py-2.5 px-2 border-b border-gray-200 text-gray-800">
+                  Overtime Pay
+                  {hasNsdEnabled && nsdHours > 0 && (
+                    <span className="block text-xs text-indigo-700 font-semibold mt-0.5">
+                      Includes {getHourMinute(nsdHours)} Night Diff (NSD)
+                    </span>
+                  )}
+                </td>
                 <td className="py-2.5 px-2 border-b border-gray-200 text-gray-800">{getHourMinute(otHours)}</td>
                 <td className="py-2.5 px-2 border-b border-gray-200 text-gray-800">
-                  (Daily Rate) ÷ 8hrs =₱{hourlyRate.toFixed(2)}
+                  (Daily Rate ÷ 8) × 125% = ₱{(baseHourlyRate * otMultiplier).toFixed(2)}/hr
                 </td>
                 <td className="py-2.5 px-2 border-b border-gray-200 text-gray-800">₱{otPay.toFixed(2)}</td>
               </tr>

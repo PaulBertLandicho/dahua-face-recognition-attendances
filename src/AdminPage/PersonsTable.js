@@ -17,6 +17,7 @@ import {
   FiCalendar,
   FiClock,
   FiPlus,
+  FiMoon,
 } from "react-icons/fi";
 import { determineAttendanceStatus } from "./attendanceUtils";
 import { syncDahuaUsers } from "../utils/dahuaApi";
@@ -93,6 +94,11 @@ export default function PersonsTable() {
   const [missingFilter, setMissingFilter] = useState("all");
   const [adminSettings, setAdminSettings] = useState(null);
   const [adminHolidays, setAdminHolidays] = useState([]);
+  const [nsdModal, setNsdModal] = useState({
+    visible: false,
+    person: null,
+    hours: "0.0",
+  });
 
   useEffect(() => {
     async function fetchPersons() {
@@ -106,7 +112,7 @@ export default function PersonsTable() {
         setError(null);
         const { data, error: err } = await supabase
           .from("persons")
-          .select("id, name, department, daily_rate, late_penalty, sss, pag_ibig, philhealth, cash_advance, card_no, created_at, updated_at");
+          .select("id, name, department, daily_rate, late_penalty, sss, pag_ibig, philhealth, cash_advance, card_no, created_at, updated_at, night_shift_diff");
         if (err) throw err;
         const list = data || [];
         setPersons(list);
@@ -859,6 +865,65 @@ export default function PersonsTable() {
     fetchMissingRecordsForPerson(person, "current");
   };
 
+  // Open Night Shift Differential Modal
+  const handleOpenNsdModal = (person) => {
+    if (!person || !person.id) return;
+    const currentVal =
+      person.night_shift_diff != null
+        ? String(Number(person.night_shift_diff))
+        : "0.0";
+    setNsdModal({
+      visible: true,
+      person,
+      hours: currentVal,
+    });
+  };
+
+  const handleCloseNsdModal = () => {
+    setNsdModal({ visible: false, person: null, hours: "0.0" });
+  };
+
+  const handleSaveNsdModal = async () => {
+    if (!nsdModal.person || !nsdModal.person.id) return;
+    const hoursNum = Math.max(0, parseFloat(nsdModal.hours) || 0);
+    setActionLoading(true);
+    try {
+      const { error } = await supabase
+        .from("persons")
+        .update({ night_shift_diff: hoursNum })
+        .eq("id", nsdModal.person.id);
+      if (error) throw error;
+
+      setPersons((prev) =>
+        prev.map((p) =>
+          p.id === nsdModal.person.id
+            ? { ...p, night_shift_diff: hoursNum }
+            : p,
+        ),
+      );
+
+      const personName = nsdModal.person.name;
+      handleCloseNsdModal();
+
+      Swal.fire({
+        icon: "success",
+        title: "NSD Updated",
+        text: `Night Shift Differential for ${personName} set to ${hoursNum} hrs.`,
+        timer: 1600,
+        showConfirmButton: false,
+      });
+    } catch (err) {
+      console.error("Error updating NSD:", err);
+      Swal.fire(
+        "Error",
+        err.message || "Failed to update Night Shift Differential",
+        "error",
+      );
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
 
   // Admin attendance modal handlers
   const submitAdminAttendance = async () => {
@@ -1551,12 +1616,42 @@ export default function PersonsTable() {
                     )}
                   </div>
                   {!p.archived && (
-                    <button
-                      onClick={() => handleAdminAttendance(p)}
-                      className="w-full py-1.5 px-3 rounded-md bg-slate-100 text-slate-700 text-xs font-medium transition-colors cursor-pointer border-none focus:outline-none"
-                    >
-                      Customize Attendance
-                    </button>
+                    <div className="flex flex-col gap-1.5 w-full">
+                      <div className="flex gap-2 w-full">
+                        <button
+                          onClick={() => handleAdminAttendance(p)}
+                          className="flex-1 py-1.5 px-2.5 rounded-md bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-medium transition-colors cursor-pointer border-none focus:outline-none whitespace-nowrap"
+                          title="Record or customize attendance on behalf of this person"
+                        >
+                          Customize Attendance
+                        </button>
+                        <button
+                          onClick={() => handleOpenNsdModal(p)}
+                          className={`flex-1 py-1.5 px-2.5 rounded-md text-xs font-semibold transition-colors cursor-pointer border-none focus:outline-none inline-flex items-center justify-center gap-1 whitespace-nowrap ${
+                            Number(p.night_shift_diff || 0) > 0
+                              ? "bg-[#708238] hover:bg-[#5f6f30] text-white shadow-sm"
+                              : "bg-gray-100 hover:bg-gray-200 text-gray-600"
+                          }`}
+                          title={
+                            Number(p.night_shift_diff || 0) > 0
+                              ? `Night Shift Differential: ${Number(p.night_shift_diff)} hrs (Click to edit)`
+                              : "Night Shift Differential is 0h (Click to set hours)"
+                          }
+                        >
+                          <FiMoon
+                            size={12}
+                            className={
+                              Number(p.night_shift_diff || 0) > 0
+                                ? "text-amber-200"
+                                : "text-gray-400"
+                            }
+                          />
+                          {Number(p.night_shift_diff || 0) > 0
+                            ? `NSD Active (${Number(p.night_shift_diff)}h)`
+                            : "NSD Off"}
+                        </button>
+                      </div>
+                    </div>
                   )}
                   <button
                     onClick={() => handleDeletePerson(p)}
@@ -2222,6 +2317,157 @@ export default function PersonsTable() {
                 className="py-2.5 px-7 rounded-xl text-sm font-semibold border-none bg-[#237227] text-white transition-colors cursor-pointer focus:outline-none shadow-sm"
               >
                 {actionLoading ? "Recording..." : "Record"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Night Shift Differential Modal */}
+      {nsdModal.visible && nsdModal.person && (
+        <div className="fixed inset-0 z-[1000] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
+          <div className="bg-white text-gray-800 p-6 sm:p-7 rounded-3xl max-w-[500px] w-full shadow-2xl border border-gray-200 font-sans">
+            <div className="flex items-center justify-between pb-3.5 mb-4 border-b border-gray-100">
+              <div className="flex items-center gap-2.5">
+                <span className="flex items-center justify-center w-9 h-9 rounded-xl bg-[#708238]/15 text-[#708238]">
+                  <FiMoon size={20} />
+                </span>
+                <div>
+                  <h3 className="text-base sm:text-lg font-bold text-gray-900 m-0">
+                    Night Shift Differential
+                  </h3>
+                  <p className="text-xs text-gray-500 m-0">
+                    Input night differential hours for this employee
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={handleCloseNsdModal}
+                className="text-gray-400 hover:text-gray-600 text-xl font-bold p-1 border-none bg-transparent cursor-pointer"
+                title="Close"
+              >
+                &times;
+              </button>
+            </div>
+
+            {/* Person Info Card */}
+            <div className="bg-gray-50 rounded-2xl p-4 border border-gray-200/80 mb-4">
+              <div className="flex items-center justify-between mb-2">
+                <div>
+                  <div className="text-[11px] text-gray-500 font-medium uppercase tracking-wider">Employee</div>
+                  <div className="text-sm font-bold text-gray-900">
+                    {nsdModal.person.name}
+                  </div>
+                </div>
+                <div className="text-right">
+                  <div className="text-[11px] text-gray-500 font-medium uppercase tracking-wider">ID / Dept</div>
+                  <div className="text-xs font-semibold text-gray-800">
+                    ID: {nsdModal.person.id} • {nsdModal.person.department || "N/A"}
+                  </div>
+                </div>
+              </div>
+              <div className="pt-2 border-t border-gray-200/60 flex items-center justify-between text-xs text-gray-600">
+                <span>Daily Rate: <strong>₱{Number(nsdModal.person.daily_rate || 500).toFixed(2)}</strong></span>
+                <span>Hourly Rate (8h): <strong>₱{(Number(nsdModal.person.daily_rate || 500) / 8).toFixed(2)}/hr</strong></span>
+              </div>
+            </div>
+
+            {/* Hours Input Field Action */}
+            <div className="mb-4">
+              <label
+                htmlFor="nsd-hours-input"
+                className="block text-xs font-bold uppercase tracking-wider text-gray-700 mb-1.5"
+              >
+                Night Shift Differential Hours (hrs)
+              </label>
+              <div className="relative">
+                <input
+                  id="nsd-hours-input"
+                  type="number"
+                  step="0.1"
+                  min="0"
+                  max="200"
+                  value={nsdModal.hours}
+                  onChange={(e) =>
+                    setNsdModal((prev) => ({ ...prev, hours: e.target.value }))
+                  }
+                  placeholder="e.g. 2.0"
+                  className="w-full py-2.5 px-3.5 pr-14 rounded-xl border border-gray-300 bg-white text-gray-900 text-base font-semibold outline-none focus:border-[#708238] focus:ring-2 focus:ring-[#708238]/20 transition-all"
+                  autoFocus
+                />
+                <span className="absolute right-3.5 top-1/2 -translate-y-1/2 text-xs font-bold text-gray-400 pointer-events-none">
+                  hours
+                </span>
+              </div>
+              <p className="text-[11px] text-gray-500 mt-1.5">
+                Applies standard +10% Night Shift Differential premium (for hours worked between 10:00 PM and 6:00 AM).
+              </p>
+            </div>
+
+            {/* Quick Presets */}
+            <div className="flex items-center gap-1.5 flex-wrap mb-4">
+              <span className="text-xs font-medium text-gray-500 mr-1">Quick fill:</span>
+              {[
+                { label: "0.0h (Off)", val: "0.0" },
+                { label: "1.0h", val: "1.0" },
+                { label: "2.0h (Excel)", val: "2.0" },
+                { label: "3.0h", val: "3.0" },
+                { label: "4.0h", val: "4.0" },
+              ].map((preset) => (
+                <button
+                  key={preset.val}
+                  type="button"
+                  onClick={() =>
+                    setNsdModal((prev) => ({ ...prev, hours: preset.val }))
+                  }
+                  className={`text-xs font-semibold py-1 px-2.5 rounded-lg border transition-colors cursor-pointer ${
+                    String(nsdModal.hours) === preset.val
+                      ? "bg-[#708238] text-white border-[#708238]"
+                      : "bg-white text-gray-700 border-gray-200 hover:border-gray-300"
+                  }`}
+                >
+                  {preset.label}
+                </button>
+              ))}
+            </div>
+
+            {/* Live Calculation Preview */}
+            {(() => {
+              const hRate = Number(nsdModal.person.daily_rate || 500) / 8;
+              const hrs = Math.max(0, parseFloat(nsdModal.hours) || 0);
+              const baseNsd = Math.round(hRate * 0.10 * hrs * 100) / 100;
+              const otNsd = Math.round(hRate * 1.25 * 0.10 * hrs * 100) / 100;
+              return (
+                <div className="p-3 bg-[#708238]/10 rounded-xl border border-[#708238]/20 mb-5">
+                  <div className="flex items-center justify-between text-xs text-gray-700 mb-1">
+                    <span>Base NSD (+10% regular):</span>
+                    <strong className="text-gray-900">+₱{baseNsd.toFixed(2)}</strong>
+                  </div>
+                  <div className="flex items-center justify-between text-xs text-gray-700">
+                    <span>Overtime NSD (+10% on 1.25× OT):</span>
+                    <strong className="text-[#556b2f] font-bold">+₱{otNsd.toFixed(2)}</strong>
+                  </div>
+                </div>
+              );
+            })()}
+
+            {/* Modal Actions */}
+            <div className="flex gap-2.5 justify-end">
+              <button
+                type="button"
+                onClick={handleCloseNsdModal}
+                className="py-2 px-5 rounded-xl text-sm font-semibold border border-gray-300 bg-white text-gray-700 hover:bg-gray-50 transition-colors cursor-pointer focus:outline-none"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleSaveNsdModal}
+                disabled={actionLoading}
+                className="py-2 px-6 rounded-xl text-sm font-semibold border-none bg-[#708238] hover:bg-[#5f6f30] text-white transition-colors cursor-pointer focus:outline-none shadow-sm"
+              >
+                {actionLoading ? "Saving..." : "Save NSD Hours"}
               </button>
             </div>
           </div>
