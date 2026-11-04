@@ -207,9 +207,14 @@ export default function AttendanceTable() {
   const handleEdit = async (rec) => {
     try {
       const pad = (n) => String(n).padStart(2, "0");
-      const d = rec.device_time ? parseAttendanceTime(rec.device_time).date : new Date();
-      const defaultDate = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
-      const defaultTime = `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+      const parsed = rec.device_time ? parseAttendanceTime(rec.device_time) : { date: new Date(), wallClock: false };
+      const d = parsed.date;
+      const defaultDate = parsed.wallClock
+        ? `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())}`
+        : `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+      const defaultTime = parsed.wallClock
+        ? `${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}:${pad(d.getUTCSeconds())}`
+        : `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
 
       const { value: formValues } = await Swal.fire({
         title: "Edit Attendance",
@@ -333,7 +338,7 @@ export default function AttendanceTable() {
 
       const { error } = await supabase
         .from("attendance")
-        .update({ device_time: updatedTime, event, status: updatedStatus })
+        .update({ device_time: updatedTime, event, status: updatedStatus, method: "admin-entry" })
         .eq("id", rec.id);
 
       if (error) {
@@ -351,7 +356,7 @@ export default function AttendanceTable() {
         return;
       }
       setRecords((prev) =>
-        prev.map((r) => (r.id === rec.id ? { ...r, device_time: updatedTime, event, status: updatedStatus } : r))
+        prev.map((r) => (r.id === rec.id ? { ...r, device_time: updatedTime, event, status: updatedStatus, method: "admin-entry" } : r))
       );
       showToast("Attendance updated successfully!");
     } catch (e) {

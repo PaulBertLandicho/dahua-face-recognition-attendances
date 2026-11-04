@@ -783,7 +783,7 @@ export default function PersonsTable() {
             missingList.push({
               date: dateStr,
               type: "missing-both",
-              label: "No Records (Full Day)",
+              label: "No Records (Whole Day)",
               hasIn: false,
               hasOut: false,
               recordedIn: null,
@@ -2107,7 +2107,7 @@ export default function PersonsTable() {
                                 )}
                                 {item.type === "missing-both" && (
                                   <span className="font-semibold text-gray-600 bg-gray-100 px-2 py-0.5 rounded-md border border-gray-200">
-                                    No Attendance Recorded (Full Day)
+                                    No Attendance Recorded (Whole Day)
                                   </span>
                                 )}
                               </div>
