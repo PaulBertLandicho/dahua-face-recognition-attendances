@@ -30,8 +30,8 @@ export default function PayslipModal({
   // useState declarations (only once)
   const [holidayDetails, setHolidayDetails] = useState([]);
   const [deptHolidayRates, setDeptHolidayRates] = useState({
-    regular: 0,
-    special: 0,
+    regular: 100,
+    special: 30,
   });
   const [loadingHoliday, setLoadingHoliday] = useState(true);
   const [cashAdvanceTotalInPeriod, setCashAdvanceTotalInPeriod] = useState(0);
@@ -64,8 +64,8 @@ export default function PayslipModal({
 
       if (!error && data) {
         setDeptHolidayRates({
-          regular: Number(data.regular_holiday_rate ?? data.holiday_rate ?? 100),
-          special: Number(data.special_holiday_rate ?? 30),
+          regular: Number(data.regular_holiday_rate) || Number(data.holiday_rate) || 100,
+          special: Number(data.special_holiday_rate) || 30,
         });
       }
     }
@@ -79,17 +79,21 @@ export default function PayslipModal({
       try {
         if (!person || !period) return;
         const [start, end] = period.split("_to_");
-        // Fetch holidays for the department or global (department is null) within the period
+        // Fetch holidays within the period, then match global (department is null/empty) or person's department
         const { data: holidays, error } = await supabase
           .from("holidays")
           .select("*")
-          .or(`department.eq.${person.department},department.is.null`)
           .gte("date", start)
           .lte("date", end);
         if (error) throw error;
+        const personDept = String(person.department || "").toLowerCase().trim();
+        const filtered = (holidays || []).filter((h) => {
+          const hDept = String(h.department || "").toLowerCase().trim();
+          return !hDept || hDept === personDept;
+        });
         // Sort by date
-        const all = (holidays || []).sort((a, b) =>
-          a.date.localeCompare(b.date),
+        const all = filtered.sort((a, b) =>
+          String(a.date || "").localeCompare(String(b.date || "")),
         );
         setHolidayDetails(all);
       } catch (err) {
@@ -627,30 +631,32 @@ export default function PayslipModal({
   let totalHolidayPay = 0;
 
   if (!loadingHoliday && holidayDetails.length > 0) {
+    const baseRateForHoliday = Number(payroll.dailyRate ?? person.daily_rate ?? 0);
     holidayPayDetails = holidayDetails
       .map((h) => {
+        const hDate = safeFormatYMD(h.date || h.holiday_date);
         if (
-          !hasHolidayPayEligibility(
-            (detailedAttendance || []).map((a) => ({ date: a.date })),
-            h.date,
-          )
+          !hDate ||
+          !hasHolidayPayEligibility(detailedAttendance || [], hDate)
         ) {
           return null;
         }
         let ratePercent = 0;
-        if (h.type === "regular") {
-          ratePercent = deptHolidayRates.regular;
-        } else if (h.type === "special") {
-          ratePercent = deptHolidayRates.special;
+        const hType = String(h.type || "regular").toLowerCase().trim();
+        if (hType === "regular") {
+          ratePercent = Number(deptHolidayRates.regular) || 100;
+        } else if (hType === "special") {
+          ratePercent = Number(deptHolidayRates.special) || 30;
         }
         if (!ratePercent) return null;
-        const amount = (payroll.dailyRate * ratePercent) / 100;
-        totalHolidayPay += amount;
+        const amount =
+          Math.round(((baseRateForHoliday * ratePercent) / 100) * 100) / 100;
+        totalHolidayPay = Math.round((totalHolidayPay + amount) * 100) / 100;
         return {
-          date: h.date,
-          type: h.type,
-          description: h.description || "",
-          rate: payroll.dailyRate,
+          date: hDate,
+          type: hType,
+          description: h.description || h.name || "",
+          rate: baseRateForHoliday,
           amount,
           ratePercent,
         };
@@ -812,13 +818,13 @@ export default function PayslipModal({
                     <th className="bg-gray-50 text-gray-600 font-semibold py-3 px-2 text-left border-b-2 border-gray-200 uppercase text-sm tracking-wide">Holiday / Remarks</th>
                     <th className="bg-gray-50 text-gray-600 font-semibold py-3 px-2 text-left border-b-2 border-gray-200 uppercase text-sm tracking-wide">Type</th>
                     <th className="bg-gray-50 text-gray-600 font-semibold py-3 px-2 text-left border-b-2 border-gray-200 uppercase text-sm tracking-wide">Rate (%)</th>
-                    {/* <th className="bg-gray-50 text-gray-600 font-semibold py-3 px-2 text-left border-b-2 border-gray-200 uppercase text-sm tracking-wide">Amount</th> */}
+                    <th className="bg-gray-50 text-gray-600 font-semibold py-3 px-2 text-left border-b-2 border-gray-200 uppercase text-sm tracking-wide">Holiday Pay</th>
                   </tr>
                 </thead>
                 <tbody>
                   {holidayPayDetails.map((h, i) => (
                     <tr key={h.date + h.type} className={i % 2 === 0 ? "bg-gray-50" : "bg-white"}>
-                      <td className="py-2.5 px-2 border-b border-gray-200 text-gray-800">{h.date}</td>
+                      <td className="py-2.5 px-2 border-b border-gray-200 text-gray-800 font-mono text-sm font-semibold">{h.date}</td>
                       <td className="py-2.5 px-2 border-b border-gray-200 text-gray-800 font-medium">{h.description || "N/A"}</td>
                       <td className="py-2.5 px-2 border-b border-gray-200 text-gray-800">
                         {h.type === "regular"
@@ -826,7 +832,9 @@ export default function PayslipModal({
                           : "Special Holiday"}
                       </td>
                       <td className="py-2.5 px-2 border-b border-gray-200 text-gray-800">{h.ratePercent}%</td>
-                      {/* <td className="py-2.5 px-2 border-b border-gray-200 text-gray-800">₱{h.amount.toLocaleString(undefined, { minimumFractionDigits: 2 })}</td> */}
+                      <td className="py-2.5 px-2 border-b border-gray-200 text-[#237227] font-semibold">
+                        ₱{h.amount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                      </td>
                     </tr>
                   ))}
                 </tbody>
@@ -983,6 +991,9 @@ export default function PayslipModal({
                       payroll.settings || {}
                     );
                     const dayLateDeduction = dayLateCalc.totalLateDeduction;
+                    const matchedHolidayPay = holidayPayDetails.find(
+                      (hp) => hp.date === rec.date,
+                    );
                     const dayNetSalary = Math.max(
                       0,
                       Math.round((dayBaseSalary + dayOtPay - dayLateDeduction) * 100) / 100,
@@ -990,7 +1001,17 @@ export default function PayslipModal({
 
                     return (
                       <tr key={i} className={trClass}>
-                        <td className="py-2.5 px-2 border-b border-gray-200 text-gray-800 font-mono text-sm font-semibold">{rec.date}</td>
+                        <td className="py-2.5 px-2 border-b border-gray-200 text-gray-800 font-mono text-sm font-semibold">
+                          {rec.date}
+                          {matchedHolidayPay && (
+                            <span className="block text-[10px] font-sans font-semibold text-emerald-700 mt-0.5">
+                              {matchedHolidayPay.description ||
+                                (matchedHolidayPay.type === "regular"
+                                  ? "Regular Holiday"
+                                  : "Special Holiday")}
+                            </span>
+                          )}
+                        </td>
                         <td className={`py-2.5 px-2 border-b border-gray-200 ${rec.morningInStatus === 'late' ? 'text-red-500' : 'text-gray-800'}`}>
                           {attendanceInDisplay}
                           {earlyInHoursForRow > 0 && (
@@ -1067,6 +1088,11 @@ export default function PayslipModal({
                           ₱{dayNetSalary.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                           {dayOtPay > 0 && (
                             <span className="text-xs text-blue-600 block font-normal">(+₱{dayOtPay.toFixed(2)} OT)</span>
+                          )}
+                          {matchedHolidayPay && (
+                            <span className="text-xs text-emerald-600 block font-normal">
+                              (+₱{matchedHolidayPay.amount.toFixed(2)} Holiday)
+                            </span>
                           )}
                         </td>
                       </tr>
@@ -1326,7 +1352,8 @@ export default function PayslipModal({
                     >
                       <td className="py-2.5 px-2 border-b border-gray-200 text-gray-800">Holiday Pay</td>
                       <td className="py-2.5 px-2 border-b border-gray-200 text-gray-800">
-                        {h.date} (
+                        {h.date}
+                        {h.description ? ` - ${h.description}` : ""} (
                         {h.type === "regular"
                           ? "Regular Holiday"
                           : "Special Holiday"}
@@ -1339,7 +1366,7 @@ export default function PayslipModal({
                         </span>
                       </td>
                       <td className="py-2.5 px-2 border-b border-gray-200 text-gray-800">
-                        ₱{(h.amount ?? 0).toLocaleString()}
+                        ₱{(h.amount ?? 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                       </td>
                     </tr>
                   ))}
@@ -1349,7 +1376,7 @@ export default function PayslipModal({
                       Total Holiday Pay
                     </td>
                     <td className="py-2.5 px-2 border-b border-gray-200 text-gray-800">
-                      ₱{totalHolidayPay.toLocaleString()}
+                      ₱{totalHolidayPay.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                     </td>
                   </tr>
                 </>

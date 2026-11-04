@@ -124,6 +124,12 @@ class QueryBuilder {
     return this;
   }
 
+  or(expr) {
+    // No-op safeguard so legacy .or() chains do not throw TypeError
+    this.orExpr = expr;
+    return this;
+  }
+
   order(column, options = {}) {
     const ascending = options.ascending !== undefined ? options.ascending : true;
     this.orders.push({ column, ascending });

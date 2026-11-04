@@ -466,11 +466,75 @@ export default function PayrollPage() {
             ) || 0;
           basePayroll.otHours =
             Number(Math.round(totalOtHours * 100) / 100) || 0;
+
+          // Compute Holiday Pay for holidays in this period where the employee attended
+          const personDeptNorm = String(person.department || "")
+            .toLowerCase()
+            .trim();
+          const deptRateObj =
+            (deptData || []).find(
+              (d) =>
+                String(d.department || "").toLowerCase().trim() ===
+                personDeptNorm,
+            ) || {};
+          const deptHolidayRates = {
+            regular:
+              Number(deptRateObj.regular_holiday_rate) ||
+              Number(deptRateObj.holiday_rate) ||
+              100,
+            special: Number(deptRateObj.special_holiday_rate) || 30,
+          };
+          const holidaysForDept = (holidaysData || []).filter((h) => {
+            const hDept = String(h.department || "").toLowerCase().trim();
+            return !hDept || hDept === personDeptNorm;
+          });
+          const holidaysInPeriod = holidaysForDept.filter((h) => {
+            const hd = formatYMD(h.date || h.holiday_date);
+            return hd && hd >= sDate && hd <= eDate;
+          });
+          let totalHolidayPay = 0;
+          const holidayPayDetails = holidaysInPeriod
+            .map((h) => {
+              const hd = formatYMD(h.date || h.holiday_date);
+              if (!hd || !hasHolidayPayEligibility(detailed, hd)) {
+                return null;
+              }
+              const hType = String(h.type || "regular").toLowerCase().trim();
+              let ratePercent = 0;
+              if (hType === "regular") {
+                ratePercent = deptHolidayRates.regular;
+              } else if (hType === "special") {
+                ratePercent = deptHolidayRates.special;
+              }
+              if (!ratePercent) return null;
+              const amount =
+                Math.round(
+                  ((Number(basePayroll.dailyRate || 0) * ratePercent) / 100) *
+                    100,
+                ) / 100;
+              totalHolidayPay =
+                Math.round((totalHolidayPay + amount) * 100) / 100;
+              return {
+                date: hd,
+                type: hType,
+                description: h.description || h.name || "",
+                rate: Number(basePayroll.dailyRate || 0),
+                amount,
+                ratePercent,
+              };
+            })
+            .filter(Boolean);
+
+          basePayroll.holidayPay = totalHolidayPay;
+          basePayroll.holidayPayDetails = holidayPayDetails;
+          basePayroll.holidayDays = holidayPayDetails.length;
           basePayroll.gross =
-            Number(
-              Number(basePayroll.dailyRate || 0) * basePayroll.daysPresent +
-                basePayroll.otPay,
-            ) || 0;
+            Math.round(
+              (Number(basePayroll.dailyRate || 0) * basePayroll.daysPresent +
+                basePayroll.otPay +
+                totalHolidayPay) *
+                100,
+            ) / 100;
 
           const allPersonLateDetails = detailed
             .map((rec) => rec.lateDetails || [])
@@ -517,11 +581,6 @@ export default function PayrollPage() {
               (detailed || [])
                 .map((a) => formatYMD(a.date || a.device_time))
                 .filter(Boolean),
-            );
-            const holidaysForDept = (holidaysData || []).filter(
-              (h) =>
-                (h.department || "").toLowerCase().trim() ===
-                (person.department || "").toLowerCase().trim(),
             );
             const holidaySet = new Set(
               (holidaysForDept || [])
@@ -1628,11 +1687,14 @@ export default function PayrollPage() {
             const { data: holidays, error } = await supabase
               .from("holidays")
               .select("*")
-              .or(`department.eq.${person.department},department.is.null`)
               .gte("date", start)
               .lte("date", end);
             if (error) throw error;
-            holidayDetails = holidays || [];
+            const personDept = String(person.department || "").toLowerCase().trim();
+            holidayDetails = (holidays || []).filter((h) => {
+              const hDept = String(h.department || "").toLowerCase().trim();
+              return !hDept || hDept === personDept;
+            });
           }
         } catch (err) {
           console.error("Error fetching holidays for bulk PDF:", err);
@@ -1647,10 +1709,11 @@ export default function PayrollPage() {
           ) || {};
 
         const deptHolidayRates = {
-          regular: Number(
-            deptRate.regular_holiday_rate ?? deptRate.holiday_rate ?? 100,
-          ),
-          special: Number(deptRate.special_holiday_rate ?? 30),
+          regular:
+            Number(deptRate.regular_holiday_rate) ||
+            Number(deptRate.holiday_rate) ||
+            100,
+          special: Number(deptRate.special_holiday_rate) || 30,
         };
 
         let holidayPayDetails = [];
@@ -1660,24 +1723,29 @@ export default function PayrollPage() {
             .map((h) => {
               if (
                 !hasHolidayPayEligibility(
-                  (detailedAttendance || []).map((a) => ({ date: a.date })),
-                  h.date,
+                  detailedAttendance || [],
+                  h.date || h.holiday_date,
                 )
               ) {
                 return null;
               }
               let ratePercent = 0;
-              if (h.type === "regular") {
+              const hType = String(h.type || "regular").toLowerCase().trim();
+              if (hType === "regular") {
                 ratePercent = deptHolidayRates.regular;
-              } else if (h.type === "special") {
+              } else if (hType === "special") {
                 ratePercent = deptHolidayRates.special;
               }
               if (!ratePercent) return null;
-              const amount = (payroll.dailyRate * ratePercent) / 100;
-              totalHolidayPay += amount;
+              const amount =
+                Math.round(((payroll.dailyRate * ratePercent) / 100) * 100) /
+                100;
+              totalHolidayPay =
+                Math.round((totalHolidayPay + amount) * 100) / 100;
               return {
                 date: h.date,
-                type: h.type,
+                type: hType,
+                description: h.description || h.name || "",
                 rate: payroll.dailyRate,
                 amount,
                 ratePercent,
