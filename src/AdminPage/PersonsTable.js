@@ -14,8 +14,6 @@ import {
   FiSearch,
   FiAlertCircle,
   FiCheckCircle,
-  FiCalendar,
-  FiClock,
   FiPlus,
   FiMoon,
 } from "react-icons/fi";
@@ -1592,73 +1590,72 @@ export default function PersonsTable() {
 
                 {/* Actions */}
                 <div className="flex flex-col gap-2 pt-2 border-t border-gray-100">
-                  <div className="flex gap-2">
+                  <div className="grid grid-cols-2 gap-2">
                     <button
                       onClick={() => handleEdit(p)}
-                      className="flex-1 py-1.5 px-3 rounded-md bg-[#237227] text-white text-xs font-semibold transition-colors cursor-pointer border-none focus:outline-none"
+                      className="py-1.5 px-3 rounded-md bg-[#237227] text-white text-xs font-semibold transition-colors cursor-pointer border-none focus:outline-none"
                     >
                       Edit
                     </button>
                     {p.archived ? (
                       <button
                         onClick={() => handleRestore(p)}
-                        className="flex-1 py-1.5 px-3 rounded-md bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold transition-colors cursor-pointer border-none focus:outline-none"
+                        className="py-1.5 px-3 rounded-md bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold transition-colors cursor-pointer border-none focus:outline-none"
                       >
                         Restore
                       </button>
                     ) : (
                       <button
                         onClick={() => handleArchive(p)}
-                        className="flex-1 py-1.5 px-3 rounded-md bg-white border border-gray-300 text-gray-700 text-xs font-semibold transition-colors cursor-pointer focus:outline-none"
+                        className="py-1.5 px-3 rounded-md bg-white border border-gray-300 text-gray-700 text-xs font-semibold transition-colors cursor-pointer focus:outline-none"
                       >
                         Archive
                       </button>
                     )}
                   </div>
                   {!p.archived && (
-                    <div className="flex flex-col gap-1.5 w-full">
-                      <div className="flex gap-2 w-full">
-                        <button
-                          onClick={() => handleAdminAttendance(p)}
-                          className="flex-1 py-1.5 px-2.5 rounded-md bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-medium transition-colors cursor-pointer border-none focus:outline-none whitespace-nowrap"
-                          title="Record or customize attendance on behalf of this person"
-                        >
-                          Customize Attendance
-                        </button>
-                        <button
-                          onClick={() => handleOpenNsdModal(p)}
-                          className={`flex-1 py-1.5 px-2.5 rounded-md text-xs font-semibold transition-colors cursor-pointer border-none focus:outline-none inline-flex items-center justify-center gap-1 whitespace-nowrap ${
-                            Number(p.night_shift_diff || 0) > 0
-                              ? "bg-[#708238] hover:bg-[#5f6f30] text-white shadow-sm"
-                              : "bg-gray-100 hover:bg-gray-200 text-gray-600"
-                          }`}
-                          title={
-                            Number(p.night_shift_diff || 0) > 0
-                              ? `Night Shift Differential: ${Number(p.night_shift_diff)} hrs (Click to edit)`
-                              : "Night Shift Differential is 0h (Click to set hours)"
-                          }
-                        >
-                          <FiMoon
-                            size={12}
-                            className={
-                              Number(p.night_shift_diff || 0) > 0
-                                ? "text-amber-200"
-                                : "text-gray-400"
-                            }
-                          />
-                          {Number(p.night_shift_diff || 0) > 0
-                            ? `NSD Active (${Number(p.night_shift_diff)}h)`
-                            : "NSD Off"}
-                        </button>
-                      </div>
-                    </div>
+                    <button
+                      onClick={() => handleAdminAttendance(p)}
+                      className="w-full py-1.5 px-3 rounded-md bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-medium transition-colors cursor-pointer border-none focus:outline-none"
+                      title="Record or customize attendance on behalf of this person"
+                    >
+                      Customize Attendance
+                    </button>
                   )}
-                  <button
-                    onClick={() => handleDeletePerson(p)}
-                    className="w-full py-1.5 px-3 rounded-md bg-[#D9361E] text-white text-xs font-semibold cursor-pointer border-none focus:outline-none"
-                  >
-                    Delete
-                  </button>
+                  {!p.archived ? (
+                    <div className="grid grid-cols-2 gap-2">
+                      <button
+                        onClick={() => handleOpenNsdModal(p)}
+                        className={`w-full py-1.5 px-2 rounded-md text-xs font-medium transition-colors cursor-pointer border-none focus:outline-none whitespace-nowrap text-center ${
+                          Number(p.night_shift_diff || 0) > 0
+                            ? "bg-[#708238] hover:bg-[#5f6f30] text-white font-semibold shadow-sm"
+                            : "bg-gray-100 hover:bg-gray-200 text-gray-600"
+                        }`}
+                        title={
+                          Number(p.night_shift_diff || 0) > 0
+                            ? `Night Shift Differential: ${Number(p.night_shift_diff)} hrs (Click to edit)`
+                            : "Night Shift Differential is 0h (Click to set hours)"
+                        }
+                      >
+                        {Number(p.night_shift_diff || 0) > 0
+                          ? "NSD Active"
+                          : "NSD Off"}
+                      </button>
+                      <button
+                        onClick={() => handleDeletePerson(p)}
+                        className="w-full py-1.5 px-3 rounded-md bg-[#D9361E] text-white text-xs font-semibold cursor-pointer border-none focus:outline-none"
+                      >
+                        Delete
+                      </button>
+                    </div>
+                  ) : (
+                    <button
+                      onClick={() => handleDeletePerson(p)}
+                      className="w-full py-1.5 px-3 rounded-md bg-[#D9361E] text-white text-xs font-semibold cursor-pointer border-none focus:outline-none"
+                    >
+                      Delete
+                    </button>
+                  )}
                 </div>
               </div>
             );
@@ -2329,7 +2326,7 @@ export default function PersonsTable() {
           <div className="bg-white text-gray-800 p-6 sm:p-7 rounded-3xl max-w-[500px] w-full shadow-2xl border border-gray-200 font-sans">
             <div className="flex items-center justify-between pb-3.5 mb-4 border-b border-gray-100">
               <div className="flex items-center gap-2.5">
-                <span className="flex items-center justify-center w-9 h-9 rounded-xl bg-[#708238]/15 text-[#708238]">
+                <span className="flex items-center justify-center w-9 h-9 rounded-xl bg-[#237227]/10 text-[#237227]">
                   <FiMoon size={20} />
                 </span>
                 <div>
@@ -2393,7 +2390,7 @@ export default function PersonsTable() {
                     setNsdModal((prev) => ({ ...prev, hours: e.target.value }))
                   }
                   placeholder="e.g. 2.0"
-                  className="w-full py-2.5 px-3.5 pr-14 rounded-xl border border-gray-300 bg-white text-gray-900 text-base font-semibold outline-none focus:border-[#708238] focus:ring-2 focus:ring-[#708238]/20 transition-all"
+                  className="w-full py-2.5 px-3.5 pr-14 rounded-xl border border-gray-300 bg-white text-gray-900 text-base font-semibold outline-none focus:border-[#237227] focus:ring-2 focus:ring-[#237227]/20 transition-all"
                   autoFocus
                 />
                 <span className="absolute right-3.5 top-1/2 -translate-y-1/2 text-xs font-bold text-gray-400 pointer-events-none">
@@ -2411,7 +2408,7 @@ export default function PersonsTable() {
               {[
                 { label: "0.0h (Off)", val: "0.0" },
                 { label: "1.0h", val: "1.0" },
-                { label: "2.0h (Excel)", val: "2.0" },
+                { label: "2.0h", val: "2.0" },
                 { label: "3.0h", val: "3.0" },
                 { label: "4.0h", val: "4.0" },
               ].map((preset) => (
@@ -2423,7 +2420,7 @@ export default function PersonsTable() {
                   }
                   className={`text-xs font-semibold py-1 px-2.5 rounded-lg border transition-colors cursor-pointer ${
                     String(nsdModal.hours) === preset.val
-                      ? "bg-[#708238] text-white border-[#708238]"
+                      ? "bg-[#237227] text-white border-[#237227]"
                       : "bg-white text-gray-700 border-gray-200 hover:border-gray-300"
                   }`}
                 >
@@ -2439,14 +2436,14 @@ export default function PersonsTable() {
               const baseNsd = Math.round(hRate * 0.10 * hrs * 100) / 100;
               const otNsd = Math.round(hRate * 1.25 * 0.10 * hrs * 100) / 100;
               return (
-                <div className="p-3 bg-[#708238]/10 rounded-xl border border-[#708238]/20 mb-5">
+                <div className="p-3 bg-[#237227]/10 rounded-xl border border-[#237227]/20 mb-5">
                   <div className="flex items-center justify-between text-xs text-gray-700 mb-1">
                     <span>Base NSD (+10% regular):</span>
                     <strong className="text-gray-900">+₱{baseNsd.toFixed(2)}</strong>
                   </div>
                   <div className="flex items-center justify-between text-xs text-gray-700">
                     <span>Overtime NSD (+10% on 1.25× OT):</span>
-                    <strong className="text-[#556b2f] font-bold">+₱{otNsd.toFixed(2)}</strong>
+                    <strong className="text-[#237227] font-bold">+₱{otNsd.toFixed(2)}</strong>
                   </div>
                 </div>
               );
@@ -2465,7 +2462,7 @@ export default function PersonsTable() {
                 type="button"
                 onClick={handleSaveNsdModal}
                 disabled={actionLoading}
-                className="py-2 px-6 rounded-xl text-sm font-semibold border-none bg-[#708238] hover:bg-[#5f6f30] text-white transition-colors cursor-pointer focus:outline-none shadow-sm"
+                className="py-2 px-6 rounded-xl text-sm font-semibold border-none bg-[#237227] hover:bg-[#1e5f21] text-white transition-colors cursor-pointer focus:outline-none shadow-sm"
               >
                 {actionLoading ? "Saving..." : "Save NSD Hours"}
               </button>

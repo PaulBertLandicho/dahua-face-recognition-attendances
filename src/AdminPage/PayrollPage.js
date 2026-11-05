@@ -27,6 +27,8 @@ import {
   FiClock,
   FiArrowUp,
   FiArrowDown,
+  FiAlertCircle,
+  FiAlertTriangle,
 } from "react-icons/fi";
 
 import { supabase } from "../mysqlClient";
@@ -183,6 +185,28 @@ export default function PayrollPage() {
   const [search, setSearch] = useState("");
   const [selected, setSelected] = useState(null);
   const [showPayslip, setShowPayslip] = useState(false);
+  const [customModal, setCustomModal] = useState(null);
+
+  const showCustomModal = useCallback(
+    ({
+      type = "success",
+      title,
+      text,
+      duration = 2400,
+      buttonText = "Okay, got it",
+    }) => {
+      setCustomModal({ type, title, text, duration, buttonText });
+    },
+    [],
+  );
+
+  useEffect(() => {
+    if (!customModal || !customModal.duration) return;
+    const timer = setTimeout(() => {
+      setCustomModal(null);
+    }, customModal.duration);
+    return () => clearTimeout(timer);
+  }, [customModal]);
 
   // Raw cached datasets so changing date range recalculates instantly without re-fetching
   const [rawAttendance, setRawAttendance] = useState([]);
@@ -331,8 +355,6 @@ export default function PayrollPage() {
 
       const schedMorningStart =
         parseTime(settingsData.morning_start || "08:00") || 480;
-      const lunchStart =
-        parseTime(settingsData.morning_end || "12:00") || 720;
       const schedAfternoonEnd =
         parseTime(settingsData.afternoon_end || "17:00") || 1020;
       const schedAfternoonGrace = Number.isFinite(
@@ -390,9 +412,13 @@ export default function PayrollPage() {
               ) * 100,
             ) / 100;
 
-          // If no attendance and no expenses, skip unless showAll is toggled
+          let dbRow = payrollDbByKey.get(`${person.id}|${periodStr}`) || null;
+
+          // If no attendance and no expenses and no saved payroll row, skip unless showAll is toggled
           const hasActivity =
-            personAttendance.length > 0 || periodExpenses.length > 0;
+            personAttendance.length > 0 ||
+            periodExpenses.length > 0 ||
+            Boolean(dbRow);
           if (!showAll && !hasActivity) {
             return null;
           }
@@ -413,7 +439,11 @@ export default function PayrollPage() {
 
           let totalOtHours = 0;
           let totalNsdHours = 0;
+          let totalEarlyInMins = 0;
           const hasNsdEnabled = person.night_shift_diff !== 0;
+          const isEarlyInWaived = Boolean(
+            payrollDbByKey.get(`${person.id}|${periodStr}`)?.waive_early_in,
+          );
 
           detailed.forEach((rec) => {
             const mIn = parseTime(rec.morningIn || rec.attendanceIn);
@@ -428,7 +458,8 @@ export default function PayrollPage() {
               mIn <= 7 * 60 &&
               mIn < schedMorningStart
             ) {
-              dayOtMins += schedMorningStart - mIn;
+              totalEarlyInMins += schedMorningStart - mIn;
+              if (!isEarlyInWaived) dayOtMins += schedMorningStart - mIn;
             }
             if (aOut !== null) {
               const effectiveAOut = aOut < 3 * 60 ? aOut + 24 * 60 : aOut;
@@ -485,6 +516,25 @@ export default function PayrollPage() {
           basePayroll.otHours = Number(Math.round(totalOtHours * 100) / 100) || 0;
           basePayroll.nsdHours = Number(Math.round(totalNsdHours * 100) / 100) || 0;
           basePayroll.nsdPay = nsdPay;
+          basePayroll.earlyInHours =
+            Math.round((totalEarlyInMins / 60) * 100) / 100;
+          basePayroll.earlyInPay =
+            Math.round(baseHourlyRate * otMultiplier * (totalEarlyInMins / 60) * 100) / 100;
+
+          // Manual OT override (approved hours & pay typed in by admin)
+          const overrideRow = payrollDbByKey.get(`${person.id}|${periodStr}`);
+          if (
+            overrideRow &&
+            overrideRow.ot_override_hours != null &&
+            overrideRow.ot_override_pay != null
+          ) {
+            basePayroll.otOverride = true;
+            basePayroll.otOverrideHours = Number(overrideRow.ot_override_hours);
+            basePayroll.otOverridePay = Number(overrideRow.ot_override_pay);
+            basePayroll.otHours = basePayroll.otOverrideHours;
+            basePayroll.otPay = basePayroll.otOverridePay;
+            basePayroll.nsdPay = Math.min(nsdPay, basePayroll.otOverridePay);
+          }
 
           // Compute Holiday Pay for holidays in this period where the employee attended
           const personDeptNorm = String(person.department || "")
@@ -563,25 +613,47 @@ export default function PayrollPage() {
           const lateCountLimit = Number(settingsData.late_count_limit || 5);
           
           // Tiered late deduction: 1-15m (minor), 16-30m (mid), 31-60m (1 hr employee rate), >60m (pro-rated hrs)
-          const { totalLateDeduction, lateBreakdown } = calculateTieredLateDeduction(
+          const { totalLateDeduction: calculatedLateDeduction, lateBreakdown } = calculateTieredLateDeduction(
             allPersonLateDetails,
             basePayroll.dailyRate,
             latePenalty,
             settingsData
           );
 
-          const totalDeductions =
-            Number(basePayroll.sss || 0) +
-            Number(basePayroll.pag_ibig || 0) +
-            Number(basePayroll.philhealth || 0) +
-            Number(basePayroll.cashAdvance || 0) +
-            totalLateDeduction +
-            totalExpenses;
+          // Check if late deduction is waived for this person in this period
+          if (!dbRow) {
+            dbRow = payrollDbByKey.get(`${person.id}|${periodStr}`) || null;
+          }
+          const isLateWaived = Boolean(dbRow?.waive_late);
+          const totalLateDeduction = isLateWaived ? 0 : calculatedLateDeduction;
 
-          const net = Math.max(
-            0,
-            Math.round((basePayroll.gross - totalDeductions) * 100) / 100,
-          );
+          if (dbRow && Number(dbRow.gross) > 0) {
+            basePayroll.gross = Number(dbRow.gross);
+          }
+
+          const totalDeductions =
+            dbRow && dbRow.total_deductions != null
+              ? Number(dbRow.total_deductions)
+              : Number(basePayroll.sss || 0) +
+                Number(basePayroll.pag_ibig || 0) +
+                Number(basePayroll.philhealth || 0) +
+                Number(basePayroll.cashAdvance || 0) +
+                totalLateDeduction +
+                totalExpenses;
+
+          const net =
+            dbRow && dbRow.net != null
+              ? Number(dbRow.net)
+              : Math.max(
+                  0,
+                  Math.round((basePayroll.gross - totalDeductions) * 100) / 100,
+                );
+
+          basePayroll.totalDeductions = totalDeductions;
+          basePayroll.net = net;
+          if (dbRow && Number(dbRow.days_present) > 0) {
+            basePayroll.daysPresent = Number(dbRow.days_present);
+          }
 
           // Absent count for weekdays in selected range up to today
           let absentCount = 0;
@@ -618,7 +690,6 @@ export default function PayrollPage() {
           }
 
           // DB sync with payroll_periods table
-          let dbRow = payrollDbByKey.get(`${person.id}|${periodStr}`) || null;
           if (dbRow && !dbRow.released) {
             const payload = {
               days_present: basePayroll.daysPresent,
@@ -629,6 +700,8 @@ export default function PayrollPage() {
               total_late_deduction: totalLateDeduction,
               total_deductions: totalDeductions,
               net,
+              waive_late: isLateWaived ? 1 : 0,
+              waive_early_in: isEarlyInWaived ? 1 : 0,
             };
             try {
               const { data: updated, error: updErr } = await supabase
@@ -653,6 +726,8 @@ export default function PayrollPage() {
               total_late_deduction: totalLateDeduction,
               total_deductions: totalDeductions,
               net,
+              waive_late: isLateWaived ? 1 : 0,
+              waive_early_in: isEarlyInWaived ? 1 : 0,
               released: false,
             };
             try {
@@ -692,6 +767,11 @@ export default function PayrollPage() {
               lateCountLimit,
               lateBreakdown,
               totalLateDeduction,
+              rawLateDeduction: calculatedLateDeduction,
+              isLateWaived,
+              waive_late: isLateWaived ? 1 : 0,
+              isEarlyInWaived,
+              waive_early_in: isEarlyInWaived ? 1 : 0,
               totalDeductions,
               net,
             },
@@ -1211,15 +1291,18 @@ export default function PayrollPage() {
           : prev
       );
 
-      Swal.fire({
+      showCustomModal({
+        type: "success",
         title: "Released Successfully!",
         text: `Payslip for ${personName} has been released.`,
-        icon: "success",
-        confirmButtonColor: "#237227",
       });
     } catch (err) {
       console.error("Error releasing payroll:", err);
-      Swal.fire("Release Failed", err.message || "Could not release payroll.", "error");
+      showCustomModal({
+        type: "error",
+        title: "Release Failed",
+        text: err.message || "Could not release payroll.",
+      });
     }
   };
 
@@ -1495,16 +1578,18 @@ export default function PayrollPage() {
       setNewExpAmount("");
       setNewExpNote("");
 
-      Swal.fire({
-        icon: "success",
+      showCustomModal({
+        type: "success",
         title: "Expense Added",
         text: `₱${amt.toFixed(2)} deducted from ${selectedExpensesRecord.person?.name}'s salary.`,
-        timer: 1800,
-        showConfirmButton: false,
       });
     } catch (err) {
       console.error("Error adding expense:", err);
-      Swal.fire("Error", err.message || "Failed to add expense", "error");
+      showCustomModal({
+        type: "error",
+        title: "Error",
+        text: err.message || "Failed to add expense",
+      });
     } finally {
       setExpActionLoading(false);
     }
@@ -1564,16 +1649,343 @@ export default function PayrollPage() {
         })
       );
 
-      Swal.fire({
-        icon: "success",
-        title: "Deleted",
+      showCustomModal({
+        type: "success",
+        title: "Expense Removed",
         text: "Expense removed successfully.",
-        timer: 1500,
-        showConfirmButton: false,
       });
     } catch (err) {
       console.error("Error deleting expense:", err);
-      Swal.fire("Error", "Failed to delete expense", "error");
+      showCustomModal({
+        type: "error",
+        title: "Error",
+        text: "Failed to delete expense",
+      });
+    }
+  };
+
+  // Toggle Waive Late Deductions for an employee in a period
+  const handleToggleWaiveLate = async (payrollPeriod) => {
+    if (!payrollPeriod || !payrollPeriod.person) return;
+    const { person, period, payroll } = payrollPeriod;
+    const currentWaived = Boolean(payroll.isLateWaived || payroll.waive_late);
+    const newWaived = !currentWaived;
+
+    const rawLate = Number(
+      payroll.rawLateDeduction ??
+        payroll.totalLateDeduction ??
+        payroll.total_late_deduction ??
+        0
+    );
+    const newLateDeduction = newWaived ? 0 : rawLate;
+    const otherDeductions =
+      Number(payroll.totalDeductions || 0) -
+      Number(payroll.totalLateDeduction || 0);
+    const newTotalDeductions =
+      Math.round((otherDeductions + newLateDeduction) * 100) / 100;
+    const newNet = Math.max(
+      0,
+      Math.round((Number(payroll.gross || 0) - newTotalDeductions) * 100) / 100
+    );
+
+    try {
+      const match = payrollPeriods.find(
+        (p) => p.person?.id === person.id && p.period === period
+      );
+      const targetId = match?.dbId;
+
+      if (targetId) {
+        await supabase
+          .from("payroll_periods")
+          .update({
+            waive_late: newWaived ? 1 : 0,
+            total_late_deduction: newLateDeduction,
+            total_deductions: newTotalDeductions,
+            net: newNet,
+          })
+          .eq("id", targetId);
+      } else {
+        await supabase.from("payroll_periods").upsert(
+          [
+            {
+              id: generateUUID(),
+              person_id: person.id,
+              period,
+              waive_late: newWaived ? 1 : 0,
+              total_late_deduction: newLateDeduction,
+              total_deductions: newTotalDeductions,
+              net: newNet,
+              gross: payroll.gross || 0,
+              days_present: payroll.daysPresent || 0,
+              daily_rate: Number(payroll.dailyRate || 0),
+              late_penalty: Number(person.late_penalty || 0),
+              late_count: payroll.lateCount || 0,
+              released: false,
+            },
+          ],
+          { onConflict: ["person_id", "period"] }
+        );
+      }
+
+      const updatedPayroll = {
+        ...payroll,
+        isLateWaived: newWaived,
+        waive_late: newWaived ? 1 : 0,
+        totalLateDeduction: newLateDeduction,
+        rawLateDeduction: rawLate,
+        totalDeductions: newTotalDeductions,
+        net: newNet,
+      };
+
+      setPayrollPeriods((prev) =>
+        prev.map((item) => {
+          if (item.person?.id === person.id && item.period === period) {
+            return {
+              ...item,
+              payroll: updatedPayroll,
+            };
+          }
+          return item;
+        })
+      );
+
+      if (
+        selected &&
+        selected.person?.id === person.id &&
+        selected.period === period
+      ) {
+        setSelected((prev) => ({
+          ...prev,
+          payslip: updatedPayroll,
+        }));
+      }
+
+      showCustomModal({
+        type: "success",
+        title: newWaived ? "Late Deductions Waived" : "Late Penalties Restored",
+        text: `Late penalty for ${person.name} is now ${
+          newWaived ? "waived (₱0.00)" : `restored (-₱${rawLate.toFixed(2)})`
+        }.`,
+      });
+    } catch (err) {
+      console.error("Error toggling waive late:", err);
+      showCustomModal({
+        type: "error",
+        title: "Action Failed",
+        text: "Failed to update late deduction policy.",
+      });
+    }
+  };
+
+  // Toggle Waive Early-In (3AM-7AM arrival OT) for an employee in a period
+  const handleToggleWaiveEarlyIn = async (payrollPeriod) => {
+    if (!payrollPeriod || !payrollPeriod.person) return;
+    const { person, period, payroll } = payrollPeriod;
+    const currentWaived = Boolean(payroll.isEarlyInWaived || payroll.waive_early_in);
+    const newWaived = !currentWaived;
+    const earlyInPay = Number(payroll.earlyInPay || 0);
+    const earlyInHours = Number(payroll.earlyInHours || 0);
+    const sign = newWaived ? -1 : 1;
+    const round2 = (n) => Math.round(n * 100) / 100;
+
+    const newGross = payroll.otOverride
+      ? Number(payroll.gross || 0)
+      : Math.max(0, round2(Number(payroll.gross || 0) + sign * earlyInPay));
+    const newOtPay = payroll.otOverride
+      ? Number(payroll.otPay || 0)
+      : Math.max(0, round2(Number(payroll.otPay || 0) + sign * earlyInPay));
+    const newOtHours = payroll.otOverride
+      ? Number(payroll.otHours || 0)
+      : Math.max(0, round2(Number(payroll.otHours || 0) + sign * earlyInHours));
+    const newNet = Math.max(0, round2(newGross - Number(payroll.totalDeductions || 0)));
+
+    try {
+      const match = payrollPeriods.find(
+        (p) => p.person?.id === person.id && p.period === period,
+      );
+      const targetId = match?.dbId;
+      if (targetId) {
+        await supabase
+          .from("payroll_periods")
+          .update({ waive_early_in: newWaived ? 1 : 0, gross: newGross, net: newNet })
+          .eq("id", targetId);
+      } else {
+        await supabase.from("payroll_periods").upsert(
+          [
+            {
+              id: generateUUID(),
+              person_id: person.id,
+              period,
+              waive_early_in: newWaived ? 1 : 0,
+              gross: newGross,
+              net: newNet,
+              total_deductions: Number(payroll.totalDeductions || 0),
+              days_present: payroll.daysPresent || 0,
+              daily_rate: Number(payroll.dailyRate || 0),
+              late_penalty: Number(person.late_penalty || 0),
+              late_count: payroll.lateCount || 0,
+              released: false,
+            },
+          ],
+          { onConflict: ["person_id", "period"] },
+        );
+      }
+
+      const updatedPayroll = {
+        ...payroll,
+        isEarlyInWaived: newWaived,
+        waive_early_in: newWaived ? 1 : 0,
+        gross: newGross,
+        otPay: newOtPay,
+        otHours: newOtHours,
+        net: newNet,
+      };
+
+      setPayrollPeriods((prev) =>
+        prev.map((item) =>
+          item.person?.id === person.id && item.period === period
+            ? { ...item, payroll: updatedPayroll }
+            : item,
+        ),
+      );
+
+      if (
+        selected &&
+        selected.person?.id === person.id &&
+        selected.period === period
+      ) {
+        setSelected((prev) => ({ ...prev, payslip: updatedPayroll }));
+      }
+
+      showCustomModal({
+        type: "success",
+        title: newWaived ? "Early-In Waived" : "Early-In Restored",
+        text: `Early-in overtime for ${person.name} is now ${
+          newWaived ? "waived (excluded from pay)" : `restored (+₱${earlyInPay.toFixed(2)})`
+        }.`,
+      });
+    } catch (err) {
+      console.error("Error toggling waive early-in:", err);
+      showCustomModal({
+        type: "error",
+        title: "Action Failed",
+        text: "Failed to update early-in policy.",
+      });
+    }
+  };
+
+  // Save / reset a manual OT override (approved OT hours & OT pay) for a period
+  const handleSaveOtOverride = async (payrollPeriod, hours, pay, reset = false) => {
+    if (!payrollPeriod || !payrollPeriod.person) return;
+    const { person, period, payroll } = payrollPeriod;
+    const round2 = (n) => Math.round(n * 100) / 100;
+
+    if (!reset) {
+      const h = Number(hours);
+      const p = Number(pay);
+      if (!Number.isFinite(h) || !Number.isFinite(p) || h < 0 || p < 0) {
+        showCustomModal({
+          type: "warning",
+          title: "Invalid Values",
+          text: "Enter valid OT hours and OT pay.",
+        });
+        return;
+      }
+    }
+    const newHours = reset ? null : round2(Number(hours));
+    const newPay = reset ? null : round2(Number(pay));
+
+    try {
+      const match = payrollPeriods.find(
+        (p) => p.person?.id === person.id && p.period === period,
+      );
+      const targetId = match?.dbId;
+      if (targetId) {
+        await supabase
+          .from("payroll_periods")
+          .update({ ot_override_hours: newHours, ot_override_pay: newPay })
+          .eq("id", targetId);
+      } else {
+        await supabase.from("payroll_periods").upsert(
+          [
+            {
+              id: generateUUID(),
+              person_id: person.id,
+              period,
+              ot_override_hours: newHours,
+              ot_override_pay: newPay,
+              gross: payroll.gross || 0,
+              net: payroll.net || 0,
+              total_deductions: Number(payroll.totalDeductions || 0),
+              days_present: payroll.daysPresent || 0,
+              daily_rate: Number(payroll.dailyRate || 0),
+              late_penalty: Number(person.late_penalty || 0),
+              late_count: payroll.lateCount || 0,
+              released: false,
+            },
+          ],
+          { onConflict: ["person_id", "period"] },
+        );
+      }
+
+      // keep cached DB rows in sync so recalculation keeps the override
+      setRawPayrollDb((prev) =>
+        (prev || []).map((r) =>
+          String(r.person_id) === String(person.id) && r.period === period
+            ? { ...r, ot_override_hours: newHours, ot_override_pay: newPay }
+            : r,
+        ),
+      );
+
+      if (reset) {
+        showCustomModal({
+          type: "success",
+          title: "OT Override Removed",
+          text: "Reloading to restore the automatic OT calculation...",
+          duration: 1400,
+        });
+        setTimeout(() => window.location.reload(), 1400);
+        return;
+      }
+
+      const updatedPayroll = {
+        ...payroll,
+        otOverride: true,
+        otOverrideHours: newHours,
+        otOverridePay: newPay,
+        otHours: newHours,
+        otPay: newPay,
+        nsdPay: Math.min(Number(payroll.nsdPay || 0), newPay),
+      };
+
+      setPayrollPeriods((prev) =>
+        prev.map((item) =>
+          item.person?.id === person.id && item.period === period
+            ? { ...item, payroll: updatedPayroll }
+            : item,
+        ),
+      );
+
+      if (
+        selected &&
+        selected.person?.id === person.id &&
+        selected.period === period
+      ) {
+        setSelected((prev) => ({ ...prev, payslip: updatedPayroll }));
+      }
+
+      showCustomModal({
+        type: "success",
+        title: "OT Override Saved",
+        text: `${person.name}: ${newHours} hrs, ₱${newPay.toFixed(2)}`,
+      });
+    } catch (err) {
+      console.error("Error saving OT override:", err);
+      showCustomModal({
+        type: "error",
+        title: "Action Failed",
+        text: "Failed to save OT override.",
+      });
     }
   };
 
@@ -2431,7 +2843,57 @@ export default function PayrollPage() {
                           : "N/A"}
                       </td>
                       <td className="py-3.5 px-3 border-b border-gray-200 text-gray-800">{payroll.daysPresent}</td>
-                      <td className="py-3.5 px-3 border-b border-gray-200 text-gray-800">{payroll.lateCount}</td>
+                      <td className="py-3.5 px-3 border-b border-gray-200 text-gray-800">
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <span>{payroll.lateCount}</span>
+                          {payroll.isLateWaived ? (
+                            <button
+                              type="button"
+                              onClick={() => handleToggleWaiveLate(p)}
+                              className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-300 hover:bg-emerald-200 cursor-pointer transition-colors whitespace-nowrap"
+                              title="Late penalties are waived (₱0). Click to restore penalties."
+                            >
+                              ✓ Waived
+                            </button>
+                          ) : payroll.lateCount > 0 ? (
+                            <button
+                              type="button"
+                              onClick={() => handleToggleWaiveLate(p)}
+                              className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-gray-100 text-gray-600 border border-gray-200 hover:bg-emerald-50 hover:text-emerald-700 hover:border-emerald-300 cursor-pointer transition-colors whitespace-nowrap"
+                              title={`Click to waive late deductions (-₱${Number(payroll.totalLateDeduction || 0).toFixed(2)})`}
+                            >
+                              Waive
+                            </button>
+                          ) : null}
+                          {payroll.otOverride ? (
+                            <span
+                              className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-violet-100 text-violet-800 border border-violet-300 whitespace-nowrap"
+                              title="OT hours/pay set manually (override)"
+                            >
+                              OT Edited
+                            </span>
+                          ) : null}
+                          {payroll.isEarlyInWaived ? (
+                            <button
+                              type="button"
+                              onClick={() => handleToggleWaiveEarlyIn(p)}
+                              className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-sky-100 text-sky-800 border border-sky-300 hover:bg-sky-200 cursor-pointer transition-colors whitespace-nowrap"
+                              title="Early-in overtime is waived. Click to restore."
+                            >
+                              ✓ Early-In Waived
+                            </button>
+                          ) : Number(payroll.earlyInHours || 0) > 0 ? (
+                            <button
+                              type="button"
+                              onClick={() => handleToggleWaiveEarlyIn(p)}
+                              className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-gray-100 text-gray-600 border border-gray-200 hover:bg-sky-50 hover:text-sky-700 hover:border-sky-300 cursor-pointer transition-colors whitespace-nowrap"
+                              title={`Click to waive early-in OT (-₱${Number(payroll.earlyInPay || 0).toFixed(2)})`}
+                            >
+                              Waive Early-In
+                            </button>
+                          ) : null}
+                        </div>
+                      </td>
                       <td className="py-3.5 px-3 border-b border-gray-200 text-gray-800">{p.absentCount ?? 0}</td>
                       <td className="py-3.5 px-3 border-b border-gray-200 text-gray-800 whitespace-nowrap">
                         <span className={`text-sm ${Number(p.expenses || p.payroll?.expenses || 0) > 0 ? "text-red-600 font-semibold" : "text-gray-500 font-medium"}`}>
@@ -2728,6 +3190,9 @@ export default function PayrollPage() {
           onPrint={handlePrintPayslip}
           showPrintButton={true}
           period={selected.period}
+          onToggleWaiveLate={handleToggleWaiveLate}
+                onToggleWaiveEarlyIn={handleToggleWaiveEarlyIn}
+                onSaveOtOverride={handleSaveOtOverride}
           released={(() => {
             const match = payrollPeriods.find(
               (p) =>
@@ -2745,6 +3210,77 @@ export default function PayrollPage() {
             if (match) handleReleasePayroll(match);
           }}
         />
+      )}
+
+      {/* Custom Alert/Notification Modal */}
+      {customModal && (
+        <div
+          className="fixed inset-0 z-[3000] flex items-center justify-center p-4 bg-black/45 backdrop-blur-[3px] transition-opacity duration-200"
+          onClick={() => setCustomModal(null)}
+        >
+          <div
+            className="relative w-full max-w-sm bg-white rounded-3xl p-6 sm:p-7 shadow-2xl border border-gray-100 flex flex-col items-center text-center transform transition-all duration-200 scale-100"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Close button */}
+            <button
+              type="button"
+              onClick={() => setCustomModal(null)}
+              className="absolute top-4 right-4 text-gray-400 hover:text-gray-600 rounded-full p-1.5 hover:bg-gray-100 transition-colors cursor-pointer"
+              aria-label="Close"
+            >
+              <FiX size={18} />
+            </button>
+
+            {/* Icon badge */}
+            <div
+              className={`w-16 h-16 rounded-full flex items-center justify-center mb-4.5 shadow-inner ${
+                customModal.type === "error"
+                  ? "bg-rose-50 text-rose-600 border-4 border-rose-100"
+                  : customModal.type === "warning"
+                  ? "bg-amber-50 text-amber-600 border-4 border-amber-100"
+                  : customModal.type === "info"
+                  ? "bg-sky-50 text-sky-600 border-4 border-sky-100"
+                  : "bg-emerald-50 text-[#237227] border-4 border-emerald-100"
+              }`}
+            >
+              {customModal.type === "error" ? (
+                <FiAlertCircle size={32} />
+              ) : customModal.type === "warning" ? (
+                <FiAlertTriangle size={30} />
+              ) : customModal.type === "info" ? (
+                <FiAlertCircle size={32} />
+              ) : (
+                <FiCheckCircle size={34} className="stroke-[2.2]" />
+              )}
+            </div>
+
+            {/* Title */}
+            <h3 className="text-xl font-bold text-gray-900 tracking-tight mb-2">
+              {customModal.title}
+            </h3>
+
+            {/* Message */}
+            <p className="text-sm font-medium text-gray-600 leading-relaxed max-w-xs mb-6">
+              {customModal.text}
+            </p>
+
+            {/* Dismiss Button */}
+            <button
+              type="button"
+              onClick={() => setCustomModal(null)}
+              className={`w-full py-2.5 px-5 rounded-2xl font-semibold text-sm shadow-sm hover:shadow transition-all transform active:scale-95 cursor-pointer text-white ${
+                customModal.type === "error"
+                  ? "bg-rose-600 hover:bg-rose-700"
+                  : customModal.type === "warning"
+                  ? "bg-amber-600 hover:bg-amber-700"
+                  : "bg-[#237227] hover:bg-[#1b5e20]"
+              }`}
+            >
+              {customModal.buttonText || "Okay, got it"}
+            </button>
+          </div>
+        </div>
       )}
     </div>
   );

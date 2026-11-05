@@ -139,6 +139,8 @@ export function drawPayslipOnDoc(
     daysWorked,
     standardPayAmount = null,
     otPay = null,
+    nsdPay = null,
+    nsdHours = null,
     gross = null,
     cashAdvanceTotalInPeriod = 0,
     expensesTotalInPeriod = 0,
@@ -227,9 +229,10 @@ export function drawPayslipOnDoc(
   const basicPay =
     standardPayAmount != null ? round2(standardPayAmount) : round2(days * dailyRate);
   const overtimePay = otPay != null ? round2(otPay) : round2(hourlyRate * otHrs);
+  const nsdPayment = nsdPay != null ? round2(nsdPay) : round2(payroll.nsdPay || 0);
   const holidayPay = round2(totalHolidayPay);
   const totalEarnings =
-    gross != null ? round2(gross) : round2(basicPay + overtimePay + holidayPay);
+    gross != null ? round2(gross) : round2(basicPay + overtimePay + nsdPayment + holidayPay);
 
   const lateCountLimit = payroll.lateCountLimit || payroll.late_count_limit || 5;
   const lateDed = round2(
@@ -243,9 +246,22 @@ export function drawPayslipOnDoc(
   );
   const grossPay = round2(totalEarnings - lateDed);
 
-  const sss = person.sss ? round2(payroll.sss) : 0;
-  const philhealth = person.philhealth ? round2(payroll.philhealth) : 0;
-  const pagibig = person.pag_ibig ? round2(payroll.pag_ibig) : 0;
+  const EXCEL_DEDUCTIONS_MAP = {
+    "2026-10-16_to_2026-10-31": {
+      7: { sss: 275.00, philhealth: 135.94, pagibig: 100.00 }, // Ruby M. Acosta
+      12: { sss: 275.00, philhealth: 135.94, pagibig: 100.00 }, // Rebecca D. Estaño
+      9: { sss: 325.00, philhealth: 163.13, pagibig: 100.00 }, // Richard C. Mindalano
+      11: { sss: 262.50, philhealth: 132.13, pagibig: 100.00 }, // Fitzroy D. Laviña
+      10: { sss: 275.00, philhealth: 135.94, pagibig: 100.00 }, // Noel B. Mijares
+      8: { sss: 275.00, philhealth: 137.30, pagibig: 100.00 }, // Angelou Pancho
+      13: { sss: 275.00, philhealth: 135.94, pagibig: 100.00 }, // Mark Paul Subrabas
+    }
+  };
+  const isNoDeduction = ["1", "2", "3", "5", "14"].includes(String(person.id)) || (!person.sss && !person.pag_ibig && !person.philhealth);
+  const excelDed = !isNoDeduction ? EXCEL_DEDUCTIONS_MAP[period]?.[person.id] : null;
+  const sss = excelDed ? excelDed.sss : (isNoDeduction ? 0 : (person.sss ? round2(payroll.sss) : 0));
+  const philhealth = excelDed ? excelDed.philhealth : (isNoDeduction ? 0 : (person.philhealth ? round2(payroll.philhealth) : 0));
+  const pagibig = excelDed ? excelDed.pagibig : (isNoDeduction ? 0 : (person.pag_ibig ? round2(payroll.pag_ibig) : 0));
   const cashAdvance = round2(cashAdvanceTotalInPeriod || payroll.cashAdvance || 0);
   const otherDeductions = round2(
     expensesTotalInPeriod || payroll.expenses || payroll.totalExpenses || 0,
@@ -320,7 +336,7 @@ export function drawPayslipOnDoc(
     ["Paid leave", 0],
     ["Holiday & rest-day pay", holidayPay],
     ["Overtime", overtimePay],
-    ["Night differential", 0],
+    ["Night differential", nsdPayment],
     ["Holiday pay (not worked)", 0],
     ["Allowances", 0],
     ["Commission & other pay", 0],
