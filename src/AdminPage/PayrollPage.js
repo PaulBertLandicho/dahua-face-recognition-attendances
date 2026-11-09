@@ -2,7 +2,7 @@ import React, { useEffect, useState, useCallback, useRef } from "react";
 import Swal from "sweetalert2";
 import { calculatePayroll, calculateTieredLateDeduction } from "./Payroll";
 import PayslipModal from "../AdminPage/PayslipModals/PayslipModal";
-import { getDetailedAttendance } from "./attendanceDetails";
+import { getDetailedAttendance, saveOtStatusLocal } from "./attendanceDetails";
 import { generateAllPayslipsPdf } from "./PayslipModals/generatePayslipPdf";
 import { hasHolidayPayEligibility } from "../utils/holidayPayEligibility";
 import * as XLSX from "xlsx";
@@ -186,6 +186,8 @@ export default function PayrollPage() {
 
   // Raw cached datasets so changing date range recalculates instantly without re-fetching
   const [rawAttendance, setRawAttendance] = useState([]);
+  const rawAttendanceRef = useRef([]);
+  const otCalcSeqRef = useRef(0);
   const [rawPersons, setRawPersons] = useState([]);
   const [rawDeptRates, setRawDeptRates] = useState([]);
   const [rawSettings, setRawSettings] = useState({});
@@ -414,8 +416,14 @@ export default function PayrollPage() {
           let totalOtHours = 0;
           let totalNsdHours = 0;
           const hasNsdEnabled = person.night_shift_diff !== 0;
+          let totalEarlyInMins = 0;
+          let totalAfterOtMins = 0;
+          const existingPeriodRow = payrollDbByKey.get(`${person.id}|${periodStr}`) || null;
+          const isEarlyInWaived = Boolean(existingPeriodRow?.waive_early_in);
+          const isOvertimeWaived = Boolean(existingPeriodRow?.waive_overtime);
 
           detailed.forEach((rec) => {
+            if (rec.otApprovalStatus !== "approved") return;
             const mIn = parseTime(rec.morningIn || rec.attendanceIn);
             const aOut = parseTime(rec.afternoonOut || rec.attendanceOut);
             let dayOtMins = 0;
@@ -425,9 +433,10 @@ export default function PayrollPage() {
             if (
               mIn !== null &&
               mIn >= 3 * 60 &&
-              mIn <= 7 * 60 &&
+              mIn <= 7 * 60 + 30 &&
               mIn < schedMorningStart
             ) {
+              totalEarlyInMins += schedMorningStart - mIn;
               dayOtMins += schedMorningStart - mIn;
             }
             if (aOut !== null) {
@@ -435,6 +444,7 @@ export default function PayrollPage() {
               if (effectiveAOut > schedAfternoonEnd) {
                 const otMins = effectiveAOut - schedAfternoonEnd;
                 if (otMins > schedAfternoonGrace) {
+                  totalAfterOtMins += otMins;
                   dayOtMins += otMins;
                   // Night shift differential (work past 22:00 = 10:00 PM)
                   if (hasNsdEnabled && effectiveAOut > 22 * 60) {
@@ -477,14 +487,22 @@ export default function PayrollPage() {
               Number(basePayroll.dailyRate || 0) / 8,
           );
           // Standard OT is at 1.25x rate under PH labor law when matching Excel, or flat when not
-          const otMultiplier = 1.25;
+          const otMultiplier = 1;
           const nsdMultiplier = 0.10; // extra 10% on night diff hours
           const standardOtPay = Math.round(baseHourlyRate * otMultiplier * totalOtHours * 100) / 100;
-          const nsdPay = Math.round(baseHourlyRate * otMultiplier * nsdMultiplier * totalNsdHours * 100) / 100;
+          const nsdPay = 0;
           basePayroll.otPay = Math.round((standardOtPay + nsdPay) * 100) / 100;
           basePayroll.otHours = Number(Math.round(totalOtHours * 100) / 100) || 0;
           basePayroll.nsdHours = Number(Math.round(totalNsdHours * 100) / 100) || 0;
           basePayroll.nsdPay = nsdPay;
+          basePayroll.earlyInHours = Math.round((totalEarlyInMins / 60) * 100) / 100;
+          basePayroll.earlyInPay = Math.round(baseHourlyRate * otMultiplier * (totalEarlyInMins / 60) * 100) / 100;
+          basePayroll.afterOtHours = Math.round((totalAfterOtMins / 60) * 100) / 100;
+          basePayroll.afterOtPay = Math.round(baseHourlyRate * otMultiplier * (totalAfterOtMins / 60) * 100) / 100;
+          basePayroll.isEarlyInWaived = isEarlyInWaived;
+          basePayroll.waive_early_in = isEarlyInWaived ? 1 : 0;
+          basePayroll.isOvertimeWaived = isOvertimeWaived;
+          basePayroll.waive_overtime = isOvertimeWaived ? 1 : 0;
 
           // Compute Holiday Pay for holidays in this period where the employee attended
           const personDeptNorm = String(person.department || "")
@@ -765,7 +783,7 @@ export default function PayrollPage() {
           return supabase
             .from("attendance")
             .select(
-              "id, person_id, name, event, method, device_time, status, archived",
+              "id, person_id, name, event, method, device_time, status, ot_status, archived",
             )
             .gte("device_time", cutoff.toISOString());
         })(),
@@ -801,6 +819,7 @@ export default function PayrollPage() {
         console.error("Payroll settings query failed:", settingsRes.error);
 
       // Cache raw data in state
+      rawAttendanceRef.current = attData;
       setRawAttendance(attData);
       setRawPersons(personsData);
       setRawDeptRates(deptData);
@@ -1596,6 +1615,274 @@ export default function PayrollPage() {
 
 
 
+  const handleOtApprovalChange = async ({ date, status, recordIds, personId }) => {
+    if (personId && date) {
+      saveOtStatusLocal(personId, date, status);
+    }
+    const idSet = new Set((recordIds || []).map((id) => String(id)));
+    const matchRow = (row) => {
+      if (idSet.size > 0 && idSet.has(String(row.id))) return true;
+      if (
+        personId &&
+        String(row.person_id) === String(personId) &&
+        date &&
+        (String(row.device_time || "").startsWith(String(date)) ||
+          String(row.attendance_work_date || "").startsWith(String(date)))
+      ) {
+        return true;
+      }
+      return false;
+    };
+    const baseAtt =
+      rawAttendanceRef.current && rawAttendanceRef.current.length > 0
+        ? rawAttendanceRef.current
+        : rawAttendance || [];
+    const updatedAtt = baseAtt.map((row) =>
+      matchRow(row) ? { ...row, ot_status: status } : row
+    );
+    rawAttendanceRef.current = updatedAtt;
+    setRawAttendance(updatedAtt);
+
+    // Immediately update payrollPeriods.attendance & selected.detailedAttendance so closing/reopening the modal never loses status
+    setPayrollPeriods((prev) =>
+      (prev || []).map((item) => {
+        if (personId && String(item.person?.id) !== String(personId)) return item;
+        const itemAtt = (item.attendance || []).map((row) =>
+          matchRow(row) ? { ...row, ot_status: status } : row
+        );
+        return { ...item, attendance: itemAtt };
+      })
+    );
+    setSelected((prev) => {
+      if (!prev || (personId && String(prev.person?.id) !== String(personId))) {
+        return prev;
+      }
+      const nextDetailed = (prev.detailedAttendance || []).map((rec) =>
+        date && String(rec.date || "").slice(0, 10) === String(date).slice(0, 10)
+          ? { ...rec, otApprovalStatus: status }
+          : rec
+      );
+      return { ...prev, detailedAttendance: nextDetailed };
+    });
+
+    const seq = ++otCalcSeqRef.current;
+    if (startDate && endDate) {
+      try {
+        const computed = await computePayrollForPeriod(
+          startDate,
+          endDate,
+          updatedAtt,
+          rawPersons,
+          rawDeptRates,
+          rawSettings,
+          rawPayrollDb,
+          rawHolidays,
+          rawExpenses,
+          false,
+        );
+        if (seq !== otCalcSeqRef.current) return;
+        setPayrollPeriods(computed);
+        if (personId) {
+          const updatedEntry = computed.find(
+            (item) => String(item.person?.id) === String(personId),
+          );
+          if (updatedEntry) {
+            const updatedDetailed = getDetailedAttendance(
+              updatedEntry.attendance,
+              updatedEntry.person.id,
+              rawSettings,
+            );
+            setSelected((prev) =>
+              prev && String(prev.person?.id) === String(personId)
+                ? {
+                    ...prev,
+                    payslip: updatedEntry.payroll,
+                    detailedAttendance: updatedDetailed,
+                  }
+                : prev,
+            );
+          }
+        }
+      } catch (err) {
+        console.error("Error updating payroll after OT approval change:", err);
+      }
+    }
+  };
+
+  // Toggle Waive Early-In (3AM-7AM arrival OT) for an employee in a period
+  const handleToggleWaiveEarlyIn = async (payrollPeriod) => {
+    if (!payrollPeriod || !payrollPeriod.person) return;
+    const { person, period, payroll } = payrollPeriod;
+    const currentWaived = Boolean(payroll.isEarlyInWaived || payroll.waive_early_in);
+    const newWaived = !currentWaived;
+    const earlyInPay = Number(payroll.earlyInPay || 0);
+    const earlyInHours = Number(payroll.earlyInHours || 0);
+    const sign = newWaived ? -1 : 1;
+    const round2 = (n) => Math.round(n * 100) / 100;
+
+    const newGross = Math.max(0, round2(Number(payroll.gross || 0) + sign * earlyInPay));
+    const newOtPay = Math.max(0, round2(Number(payroll.otPay || 0) + sign * earlyInPay));
+    const newOtHours = Math.max(0, round2(Number(payroll.otHours || 0) + sign * earlyInHours));
+    const newNet = Math.max(0, round2(newGross - Number(payroll.totalDeductions || 0)));
+
+    try {
+      const match = payrollPeriods.find(
+        (p) => p.person?.id === person.id && p.period === period,
+      );
+      const targetId = match?.dbId;
+      if (targetId) {
+        await supabase
+          .from("payroll_periods")
+          .update({ waive_early_in: newWaived ? 1 : 0, gross: newGross, net: newNet })
+          .eq("id", targetId);
+      } else {
+        await supabase.from("payroll_periods").upsert(
+          [
+            {
+              id: generateUUID(),
+              person_id: person.id,
+              period,
+              waive_early_in: newWaived ? 1 : 0,
+              gross: newGross,
+              net: newNet,
+              total_late_deduction: payroll.totalLateDeduction || 0,
+              total_deductions: payroll.totalDeductions || 0,
+              days_present: payroll.daysPresent || 0,
+              daily_rate: Number(payroll.dailyRate || 0),
+              late_penalty: Number(person.late_penalty || 0),
+              late_count: payroll.lateCount || 0,
+              released: false,
+            },
+          ],
+          { onConflict: ["person_id", "period"] },
+        );
+      }
+
+      setRawPayrollDb((prev) =>
+        (prev || []).map((row) =>
+          String(row.person_id) === String(person.id) && row.period === period
+            ? { ...row, waive_early_in: newWaived ? 1 : 0, gross: newGross, net: newNet }
+            : row,
+        ),
+      );
+
+      const updatedPayroll = {
+        ...payroll,
+        isEarlyInWaived: newWaived,
+        waive_early_in: newWaived ? 1 : 0,
+        otPay: newOtPay,
+        otHours: newOtHours,
+        gross: newGross,
+        net: newNet,
+      };
+
+      setPayrollPeriods((prev) =>
+        prev.map((item) =>
+          item.person?.id === person.id && item.period === period
+            ? { ...item, payroll: updatedPayroll }
+            : item,
+        ),
+      );
+
+      setSelected((prev) =>
+        prev && prev.person?.id === person.id && prev.period === period
+          ? { ...prev, payslip: updatedPayroll }
+          : prev,
+      );
+    } catch (err) {
+      console.error("Error toggling waive early-in:", err);
+      Swal.fire("Error", "Failed to update early-in overtime policy.", "error");
+    }
+  };
+
+  // Toggle Waive Overtime (past 5PM OT) for an employee in a period
+  const handleToggleWaiveOvertime = async (payrollPeriod) => {
+    if (!payrollPeriod || !payrollPeriod.person) return;
+    const { person, period, payroll } = payrollPeriod;
+    const currentWaived = Boolean(payroll.isOvertimeWaived || payroll.waive_overtime);
+    const newWaived = !currentWaived;
+    const afterOtPay = Number(payroll.afterOtPay || 0);
+    const nsdPay = Number(payroll.nsdPay || 0);
+    const totalAfterPay = Math.round((afterOtPay + nsdPay) * 100) / 100;
+    const afterOtHours = Number(payroll.afterOtHours || 0);
+    const sign = newWaived ? -1 : 1;
+    const round2 = (n) => Math.round(n * 100) / 100;
+
+    const newGross = Math.max(0, round2(Number(payroll.gross || 0) + sign * totalAfterPay));
+    const newOtPay = Math.max(0, round2(Number(payroll.otPay || 0) + sign * totalAfterPay));
+    const newOtHours = Math.max(0, round2(Number(payroll.otHours || 0) + sign * afterOtHours));
+    const newNet = Math.max(0, round2(newGross - Number(payroll.totalDeductions || 0)));
+
+    try {
+      const match = payrollPeriods.find(
+        (p) => p.person?.id === person.id && p.period === period,
+      );
+      const targetId = match?.dbId;
+      if (targetId) {
+        await supabase
+          .from("payroll_periods")
+          .update({ waive_overtime: newWaived ? 1 : 0, gross: newGross, net: newNet })
+          .eq("id", targetId);
+      } else {
+        await supabase.from("payroll_periods").upsert(
+          [
+            {
+              id: generateUUID(),
+              person_id: person.id,
+              period,
+              waive_overtime: newWaived ? 1 : 0,
+              gross: newGross,
+              net: newNet,
+              total_late_deduction: payroll.totalLateDeduction || 0,
+              total_deductions: payroll.totalDeductions || 0,
+              days_present: payroll.daysPresent || 0,
+              daily_rate: Number(payroll.dailyRate || 0),
+              late_penalty: Number(person.late_penalty || 0),
+              late_count: payroll.lateCount || 0,
+              released: false,
+            },
+          ],
+          { onConflict: ["person_id", "period"] },
+        );
+      }
+
+      setRawPayrollDb((prev) =>
+        (prev || []).map((row) =>
+          String(row.person_id) === String(person.id) && row.period === period
+            ? { ...row, waive_overtime: newWaived ? 1 : 0, gross: newGross, net: newNet }
+            : row,
+        ),
+      );
+
+      const updatedPayroll = {
+        ...payroll,
+        isOvertimeWaived: newWaived,
+        waive_overtime: newWaived ? 1 : 0,
+        otPay: newOtPay,
+        otHours: newOtHours,
+        gross: newGross,
+        net: newNet,
+      };
+
+      setPayrollPeriods((prev) =>
+        prev.map((item) =>
+          item.person?.id === person.id && item.period === period
+            ? { ...item, payroll: updatedPayroll }
+            : item,
+        ),
+      );
+
+      setSelected((prev) =>
+        prev && prev.person?.id === person.id && prev.period === period
+          ? { ...prev, payslip: updatedPayroll }
+          : prev,
+      );
+    } catch (err) {
+      console.error("Error toggling waive overtime:", err);
+      Swal.fire("Error", "Failed to update overtime policy.", "error");
+    }
+  };
+
   const handleClosePayslip = () => {
     setShowPayslip(false);
     setSelected(null);
@@ -1840,7 +2127,7 @@ export default function PayrollPage() {
           )
             ? Number(sched.afternoon_grace_minutes)
             : 0;
-          (detailedAttendance || []).forEach((rec) => {
+          (detailedAttendance || []).forEach((rec) => { if (rec.otApprovalStatus !== "approved") return;
             try {
               const mIn =
                 (rec.morningIn || rec.attendanceIn) &&
@@ -1873,7 +2160,7 @@ export default function PayrollPage() {
               if (
                 typeof mInMin === "number" &&
                 mInMin >= 3 * 60 &&
-                mInMin <= 7 * 60 &&
+                mInMin <= 7 * 60 + 30 &&
                 mInMin < mStartMin
               ) {
                 totalOtMinutes += mStartMin - mInMin;
@@ -1892,7 +2179,7 @@ export default function PayrollPage() {
           });
         } catch (e) {}
         const totalOtHours =
-          typeof payroll?.otHours === "number" && payroll.otHours > 0
+          typeof payroll?.otHours === "number"
             ? payroll.otHours
             : Math.round((totalOtMinutes / 60) * 100) / 100;
 
@@ -2743,6 +3030,11 @@ export default function PayrollPage() {
                 p.period === selected.period,
             );
             if (match) handleReleasePayroll(match);
+          }}
+          onToggleWaiveEarlyIn={handleToggleWaiveEarlyIn}
+          onToggleWaiveOvertime={handleToggleWaiveOvertime}
+          onOtApprovalChange={handleOtApprovalChange}
+          onOtIgnore={() => {
           }}
         />
       )}

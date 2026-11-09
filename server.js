@@ -227,6 +227,31 @@ async function recordDeviceSyncStatus({ type, success, error = null }) {
   }
 })();
 
+// Ensure ot_status column exists in attendance table for Overtime Approval (pending | approved | denied)
+(async () => {
+  try {
+    const [cols] = await pool.query("SHOW COLUMNS FROM attendance");
+    const colNames = (cols || []).map((c) => c.Field);
+    if (!colNames.includes("ot_status")) {
+      await pool.query("ALTER TABLE attendance ADD COLUMN ot_status VARCHAR(20) NOT NULL DEFAULT 'pending' AFTER status");
+    }
+  } catch (e) {
+    console.warn("Attendance ot_status column check warning:", e.message);
+  }
+  try {
+    const [pCols] = await pool.query("SHOW COLUMNS FROM payroll_periods");
+    const pColNames = (pCols || []).map((c) => c.Field);
+    if (!pColNames.includes("waive_early_in")) {
+      await pool.query("ALTER TABLE payroll_periods ADD COLUMN waive_early_in TINYINT(1) NOT NULL DEFAULT 0 AFTER net");
+    }
+    if (!pColNames.includes("waive_overtime")) {
+      await pool.query("ALTER TABLE payroll_periods ADD COLUMN waive_overtime TINYINT(1) NOT NULL DEFAULT 0 AFTER waive_early_in");
+    }
+  } catch (e) {
+    console.warn("payroll_periods waive columns check warning:", e.message);
+  }
+})();
+
 // Ensure attendance slot triggers allow early-in scans before morning_start and auto-calculate status
 (async () => {
   try {
@@ -275,7 +300,7 @@ async function recordDeviceSyncStatus({ type, success, error = null }) {
           SET NEW.attendance_slot = 'morning_time_in';
           SET NEW.attendance_work_date = IF(NEW.device_time IS NULL, NULL, DATE(NEW.device_time));
           IF NEW.status IS NULL OR NEW.status = '' OR NEW.status = 'present' OR NEW.status = 'on-time' THEN
-            IF TIME(NEW.device_time) <= '07:00:59' AND TIME(NEW.device_time) < configured_morning_start THEN
+            IF TIME(NEW.device_time) <= '07:30:59' AND TIME(NEW.device_time) < configured_morning_start THEN
               SET NEW.status = 'early-in';
             ELSEIF TIME(NEW.device_time) < ADDTIME(configured_morning_start, SEC_TO_TIME((configured_morning_grace + 1) * 60)) THEN
               SET NEW.status = 'on-time';
@@ -335,7 +360,7 @@ async function recordDeviceSyncStatus({ type, success, error = null }) {
           SET NEW.attendance_slot = 'morning_time_in';
           SET NEW.attendance_work_date = IF(NEW.device_time IS NULL, NULL, DATE(NEW.device_time));
           IF NEW.status IS NULL OR NEW.status = '' OR NEW.status = OLD.status OR OLD.event != 'time-in' OR NEW.status = 'present' OR NEW.status = 'on-time' THEN
-            IF TIME(NEW.device_time) <= '07:00:59' AND TIME(NEW.device_time) < configured_morning_start THEN
+            IF TIME(NEW.device_time) <= '07:30:59' AND TIME(NEW.device_time) < configured_morning_start THEN
               SET NEW.status = 'early-in';
             ELSEIF TIME(NEW.device_time) < ADDTIME(configured_morning_start, SEC_TO_TIME((configured_morning_grace + 1) * 60)) THEN
               SET NEW.status = 'on-time';
@@ -742,7 +767,7 @@ function dedupeDahuaAttendanceByPersonDay(records, settings = null) {
     } else if (mins <= morningEnd) {
       // 03:00 AM to morningEnd: Morning shift time-in (Early-in starting at 3:00 AM to 7:00 AM)
       event = "time-in";
-      if (mins >= 3 * 60 && mins <= 7 * 60 && mins < morningStart) {
+      if (mins >= 3 * 60 && mins <= 7 * 60 + 30 && mins < morningStart) {
         status = "early-in";
       } else if (mins <= morningStart + morningGrace) {
         status = "on-time";
@@ -1658,6 +1683,18 @@ app.post(["/api/attendance/import", "/attendance/import", "/api/dahua/import", "
         const workDate = getWorkDateFromDeviceTime(formattedTime, record.event);
         const rawDate = formattedTime.slice(0, 10);
 
+        // Preserve existing ot_status if any record for this person/workDate was already approved or denied
+        let preservedOtStatus = "pending";
+        try {
+          const [existingOtRows] = await pool.query(
+            "SELECT ot_status FROM attendance WHERE person_id = ? AND (attendance_work_date = ? OR (attendance_work_date IS NULL AND device_time LIKE ?)) AND ot_status IN ('approved', 'denied') LIMIT 1",
+            [record.person_id, workDate, `${rawDate}%`]
+          );
+          if (existingOtRows && existingOtRows[0]?.ot_status) {
+            preservedOtStatus = existingOtRows[0].ot_status;
+          }
+        } catch (e) {}
+
         // Delete any previously inserted shifted timestamp for the same person and event on this work shift (never delete admin-entry)
         await pool.query(
           "DELETE FROM attendance WHERE person_id = ? AND ((event = ? AND (attendance_work_date = ? OR (attendance_work_date IS NULL AND device_time LIKE ?)) AND device_time != ?) OR (device_time = ? AND event != ?)) AND (method IS NULL OR method != 'admin-entry')",
@@ -1671,8 +1708,8 @@ app.post(["/api/attendance/import", "/attendance/import", "/api/dahua/import", "
           ).catch(() => {});
         }
         const [result] = await pool.query(
-          "INSERT IGNORE INTO attendance (person_id, name, event, point, method, device_time, status) VALUES (?, ?, ?, ?, ?, ?, ?)",
-          [record.person_id, record.name, record.event, record.point, record.method, formattedTime, record.status || null]
+          "INSERT IGNORE INTO attendance (person_id, name, event, point, method, device_time, status, ot_status) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+          [record.person_id, record.name, record.event, record.point, record.method, formattedTime, record.status || null, preservedOtStatus]
         );
         if (result.affectedRows > 0) {
           insertedCount += 1;
@@ -1743,6 +1780,16 @@ app.post("/api/dahua/sync-attendance", async (req, res) => {
         const formattedTime = record.device_time;
         const workDate = getWorkDateFromDeviceTime(formattedTime, record.event);
         const rawDate = formattedTime.slice(0, 10);
+        let preservedOtStatus = "pending";
+        try {
+          const [existingOtRows] = await pool.query(
+            "SELECT ot_status FROM attendance WHERE person_id = ? AND (attendance_work_date = ? OR (attendance_work_date IS NULL AND device_time LIKE ?)) AND ot_status IN ('approved', 'denied') LIMIT 1",
+            [record.person_id, workDate, `${rawDate}%`]
+          );
+          if (existingOtRows && existingOtRows[0]?.ot_status) {
+            preservedOtStatus = existingOtRows[0].ot_status;
+          }
+        } catch (e) {}
         await pool.query(
           "DELETE FROM attendance WHERE person_id = ? AND ((event = ? AND (attendance_work_date = ? OR (attendance_work_date IS NULL AND device_time LIKE ?)) AND device_time != ?) OR (device_time = ? AND event != ?)) AND (method IS NULL OR method != 'admin-entry')",
           [record.person_id, record.event, workDate, `${rawDate}%`, formattedTime, formattedTime, record.event]
@@ -1754,8 +1801,8 @@ app.post("/api/dahua/sync-attendance", async (req, res) => {
           ).catch(() => {});
         }
         const [result] = await pool.query(
-          "INSERT IGNORE INTO attendance (person_id, name, event, point, method, device_time, status) VALUES (?, ?, ?, ?, ?, ?, ?)",
-          [record.person_id, record.name, record.event, record.point, record.method, formattedTime, record.status || null]
+          "INSERT IGNORE INTO attendance (person_id, name, event, point, method, device_time, status, ot_status) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+          [record.person_id, record.name, record.event, record.point, record.method, formattedTime, record.status || null, preservedOtStatus]
         );
         if (result.affectedRows > 0) {
           insertedCount += 1;
@@ -2272,6 +2319,7 @@ app.post("/api/db/query", async (req, res) => {
             \`device_time\` = VALUES(\`device_time\`),
             \`event\` = VALUES(\`event\`),
             \`status\` = VALUES(\`status\`),
+            \`ot_status\` = COALESCE(VALUES(\`ot_status\`), \`ot_status\`),
             \`method\` = COALESCE(VALUES(\`method\`), \`method\`),
             \`photo\` = COALESCE(VALUES(\`photo\`), \`photo\`),
             \`name\` = COALESCE(VALUES(\`name\`), \`name\`),
@@ -2331,6 +2379,11 @@ app.post("/api/db/query", async (req, res) => {
       try {
         await pool.query(sql, params);
       } catch (err) {
+        if (table === "attendance" && (err.code === "ER_BAD_FIELD_ERROR" || String(err.message || "").includes("ot_status"))) {
+          await pool.query("ALTER TABLE `attendance` ADD COLUMN `ot_status` VARCHAR(20) NOT NULL DEFAULT 'pending' AFTER `status`").catch(() => {});
+          await pool.query(sql, params);
+          return res.json({ data: payloadData, error: null });
+        }
         if (table === "attendance" && (err.code === "ER_DUP_ENTRY" || err.errno === 1062)) {
           let idVal = null;
           if (Array.isArray(filters)) {

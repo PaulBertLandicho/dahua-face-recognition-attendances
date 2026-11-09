@@ -234,7 +234,7 @@ export default function ReleasedHistoryPayroll() {
 
       const { data: attendance } = await supabase
         .from("attendance")
-        .select("id, person_id, event, device_time, photo, status, method, archived")
+        .select("id, person_id, event, device_time, photo, status, ot_status, method, archived")
         .eq("person_id", payroll.person_id)
         .eq("archived", 0)
         .order("device_time", { ascending: true });

@@ -53,23 +53,29 @@ export function calculatePayroll(
       ? Number(settings.afternoon_grace_minutes)
       : 0;
 
-    // 1. Early-in OT: 03:00 AM - 07:00 AM only
-    attendance
-      .filter((a) => a.person_id === person.id && a.event === "time-in")
-      .forEach((a) => {
-        const dt = new Date(a.device_time);
-        const inTotal = dt.getHours() * 60 + dt.getMinutes();
-        if (inTotal >= 3 * 60 && inTotal <= 7 * 60 && inTotal < startTotal) {
-          otHours += (startTotal - inTotal) / 60;
-        }
-      });
-
-    // 2. Afternoon Out OT (past afternoonEnd, including past midnight < 3:00 AM)
+    // 1. Early-in OT: 03:00 AM - 07:00 AM only (only when approved)
     attendance
       .filter(
         (a) =>
           a.person_id === person.id &&
-          a.event === "time-out"
+          a.event === "time-in" &&
+          String(a.ot_status || "").toLowerCase() === "approved"
+      )
+      .forEach((a) => {
+        const dt = new Date(a.device_time);
+        const inTotal = dt.getHours() * 60 + dt.getMinutes();
+        if (inTotal >= 3 * 60 && inTotal <= 7 * 60 + 30 && inTotal < startTotal) {
+          otHours += (startTotal - inTotal) / 60;
+        }
+      });
+
+    // 2. Afternoon Out OT (past afternoonEnd, including past midnight < 3:00 AM, only when approved)
+    attendance
+      .filter(
+        (a) =>
+          a.person_id === person.id &&
+          a.event === "time-out" &&
+          String(a.ot_status || "").toLowerCase() === "approved"
       )
       .forEach((a) => {
         const dt = new Date(a.device_time);

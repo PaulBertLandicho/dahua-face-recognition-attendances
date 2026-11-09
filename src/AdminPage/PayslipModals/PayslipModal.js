@@ -15,6 +15,7 @@ import { supabase } from "../../mysqlClient";
 import { generatePayslipPdf } from "./generatePayslipPdf";
 import { hasHolidayPayEligibility } from "../../utils/holidayPayEligibility";
 import { calculateTieredLateDeduction } from "../Payroll";
+import { getSavedOtStatus, saveOtStatusLocal } from "../attendanceDetails";
 
 // detailedAttendance: [{ date, morningIn, morningOut, afternoonIn, afternoonOut, lateCount, lateDetails: [{session, time, status}]}]
 export default function PayslipModal({
@@ -26,6 +27,9 @@ export default function PayslipModal({
   period,
   released,
   onRelease,
+  onToggleWaiveEarlyIn,
+  onToggleWaiveOvertime,
+  onOtApprovalChange,
 }) {
   // useState declarations (only once)
   const [holidayDetails, setHolidayDetails] = useState([]);
@@ -38,6 +42,86 @@ export default function PayslipModal({
   const [cashAdvanceEntries, setCashAdvanceEntries] = useState([]);
   const [expensesTotalInPeriod, setExpensesTotalInPeriod] = useState(0);
   const [expensesEntries, setExpensesEntries] = useState([]);
+  const [otApprovalOverrides, setOtApprovalOverrides] = useState({});
+  const [updatingOtDate, setUpdatingOtDate] = useState(null);
+  const [openOtMenuDate, setOpenOtMenuDate] = useState(null);
+
+  useEffect(() => {
+    setOtApprovalOverrides({});
+    setOpenOtMenuDate(null);
+  }, [person?.id, period]);
+
+  useEffect(() => {
+    if (!openOtMenuDate) return;
+    const handleOutsideClick = () => setOpenOtMenuDate(null);
+    document.addEventListener("click", handleOutsideClick);
+    return () => document.removeEventListener("click", handleOutsideClick);
+  }, [openOtMenuDate]);
+
+  const getRowOtStatus = (rec) => {
+    const rawDate = rec?.date || rec?.device_time || "";
+    const dStr = typeof rawDate === "string" ? rawDate.slice(0, 10) : "";
+    if (dStr && otApprovalOverrides[dStr]) {
+      return otApprovalOverrides[dStr];
+    }
+    if (dStr && otApprovalOverrides[dStr]) {
+      return otApprovalOverrides[dStr];
+    }
+    if (person?.id && dStr) {
+      const saved = getSavedOtStatus(person.id, dStr);
+      if (saved === "approved" || saved === "denied" || saved === "pending") {
+        return saved;
+      }
+    }
+    return rec?.otApprovalStatus || "pending";
+  };
+
+
+  const handleOtApproval = async (rec, newStatus) => {
+    if (!rec || !rec.date || released) return;
+    const dStr = String(rec.date).slice(0, 10);
+    if (person?.id && dStr) {
+      saveOtStatusLocal(person.id, dStr, newStatus);
+    }
+    setOtApprovalOverrides((prev) => ({ ...prev, [dStr]: newStatus }));
+    const ids = Array.isArray(rec.recordIds) ? rec.recordIds.filter(Boolean) : [];
+    if (typeof onOtApprovalChange === "function") {
+      onOtApprovalChange({
+        personId: person?.id,
+        date: dStr,
+        recordIds: ids,
+        status: newStatus,
+      });
+    }
+    setUpdatingOtDate(dStr);
+    try {
+      const ids = Array.isArray(rec.recordIds) ? rec.recordIds.filter(Boolean) : [];
+      if (ids.length > 0) {
+        await supabase
+          .from("attendance")
+          .update({ ot_status: newStatus })
+          .in("id", ids);
+      } else if (person?.id && dStr) {
+        await supabase
+          .from("attendance")
+          .update({ ot_status: newStatus })
+          .eq("person_id", person.id)
+          .eq("attendance_work_date", dStr);
+      }
+      if (typeof onOtApprovalChange === "function") {
+        onOtApprovalChange({
+          personId: person.id,
+          date: dStr,
+          recordIds: ids,
+          status: newStatus,
+        });
+      }
+    } catch (err) {
+      console.error("Failed to update OT approval status:", err);
+    } finally {
+      setUpdatingOtDate(null);
+    }
+  };
 
   // Debug output for troubleshooting
   React.useEffect(() => {
@@ -196,15 +280,16 @@ export default function PayslipModal({
         : 0;
       (detailedAttendance || []).forEach((rec) => {
         try {
+          if (getRowOtStatus(rec) !== "approved") return;
           const mIn = parseTimeToMinutes(rec.morningIn || rec.attendanceIn);
           const aOut = parseTimeToMinutes(rec.afternoonOut || rec.morningOut || rec.attendanceOut);
           const aEnd = parseTimeToMinutes(schedAfternoonEnd);
 
-          // Early-in computation: 03:00 AM - 07:00 AM only added to OT
+          // Early-in computation: 03:00 AM - 07:30 AM only added to OT
           if (
             typeof mIn === "number" &&
             mIn >= 3 * 60 &&
-            mIn <= 7 * 60 &&
+            mIn <= 7 * 60 + 30 &&
             mIn < schedMorningStart
           ) {
             totalOtMinutesForPdf += schedMorningStart - mIn;
@@ -717,13 +802,14 @@ export default function PayslipModal({
     const schedAfternoonEndMin = parseTimeToMinutes(schedAfternoonEnd);
 
     detailedAttendance.forEach((rec) => {
+      if (getRowOtStatus(rec) !== "approved") return;
       const mIn = parseTimeToMinutes(rec.attendanceIn || rec.morningIn);
       const aOut = parseTimeToMinutes(rec.attendanceOut || rec.afternoonOut || rec.morningOut);
       // Early-in computation: 03:00 AM - 07:00 AM only added to OT
       if (
         typeof mIn === "number" &&
         mIn >= 3 * 60 &&
-        mIn <= 7 * 60 &&
+        mIn <= 7 * 60 + 30 &&
         mIn < schedMorningStartMin
       ) {
         dynamicOtMinutes += schedMorningStartMin - mIn;
@@ -755,10 +841,10 @@ export default function PayslipModal({
       ? Math.max(dynamicNsdMinutes / 60, manualNsd)
       : Number(payroll.nsdHours ?? manualNsd ?? 0);
 
-  const otMultiplier = 1.25;
+  const otMultiplier = 1;
   const nsdMultiplier = 0.10;
   const standardOtPay = Math.round(baseHourlyRate * otMultiplier * otHours * 100) / 100;
-  const nsdPay = Math.round(baseHourlyRate * otMultiplier * nsdMultiplier * nsdHours * 100) / 100;
+  const nsdPay = 0;
   const otPay = Math.round((standardOtPay + nsdPay) * 100) / 100;
   const deductions = [
     { label: "SSS", value: person.sss ? Number(payroll.sss) : 0 },
@@ -803,7 +889,7 @@ export default function PayslipModal({
 
   return (
     <div className="fixed inset-0 w-full h-full bg-black/50 flex justify-center items-center z-[1000] backdrop-blur-[4px] payslip-modal-wrapper">
-      <div className="bg-white text-gray-800 p-8 rounded-[28px] max-w-[900px] w-[95%] overflow-y-auto max-h-[90%] shadow-[0_20px_40px_rgba(0,0,0,0.2)] border border-gray-200 font-sans">
+      <div className="bg-white text-gray-800 p-8 rounded-[28px] max-w-[1180px] w-[96%] overflow-y-auto max-h-[90%] shadow-[0_20px_40px_rgba(0,0,0,0.2)] border border-gray-200 font-sans">
         {/* ✅ PDF ONLY CONTENT */}
         <div className="payslip-modal-content-inner">
           <h2 className="text-[2rem] font-bold text-[#237227] text-center m-0 mb-2">Payslip</h2>
@@ -848,9 +934,15 @@ export default function PayslipModal({
                       <td className="py-2.5 px-2 border-b border-gray-200 text-gray-800 font-mono text-sm font-semibold">{h.date}</td>
                       <td className="py-2.5 px-2 border-b border-gray-200 text-gray-800 font-medium">{h.description || "N/A"}</td>
                       <td className="py-2.5 px-2 border-b border-gray-200 text-gray-800">
-                        {h.type === "regular"
-                          ? "Regular Holiday"
-                          : "Special Holiday"}
+                        {h.type === "regular" ? (
+                          <span className="inline-block px-2.5 py-0.5 rounded-full text-xs font-semibold bg-green-100 text-[#237227]">
+                            Regular Holiday
+                          </span>
+                        ) : (
+                          <span className="inline-block px-2.5 py-0.5 rounded-full text-xs font-semibold bg-orange-100 text-orange-700">
+                            Special Holiday
+                          </span>
+                        )}
                       </td>
                       <td className="py-2.5 px-2 border-b border-gray-200 text-gray-800">{h.ratePercent}%</td>
                       <td className="py-2.5 px-2 border-b border-gray-200 text-[#237227] font-semibold">
@@ -885,7 +977,7 @@ export default function PayslipModal({
                   <th className="bg-gray-50 text-gray-600 font-semibold py-3 px-2 text-left border-b-2 border-gray-200 uppercase text-sm tracking-wide whitespace-nowrap">Late Details</th>
                   <th className="bg-gray-50 text-gray-600 font-semibold py-3 px-2 text-left border-b-2 border-gray-200 uppercase text-sm tracking-wide">Daily Rate</th>
                   <th className="bg-gray-50 text-gray-600 font-semibold py-3 px-2 text-left border-b-2 border-gray-200 uppercase text-sm tracking-wide">Late Deduct</th>
-                  <th className="bg-gray-50 text-gray-600 font-semibold py-3 px-2 text-left border-b-2 border-gray-200 uppercase text-sm tracking-wide">Daily Salary</th>
+                  <th className="bg-gray-50 text-gray-600 font-semibold py-3 px-2 text-left border-b-2 border-gray-200 uppercase text-sm tracking-wide min-w-[210px]">Computed OT</th>
                 </tr>
               </thead>
               <tbody>
@@ -927,7 +1019,6 @@ export default function PayslipModal({
                     // Also compute Early In (3:00 AM - 7:00 AM) and Early Out (< 17:00).
                     let otMinutes = 0;
                     let earlyInHoursForRow = 0;
-                    let afterOtHoursForRow = 0;
                     let isEarlyOutForRow = false;
                     try {
                       const scheduledMorningStart =
@@ -955,7 +1046,7 @@ export default function PayslipModal({
                       if (
                         typeof morningInMin === "number" &&
                         morningInMin >= 3 * 60 &&
-                        morningInMin <= 7 * 60 &&
+                        morningInMin <= 7 * 60 + 30 &&
                         morningInMin < schedMorningStartMin
                       ) {
                         const earlyMins = schedMorningStartMin - morningInMin;
@@ -972,7 +1063,6 @@ export default function PayslipModal({
                           const mins = effectiveAfternoonOutMin - schedAfternoonEndMin;
                           if (mins > schedAfternoonGrace) {
                             otMinutes += mins;
-                            afterOtHoursForRow = mins / 60;
                           }
                         } else if (effectiveAfternoonOutMin < schedAfternoonEndMin) {
                           isEarlyOutForRow = true;
@@ -983,6 +1073,8 @@ export default function PayslipModal({
                     }
 
                     const recOtHours = otMinutes / 60;
+                    const rowOtStatus = getRowOtStatus(rec);
+
 
                     // Daily Salary and Late Deduction calculations
                     const baseDailyRate = Number(payroll.dailyRate ?? person.daily_rate ?? 0);
@@ -1003,7 +1095,12 @@ export default function PayslipModal({
                       dayFraction = 0.5;
                     }
                     const dayBaseSalary = Math.round(baseDailyRate * dayFraction * 100) / 100;
-                    const dayOtPay = Math.round(recOtHours * hourlyRateForDaily * 100) / 100;
+
+
+                    const isOtApproved = rowOtStatus === "approved";
+                    const isOtDenied = rowOtStatus === "denied" || rowOtStatus === "waived";
+                    const potentialDayOtPay = Math.round(recOtHours * hourlyRateForDaily * 100) / 100;
+                    const dayOtPay = isOtApproved ? potentialDayOtPay : 0;
                     const dayLateItems = rec.lateDetails || [];
                     const dayLateCalc = calculateTieredLateDeduction(
                       dayLateItems,
@@ -1013,11 +1110,7 @@ export default function PayslipModal({
                     );
                     const dayLateDeduction = dayLateCalc.totalLateDeduction;
                     const matchedHolidayPay = holidayPayDetails.find(
-                      (hp) => hp.date === rec.date,
-                    );
-                    const dayNetSalary = Math.max(
-                      0,
-                      Math.round((dayBaseSalary + dayOtPay - dayLateDeduction) * 100) / 100,
+                      (hp) => hp.date === rec.date && hp.type !== "restday",
                     );
 
                     return (
@@ -1033,26 +1126,11 @@ export default function PayslipModal({
                             </span>
                           )}
                         </td>
-                        <td className={`py-2.5 px-2 border-b border-gray-200 ${rec.morningInStatus === 'late' ? 'text-red-500' : 'text-gray-800'}`}>
+                        <td className={`py-2.5 px-2 border-b border-gray-200 ${rec.morningInStatus === 'late' ? 'text-red-500' : earlyInHoursForRow > 0 || rec.morningInStatus === 'early-in' ? 'text-[#237227] font-semibold' : 'text-gray-800'}`}>
                           {attendanceInDisplay}
-                          {earlyInHoursForRow > 0 && (
-                            <span className="block text-[11px] text-[#237227] font-semibold mt-0.5">
-                              Early In: {getHourMinute(earlyInHoursForRow)}
-                            </span>
-                          )}
                         </td>
-                        <td className="py-2.5 px-2 border-b border-gray-200 text-gray-800">
+                        <td className={`py-2.5 px-2 border-b border-gray-200 ${isEarlyOutForRow ? 'text-orange-600 font-semibold' : 'text-gray-800'}`}>
                           {attendanceOutDisplay}
-                          {afterOtHoursForRow > 0 && (
-                            <span className="block text-[11px] text-blue-600 font-semibold mt-0.5">
-                              Overtime: {getHourMinute(afterOtHoursForRow)}
-                            </span>
-                          )}
-                          {isEarlyOutForRow && (
-                            <span className="block text-[11px] text-orange-600 font-semibold mt-0.5">
-                              Early Out
-                            </span>
-                          )}
                         </td>
                         <td className="py-2.5 px-2 border-b border-gray-200 text-gray-800">
                           {recOtHours > 0 ? `${getHourMinute(recOtHours)} (${recOtHours.toFixed(2)})` : "N/A"}
@@ -1061,21 +1139,11 @@ export default function PayslipModal({
                         <td className="py-2.5 px-2 border-b border-gray-200 text-gray-800 whitespace-nowrap">
                           {rec.lateDetails && rec.lateDetails.length ? (
                             <div className="flex flex-col gap-1 whitespace-nowrap">
-                              {rec.lateDetails.map((d, idx) => {
-                                const itemCalc = calculateTieredLateDeduction(
-                                  [d],
-                                  baseDailyRate,
-                                  latePenalty,
-                                  payroll.settings || {}
-                                );
-                                return (
-                                  <span key={idx} className="text-red-500 text-xs whitespace-nowrap inline-block">
-                                    {d.session}: {d.time}{" "}
-                                    {d.minutesLate ? `(${d.minutesLate}m late)` : `(${d.status})`}{" "}
-                                    <span className="font-semibold text-red-600 whitespace-nowrap">[-₱{itemCalc.totalLateDeduction.toFixed(2)}]</span>
-                                  </span>
-                                );
-                              })}
+                              {rec.lateDetails.map((d, idx) => (
+                                <span key={idx} className="text-red-500 text-xs whitespace-nowrap inline-block">
+                                  {d.minutesLate ? `${d.minutesLate}m late` : d.status}
+                                </span>
+                              ))}
                             </div>
                           ) : (
                             "N/A"
@@ -1105,16 +1173,118 @@ export default function PayslipModal({
                             <span className="text-gray-400">-</span>
                           )}
                         </td>
-                        <td className="py-2.5 px-2 border-b border-gray-200 font-semibold text-[#237227] whitespace-nowrap">
-                          ₱{dayNetSalary.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                          {dayOtPay > 0 && (
-                            <span className="text-xs text-blue-600 block font-normal">(+₱{dayOtPay.toFixed(2)} OT)</span>
-                          )}
-                          {matchedHolidayPay && (
-                            <span className="text-xs text-emerald-600 block font-normal">
-                              (+₱{matchedHolidayPay.amount.toFixed(2)} Holiday)
-                            </span>
-                          )}
+                        <td className="py-2.5 px-2 border-b border-gray-200 font-semibold whitespace-nowrap min-w-[210px]">
+                          <div className="flex items-center justify-between gap-2">
+                            <div>
+                              {recOtHours > 0 ? (
+                                isOtApproved ? (
+                                  <span className="text-[#237227] font-semibold">
+                                    +₱{dayOtPay.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                  </span>
+                                ) : (
+                                  <span className="text-gray-400 font-normal">₱0.00</span>
+                                )
+                              ) : (
+                                <span className="text-gray-400 font-normal">-</span>
+                              )}
+                              {recOtHours > 0 && isOtDenied && (
+                                <span className="text-xs text-red-500 block font-normal">(OT Denied)</span>
+                              )}
+                              {recOtHours > 0 && !isOtApproved && !isOtDenied && (
+                                <span className="text-xs text-amber-600 block font-normal">(OT Pending)</span>
+                              )}
+                            </div>
+                            {recOtHours > 0 && !released && (
+                              <div className="relative flex items-center gap-1 whitespace-nowrap">
+                                <div className="relative">
+                                  <button
+                                    type="button"
+                                    disabled={updatingOtDate === rec.date}
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      setOpenOtMenuDate((prev) =>
+                                        prev === rec.date ? null : rec.date
+                                      );
+                                    }}
+                                    className="px-2.5 py-1 rounded text-[11px] font-semibold border !bg-white hover:!bg-white text-gray-700 border-gray-300 flex items-center gap-1 cursor-pointer shadow-sm"
+                                  >
+                                    Manage <span className="text-[9px]">▾</span>
+                                  </button>
+                                  {openOtMenuDate === rec.date && (
+                                    <div
+                                      onClick={(e) => e.stopPropagation()}
+                                      className={`absolute right-0 ${
+                                        i >= organizedAttendance.length - 2
+                                          ? "bottom-full mb-1"
+                                          : "top-full mt-1"
+                                      } z-50 w-28 bg-white border border-gray-200 rounded-md shadow-lg p-1 flex flex-col gap-1`}
+                                    >
+                                      {isOtApproved ? (
+                                        <>
+                                          <span className="w-full text-left px-2.5 py-1 rounded text-xs font-semibold border !bg-[#237227] !text-white !border-[#237227] shadow-sm flex items-center gap-1.5">
+                                            ✓ Approved
+                                          </span>
+                                          <button
+                                            type="button"
+                                            disabled={updatingOtDate === rec.date}
+                                            onClick={() => {
+                                              setOpenOtMenuDate(null);
+                                              handleOtApproval(rec, "pending");
+                                            }}
+                                            className="w-full text-left px-2.5 py-1 rounded text-xs font-semibold text-gray-600 !bg-transparent hover:!bg-transparent border-0 flex items-center gap-1.5 cursor-pointer"
+                                            title="Cancel Approval"
+                                          >
+                                            Cancel
+                                          </button>
+                                        </>
+                                      ) : isOtDenied ? (
+                                        <>
+                                          <span className="w-full text-left px-2.5 py-1 rounded text-xs font-semibold border !bg-red-600 !text-white !border-red-600 shadow-sm flex items-center gap-1.5">
+                                            ✕ Denied
+                                          </span>
+                                          <button
+                                            type="button"
+                                            disabled={updatingOtDate === rec.date}
+                                            onClick={() => {
+                                              setOpenOtMenuDate(null);
+                                              handleOtApproval(rec, "pending");
+                                            }}
+                                            className="w-full text-left px-2.5 py-1 rounded text-xs font-semibold text-gray-600 !bg-transparent hover:!bg-transparent border-0 flex items-center gap-1.5 cursor-pointer"
+                                            title="Cancel Denial"
+                                          >
+                                            Cancel
+                                          </button>
+                                        </>
+                                      ) : (
+                                        <>
+                                          <button
+                                            type="button"
+                                            onClick={() => {
+                                              setOpenOtMenuDate(null);
+                                              handleOtApproval(rec, "approved");
+                                            }}
+                                            className="w-full text-left px-2.5 py-1 rounded text-xs font-semibold text-[#237227] !bg-transparent hover:!bg-transparent border-0 flex items-center gap-1.5 cursor-pointer"
+                                          >
+                                            ✓ Approve
+                                          </button>
+                                          <button
+                                            type="button"
+                                            onClick={() => {
+                                              setOpenOtMenuDate(null);
+                                              handleOtApproval(rec, "denied");
+                                            }}
+                                            className="w-full text-left px-2.5 py-1 rounded text-xs font-semibold text-red-600 !bg-transparent hover:!bg-transparent border-0 flex items-center gap-1.5 cursor-pointer"
+                                          >
+                                            ✕ Deny
+                                          </button>
+                                        </>
+                                      )}
+                                    </div>
+                                  )}
+                                </div>
+                              </div>
+                            )}
+                          </div>
                         </td>
                       </tr>
                     );
@@ -1162,11 +1332,11 @@ export default function PayslipModal({
                       const afternoonOutMin = parseTimeToMinutes(rec.attendanceOut || rec.afternoonOut || rec.morningOut);
                       const schedAfternoonEndMin = parseTimeToMinutes(scheduledAfternoonEnd);
 
-                      // Early-in computation: 03:00 AM - 07:00 AM only added to OT
+                      // Early-in computation: 03:00 AM - 07:30 AM only added to OT
                       if (
                         typeof morningInMin === "number" &&
                         morningInMin >= 3 * 60 &&
-                        morningInMin <= 7 * 60 &&
+                        morningInMin <= 7 * 60 + 30 &&
                         morningInMin < schedMorningStartMin
                       ) {
                         otM += schedMorningStartMin - morningInMin;
@@ -1181,7 +1351,7 @@ export default function PayslipModal({
                       }
                     } catch (e) {}
 
-                    const otHrs = otM / 60;
+                    const otHrs = getRowOtStatus(rec) === "approved" ? otM / 60 : 0;
                     const baseSalary = Math.round(baseDailyRate * frac * 100) / 100;
                     const otPay = Math.round(otHrs * hourlyRateForDaily * 100) / 100;
                     const lCalc = calculateTieredLateDeduction(
@@ -1191,12 +1361,13 @@ export default function PayslipModal({
                       payroll.settings || {}
                     );
                     const lDed = lCalc.totalLateDeduction;
-                    const netSalary = Math.max(0, Math.round((baseSalary + otPay - lDed) * 100) / 100);
+                    const netSalary = Math.max(0, Math.round((baseSalary - lDed) * 100) / 100);
 
                     return {
                       baseRate: acc.baseRate + baseSalary,
                       lateDeduct: acc.lateDeduct + lDed,
                       netSalary: acc.netSalary + netSalary,
+                      otPay: (acc.otPay || 0) + otPay,
                     };
                   },
                   { baseRate: 0, lateDeduct: 0, netSalary: 0 }
@@ -1215,7 +1386,9 @@ export default function PayslipModal({
                         {totals.lateDeduct > 0 ? `-₱${totals.lateDeduct.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : "N/A"}
                       </td>
                       <td className="py-2.5 px-2 border-t-2 border-gray-300 whitespace-nowrap text-[#237227] font-bold">
-                        ₱{totals.netSalary.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                        {totals.otPay > 0
+                          ? `+₱${totals.otPay.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+                          : "-"}
                       </td>
                     </tr>
                   </tfoot>
@@ -1358,7 +1531,7 @@ export default function PayslipModal({
               <tr className="bg-white">
                 <td className="py-2.5 px-2 border-b border-gray-200 text-gray-800">
                   Overtime Pay
-                  {hasNsdEnabled && nsdHours > 0 && (
+                  {false && hasNsdEnabled && nsdHours > 0 && (
                     <span className="block text-xs text-indigo-700 font-semibold mt-0.5">
                       Includes {getHourMinute(nsdHours)} Night Diff (NSD)
                     </span>
@@ -1366,7 +1539,7 @@ export default function PayslipModal({
                 </td>
                 <td className="py-2.5 px-2 border-b border-gray-200 text-gray-800">{getHourMinute(otHours)}</td>
                 <td className="py-2.5 px-2 border-b border-gray-200 text-gray-800">
-                  (Daily Rate ÷ 8) × 125% = ₱{(baseHourlyRate * otMultiplier).toFixed(2)}/hr
+                  Daily Rate ÷ 8 = ₱{(baseHourlyRate * otMultiplier).toFixed(2)}/hr
                 </td>
                 <td className="py-2.5 px-2 border-b border-gray-200 text-gray-800">₱{otPay.toFixed(2)}</td>
               </tr>
@@ -1378,14 +1551,13 @@ export default function PayslipModal({
                       key={idx}
                       className={idx % 2 === 0 ? "bg-gray-50" : "bg-white"}
                     >
-                      <td className="py-2.5 px-2 border-b border-gray-200 text-gray-800">Holiday Pay</td>
+                      <td className="py-2.5 px-2 border-b border-gray-200 text-gray-800">
+                        Holiday Pay
+                      </td>
                       <td className="py-2.5 px-2 border-b border-gray-200 text-gray-800">
                         {h.date}
-                        {h.description ? ` - ${h.description}` : ""} (
-                        {h.type === "regular"
-                          ? "Regular Holiday"
-                          : "Special Holiday"}
-                        )
+                        {h.description ? ` - ${h.description}` : ""}
+                        {` (${h.type === "regular" ? "Regular Holiday" : "Special Holiday"})`}
                       </td>
                       <td className="py-2.5 px-2 border-b border-gray-200 text-gray-800">
                         <span className="text-[#237227] font-semibold">

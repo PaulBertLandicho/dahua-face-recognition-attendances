@@ -241,7 +241,7 @@ export function drawPayslipOnDoc(
             ? Number(payroll.lateCount || 0) * Number(person?.late_penalty || 0)
             : 0),
   );
-  const grossPay = round2(totalEarnings - lateDed);
+  const grossPay = round2(totalEarnings);
 
   const sss = person.sss ? round2(payroll.sss) : 0;
   const philhealth = person.philhealth ? round2(payroll.philhealth) : 0;
@@ -250,7 +250,7 @@ export function drawPayslipOnDoc(
   const otherDeductions = round2(
     expensesTotalInPeriod || payroll.expenses || payroll.totalExpenses || 0,
   );
-  const totalDeductions = round2(sss + philhealth + pagibig + cashAdvance + otherDeductions);
+  const totalDeductions = round2(sss + philhealth + pagibig + cashAdvance + lateDed + otherDeductions);
   const netPay = Math.max(0, round2(grossPay - totalDeductions));
 
   // ---------- Header ----------
@@ -318,14 +318,13 @@ export function drawPayslipOnDoc(
   const earnings = [
     ["Basic pay", basicPay],
     ["Paid leave", 0],
-    ["Holiday & rest-day pay", holidayPay],
+    ["Holiday pay", holidayPay],
     ["Overtime", overtimePay],
     ["Night differential", 0],
     ["Holiday pay (not worked)", 0],
     ["Allowances", 0],
     ["Commission & other pay", 0],
     ["Bonus / 13th month", 0],
-    ["Less: absences & late", lateDed ? -lateDed : 0],
   ];
   const deductions = [
     ["SSS", sss],
@@ -334,6 +333,7 @@ export function drawPayslipOnDoc(
     ["Withholding tax", 0],
     ["Loans", 0],
     ["Cash advance", cashAdvance],
+    ["Less: absences & late", lateDed],
     ["Other deductions", otherDeductions],
   ];
 
@@ -352,7 +352,8 @@ export function drawPayslipOnDoc(
     drawAmount(value, rightAmountX, ry, { sizePt: 8.8 });
   });
 
-  const totalsLineY = rowStart + rowStep * (earnings.length - 1) + S(2.6);
+  const maxRows = Math.max(earnings.length, deductions.length);
+  const totalsLineY = rowStart + rowStep * (maxRows - 1) + S(2.6);
   hLine(totalsLineY, COLOR_LIGHT_LINE, 0.25);
   const totalsY = totalsLineY + S(4.4);
   setFont("helvetica", "bold", 9);
@@ -360,7 +361,7 @@ export function drawPayslipOnDoc(
   drawAmount(grossPay, leftAmountX, totalsY, { sizePt: 9, bold: true, showZero: true });
   setFont("helvetica", "bold", 9);
   doc.text("Total deductions", rightLabelX, totalsY);
-  drawAmount(totalDeductions, rightAmountX, totalsY, { sizePt: 9, bold: true, showZero: true });
+  drawAmount(totalDeductions ? -totalDeductions : 0, rightAmountX, totalsY, { sizePt: 9, bold: true, showZero: true });
 
   // ---------- Net pay ----------
   const netY = totalsY + S(12);
@@ -488,3 +489,4 @@ export async function generateAllPayslipsPdf(list = [], periodSlug = "") {
     : "payroll_summary_payslips.pdf";
   doc.save(filename);
 }
+

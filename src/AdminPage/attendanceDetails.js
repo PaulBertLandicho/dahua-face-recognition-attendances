@@ -1,10 +1,36 @@
 // Utility to generate detailed attendance for PayslipModal
 // Returns [{ date, morningIn, morningOut, afternoonIn, afternoonOut, lateCount, lateDetails }]
+const OT_APPROVAL_STORAGE_KEY = "dahua_ot_approvals_v1";
+
+export function getSavedOtStatus(personId, dateStr) {
+  if (!personId || !dateStr || typeof localStorage === "undefined") return null;
+  try {
+    const raw = localStorage.getItem(OT_APPROVAL_STORAGE_KEY);
+    if (!raw) return null;
+    const map = JSON.parse(raw);
+    const key = `${String(personId)}|${String(dateStr).slice(0, 10)}`;
+    return map[key] || null;
+  } catch (e) {
+    return null;
+  }
+}
+
+export function saveOtStatusLocal(personId, dateStr, status) {
+  if (!personId || !dateStr || typeof localStorage === "undefined") return;
+  try {
+    const raw = localStorage.getItem(OT_APPROVAL_STORAGE_KEY);
+    const map = raw ? JSON.parse(raw) : {};
+    const key = `${String(personId)}|${String(dateStr).slice(0, 10)}`;
+    map[key] = status;
+    localStorage.setItem(OT_APPROVAL_STORAGE_KEY, JSON.stringify(map));
+  } catch (e) {}
+}
+
 export function getDetailedAttendance(attendance, personId, settings = {}) {
   // Group attendance by date
   const byDate = {};
   attendance
-    .filter((r) => r.person_id === personId)
+    .filter((r) => String(r.person_id) === String(personId))
     .forEach((r) => {
       const dt = new Date(r.device_time);
       if (isNaN(dt.getTime())) return;
@@ -44,7 +70,7 @@ export function getDetailedAttendance(attendance, personId, settings = {}) {
     const mins = dt.getHours() * 60 + dt.getMinutes();
     const [h, m] = morningStart.split(":").map(Number);
     const startMins = h * 60 + m;
-    return mins >= 3 * 60 && mins <= 7 * 60 && mins < startMins;
+    return mins >= 3 * 60 && mins <= 7 * 60 + 30 && mins < startMins;
   }
 
   function isLate(dt, session) {
@@ -191,7 +217,7 @@ export function getDetailedAttendance(attendance, personId, settings = {}) {
     if (checkinTime) {
       const inTotal = parseTimeToMinutes(checkinTime);
       // Early in OT: 03:00 AM to 07:00 AM only
-      if (inTotal >= 3 * 60 && inTotal <= 7 * 60 && inTotal < startTotal) {
+      if (inTotal >= 3 * 60 && inTotal <= 7 * 60 + 30 && inTotal < startTotal) {
         dayOtMinutes += startTotal - inTotal;
       }
     }
@@ -214,8 +240,22 @@ export function getDetailedAttendance(attendance, personId, settings = {}) {
       status = "overtime";
       otHours = Math.round((dayOtMinutes / 60) * 100) / 100;
     }
+
+    const recordIds = recs.map((r) => r.id).filter(Boolean);
+    const localSavedStatus = getSavedOtStatus(personId, date);
+    let otApprovalStatus = "pending";
+    if (localSavedStatus === "approved" || localSavedStatus === "denied" || localSavedStatus === "pending") {
+      otApprovalStatus = localSavedStatus;
+    } else
+    if (recs.some((r) => String(r.ot_status || "").toLowerCase() === "approved")) {
+      otApprovalStatus = "approved";
+    } else if (recs.some((r) => String(r.ot_status || "").toLowerCase() === "denied")) {
+      otApprovalStatus = "denied";
+    }
+
     return {
       date,
+      recordIds,
       attendanceIn,
       attendanceOut,
       morningIn,
@@ -226,6 +266,7 @@ export function getDetailedAttendance(attendance, personId, settings = {}) {
       lateDetails,
       status,
       otHours,
+      otApprovalStatus,
     };
   });
 }

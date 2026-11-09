@@ -141,7 +141,7 @@ export function determineAttendanceStatus(
     return "on-time";
   } else {
     // Morning punch (early-in is 03:00 AM to 07:00 AM only)
-    if (nowMinutes >= 3 * 60 && nowMinutes <= 7 * 60 && nowMinutes < morningStart) {
+    if (nowMinutes >= 3 * 60 && nowMinutes <= 7 * 60 + 30 && nowMinutes < morningStart) {
       return "early-in";
     } else if (nowMinutes <= morningStart + morningGrace) {
       return "on-time";

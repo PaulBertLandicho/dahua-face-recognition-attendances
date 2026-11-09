@@ -1625,31 +1625,6 @@ export default function PersonsTable() {
                         >
                           Customize Attendance
                         </button>
-                        <button
-                          onClick={() => handleOpenNsdModal(p)}
-                          className={`flex-1 py-1.5 px-2.5 rounded-md text-xs font-semibold transition-colors cursor-pointer border-none focus:outline-none inline-flex items-center justify-center gap-1 whitespace-nowrap ${
-                            Number(p.night_shift_diff || 0) > 0
-                              ? "bg-[#708238] hover:bg-[#5f6f30] text-white shadow-sm"
-                              : "bg-gray-100 hover:bg-gray-200 text-gray-600"
-                          }`}
-                          title={
-                            Number(p.night_shift_diff || 0) > 0
-                              ? `Night Shift Differential: ${Number(p.night_shift_diff)} hrs (Click to edit)`
-                              : "Night Shift Differential is 0h (Click to set hours)"
-                          }
-                        >
-                          <FiMoon
-                            size={12}
-                            className={
-                              Number(p.night_shift_diff || 0) > 0
-                                ? "text-amber-200"
-                                : "text-gray-400"
-                            }
-                          />
-                          {Number(p.night_shift_diff || 0) > 0
-                            ? `NSD Active (${Number(p.night_shift_diff)}h)`
-                            : "NSD Off"}
-                        </button>
                       </div>
                     </div>
                   )}

@@ -108,7 +108,7 @@ CREATE TRIGGER `attendance_before_insert_slot` BEFORE INSERT ON `attendance` FOR
     SET NEW.attendance_slot = 'morning_time_in';
     SET NEW.attendance_work_date = IF(NEW.device_time IS NULL, NULL, DATE(NEW.device_time));
     IF NEW.status IS NULL OR NEW.status = '' OR NEW.status = 'present' OR NEW.status = 'on-time' THEN
-      IF TIME(NEW.device_time) <= '07:00:59' AND TIME(NEW.device_time) < configured_morning_start THEN
+      IF TIME(NEW.device_time) <= '07:30:59' AND TIME(NEW.device_time) < configured_morning_start THEN
         SET NEW.status = 'early-in';
       ELSEIF TIME(NEW.device_time) <= ADDTIME(configured_morning_start, SEC_TO_TIME(configured_morning_grace * 60)) THEN
         SET NEW.status = 'on-time';
@@ -162,7 +162,7 @@ CREATE TRIGGER `attendance_before_update_slot` BEFORE UPDATE ON `attendance` FOR
     SET NEW.attendance_slot = 'morning_time_in';
     SET NEW.attendance_work_date = IF(NEW.device_time IS NULL, NULL, DATE(NEW.device_time));
     IF NEW.status IS NULL OR NEW.status = '' OR NEW.status = OLD.status OR OLD.event != 'time-in' OR NEW.status = 'present' OR NEW.status = 'on-time' THEN
-      IF TIME(NEW.device_time) <= '07:00:59' AND TIME(NEW.device_time) < configured_morning_start THEN
+      IF TIME(NEW.device_time) <= '07:30:59' AND TIME(NEW.device_time) < configured_morning_start THEN
         SET NEW.status = 'early-in';
       ELSEIF TIME(NEW.device_time) <= ADDTIME(configured_morning_start, SEC_TO_TIME(configured_morning_grace * 60)) THEN
         SET NEW.status = 'on-time';

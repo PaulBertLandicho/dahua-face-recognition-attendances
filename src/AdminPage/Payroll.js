@@ -1,3 +1,13 @@
+import { getSavedOtStatus } from "./attendanceDetails";
+
+function isAttendanceOtApproved(a, personId) {
+  const dateStr = String(a?.attendance_work_date || a?.device_time || "").slice(0, 10);
+  const local = getSavedOtStatus(personId, dateStr);
+  if (local === "approved") return true;
+  if (local === "denied" || local === "pending") return false;
+  return String(a?.ot_status || "").toLowerCase() === "approved";
+}
+
 export function calculatePayroll(
   attendance = [],
   persons = [],
@@ -55,23 +65,29 @@ export function calculatePayroll(
       ? Number(settings.afternoon_grace_minutes)
       : 0;
 
-    // 1. Early-in OT: 03:00 AM - 07:00 AM only
-    attendance
-      .filter((a) => a.person_id === person.id && a.event === "time-in")
-      .forEach((a) => {
-        const dt = new Date(a.device_time);
-        const inTotal = dt.getHours() * 60 + dt.getMinutes();
-        if (inTotal >= 3 * 60 && inTotal <= 7 * 60 && inTotal < startTotal) {
-          otHours += (startTotal - inTotal) / 60;
-        }
-      });
-
-    // 2. Afternoon Out OT (past afternoonEnd + afternoonGrace, e.g. 5:01 PM when grace is 0)
+    // 1. Early-in OT: 03:00 AM - 07:00 AM only (only when approved)
     attendance
       .filter(
         (a) =>
           a.person_id === person.id &&
-          a.event === "time-out"
+          a.event === "time-in" &&
+          isAttendanceOtApproved(a, person.id)
+      )
+      .forEach((a) => {
+        const dt = new Date(a.device_time);
+        const inTotal = dt.getHours() * 60 + dt.getMinutes();
+        if (inTotal >= 3 * 60 && inTotal <= 7 * 60 + 30 && inTotal < startTotal) {
+          otHours += (startTotal - inTotal) / 60;
+        }
+      });
+
+    // 2. Afternoon Out OT (past afternoonEnd + afternoonGrace, e.g. 5:01 PM when grace is 0, only when approved)
+    attendance
+      .filter(
+        (a) =>
+          a.person_id === person.id &&
+          a.event === "time-out" &&
+          isAttendanceOtApproved(a, person.id)
       )
       .forEach((a) => {
         const dt = new Date(a.device_time);
