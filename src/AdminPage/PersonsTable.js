@@ -14,8 +14,6 @@ import {
   FiSearch,
   FiAlertCircle,
   FiCheckCircle,
-  FiCalendar,
-  FiClock,
   FiPlus,
   FiMoon,
 } from "react-icons/fi";

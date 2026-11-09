@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useCallback, useRef } from "react";
 import Swal from "sweetalert2";
 import { calculatePayroll, calculateTieredLateDeduction } from "./Payroll";
-import PayslipModal from "../AdminPage/PayslipModals/PayslipModal";
+import PayslipModal from "./PayslipModals/PayslipModal";
 import { getDetailedAttendance, saveOtStatusLocal } from "./attendanceDetails";
 import { generateAllPayslipsPdf } from "./PayslipModals/generatePayslipPdf";
 import { hasHolidayPayEligibility } from "../utils/holidayPayEligibility";
