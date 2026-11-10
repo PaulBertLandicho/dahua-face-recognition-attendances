@@ -1052,6 +1052,9 @@ export default function PayslipModal({
                         const earlyMins = schedMorningStartMin - morningInMin;
                         otMinutes += earlyMins;
                         earlyInHoursForRow = earlyMins / 60;
+                        if (earlyMins > 0) {
+                          canManageOtForRow = true;
+                        }
                       }
 
                       if (

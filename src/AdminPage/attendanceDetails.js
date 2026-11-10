@@ -1,6 +1,6 @@
 // Utility to generate detailed attendance for PayslipModal
 // Returns [{ date, morningIn, morningOut, afternoonIn, afternoonOut, lateCount, lateDetails }]
-const OT_APPROVAL_STORAGE_KEY = "dahua_ot_approvals_v1";
+const OT_APPROVAL_STORAGE_KEY = "dahua_ot_approvals_v2";
 
 export function getSavedOtStatus(personId, dateStr) {
   if (!personId || !dateStr || typeof localStorage === "undefined") return null;
