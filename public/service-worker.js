@@ -1,4 +1,4 @@
-const CACHE_NAME = 'mf-attendance-v1';
+const CACHE_NAME = 'mf-attendance-v2';
 const OFFLINE_URL = '/offline.html';
 
 const ASSETS_TO_CACHE = [

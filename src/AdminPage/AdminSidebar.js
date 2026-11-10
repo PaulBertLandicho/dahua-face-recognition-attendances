@@ -12,6 +12,7 @@ import {
   FiChevronDown,
   FiChevronRight,
   FiSliders,
+  FiMapPin,
 } from "react-icons/fi";
 import {
   MdOutlineAccessTime,
@@ -29,6 +30,11 @@ const mainNavItems = [
     label: "Attendance Records",
     path: "/admin/attendance",
     icon: <MdOutlineAccessTime />,
+  },
+  {
+    label: "Field Site Records",
+    path: "/admin/field-attendance",
+    icon: <FiMapPin />,
   },
   { label: "View Payroll", path: "/admin/payroll", icon: <MdPayments /> },
   { label: "Persons", path: "/admin/persons", icon: <FiUsers /> },

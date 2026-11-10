@@ -276,7 +276,9 @@ export async function recordAttendanceForPerson({
 
   const lastEvent = attData?.[0]?.event || null;
   const lastEventDeviceTimeIso = attData?.[0]?.device_time || null;
-  const event = determineExpectedEvent(
+  const event =
+    scanPayload?.forcedEvent ||
+    determineExpectedEvent(
     currentTime,
     lastEvent,
     settings,
@@ -455,7 +457,7 @@ export async function recordAttendanceForPerson({
   }
 
   try {
-    const { error } = await supabase.from("attendance").insert({
+    const insertPayload = {
       person_id: person.id,
       name: person.name,
       department: person.department,
@@ -465,8 +467,22 @@ export async function recordAttendanceForPerson({
       device_time: deviceTime,
       status,
       photo: scanPayload?.photoDataUrl || null,
-    });
-    if (error) throw error;
+    };
+    const noteText = scanPayload?.notes || scanPayload?.note || null;
+    if (noteText) {
+      insertPayload.notes = noteText;
+    }
+
+    let insertRes = await supabase.from("attendance").insert(insertPayload);
+    if (insertRes.error) {
+      // If remote database schema cache doesn't recognize 'notes' column, retry without notes
+      const errStr = String(insertRes.error?.message || "");
+      if (errStr.includes("notes") && insertPayload.notes) {
+        delete insertPayload.notes;
+        insertRes = await supabase.from("attendance").insert(insertPayload);
+      }
+    }
+    if (insertRes.error) throw insertRes.error;
     return { inserted: true, blocked: false, event, status };
   } catch (e) {
     const errorMessage = String(e?.message || e || "");
@@ -483,6 +499,7 @@ export async function recordAttendanceForPerson({
     console.warn("recordAttendanceForPerson: insert failed, enqueueing offline", e);
     try {
       if (offlineQueue) {
+        const noteText = scanPayload?.notes || scanPayload?.note || null;
         const qres = await offlineQueue.enqueueAttendance({
           person_id: person.id,
           name: person.name,
@@ -493,6 +510,7 @@ export async function recordAttendanceForPerson({
           device_time: deviceTime,
           status,
           photo: scanPayload?.photoDataUrl || null,
+          notes: noteText,
         });
         // enqueueAttendance may return an object like { queued: false, reason }
         if (qres && typeof qres === 'object' && qres.queued === false) {

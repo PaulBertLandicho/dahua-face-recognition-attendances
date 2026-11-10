@@ -13,12 +13,15 @@ import { useLoading } from "./LoadingContext";
 import { supabase } from "./mysqlClient";
 
 import AdminLogin from "./AdminPage/AdminLogin";
+import DefaultLanding from "./CameraAttendance/DefaultLanding";
+import UserAttendanceScanner from "./CameraAttendance/UserAttendanceScanner";
 import { FiLogIn } from "react-icons/fi";
 import Dashboard from "./AdminPage/Dashboard";
 import ReleasedHistoryPayroll from "./AdminPage/ReleasedHistoryPayroll";
 import ReleasedPayrollLogs from "./AdminPage/ReleasedPayrollLogs";
 import AdminSettings from "./AdminPage/AdminSettings";
 import AttendanceTable from "./AdminPage/AttendanceTable";
+import FieldAttendanceTable from "./AdminPage/FieldAttendanceTable";
 import AdminSidebar from "./AdminPage/AdminSidebar";
 import DepartmentRates from "./AdminPage/DepartmentRates";
 import PersonsTable from "./AdminPage/PersonsTable";
@@ -32,6 +35,7 @@ import {
   getSessionRole,
   hasAllowedRole,
 } from "./utils/authRoles";
+import { checkIsMobileDevice } from "./utils/deviceUtils";
 
 function ProtectedRoute({ session, allowedRoles = STAFF_ROLES, children }) {
   return hasAllowedRole(session, allowedRoles) ? (
@@ -68,18 +72,20 @@ function App() {
     return () => listener?.subscription.unsubscribe();
   }, []);
 
-  // detect mobile viewport to conditionally hide the header
-  const [isMobile, setIsMobile] = useState(() =>
-    typeof window !== "undefined" ? window.innerWidth <= 600 : false,
-  );
+  // detect mobile device (including mobile in landscape mode)
+  const [isMobile, setIsMobile] = useState(() => checkIsMobileDevice());
 
   useEffect(() => {
     function handleResize() {
-      setIsMobile(window.innerWidth <= 600);
+      setIsMobile(checkIsMobileDevice());
     }
     handleResize();
     window.addEventListener("resize", handleResize);
-    return () => window.removeEventListener("resize", handleResize);
+    window.addEventListener("orientationchange", handleResize);
+    return () => {
+      window.removeEventListener("resize", handleResize);
+      window.removeEventListener("orientationchange", handleResize);
+    };
   }, []);
 
   // show global loading on navigation
@@ -87,7 +93,7 @@ function App() {
   const location = useLocation();
   const navigate = useNavigate();
   // const isAdminPath = location.pathname.startsWith("/admin");
-  const isAdminLoginPath = location.pathname === "/admin";
+  const isAdminLoginPath = (location.pathname === "/admin" || location.pathname === "/");
   const currentRole = getSessionRole(session);
   const hasStaffAccess = hasAllowedRole(session, STAFF_ROLES);
 
@@ -129,22 +135,20 @@ function App() {
                 </h1>
               </div>
               
-              {hasStaffAccess && (
-                <div className="flex items-center gap-3">
-                  {currentRole === ADMIN_ROLE && !location.pathname.startsWith("/admin") && (
-                    <button
-                      type="button"
-                      onClick={() => navigate("/admin/dashboard")}
-                      className="py-2 px-[16px] rounded-full border border-[#237227] bg-[#237227] text-white cursor-pointer text-sm font-bold shadow-sm"
-                    >
-                      <span className="inline-flex items-center">
-                        <FiLogIn className="mr-2 align-middle" />
-                        Admin Dashboard
-                      </span>
-                    </button>
-                  )}
-                </div>
-              )}
+              <div className="flex items-center gap-3">
+                {hasStaffAccess && currentRole === ADMIN_ROLE && !location.pathname.startsWith("/admin") && (
+                  <button
+                    type="button"
+                    onClick={() => navigate("/admin/dashboard")}
+                    className="py-2 px-[16px] rounded-full border border-[#237227] bg-[#237227] text-white cursor-pointer text-sm font-bold shadow-sm"
+                  >
+                    <span className="inline-flex items-center">
+                      <FiLogIn className="mr-2 align-middle" />
+                      Admin Dashboard
+                    </span>
+                  </button>
+                )}
+              </div>
             </div>
           </div>
         )}
@@ -156,9 +160,13 @@ function App() {
               hasStaffAccess ? (
                 <Navigate to={getLoginRedirectPath(session)} replace />
               ) : (
-                <AdminLogin />
+                <DefaultLanding session={session} />
               )
             }
+          />
+          <Route
+            path="/scan"
+            element={<UserAttendanceScanner />}
           />
           <Route
             path="/staff-login"
@@ -311,6 +319,26 @@ function App() {
                   />
                   <div className={`flex-1 pt-4 pb-8 px-6 lg:px-8 bg-white ${isMobile ? "ml-0" : "ml-[295px]"}`}>
                     <AttendanceTable />
+                  </div>
+                </div>
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/admin/field-attendance"
+            element={
+              <ProtectedRoute session={session} allowedRoles={STAFF_ROLES}>
+                <div className="flex min-h-screen bg-white">
+                  <AdminSidebar
+                    role={currentRole}
+                    onLogout={async () => {
+                      await supabase.auth.signOut();
+                      localStorage.removeItem("sb-session");
+                      window.location.href = "/admin";
+                    }}
+                  />
+                  <div className={`flex-1 pt-4 pb-8 px-6 lg:px-8 bg-white ${isMobile ? "ml-0" : "ml-[295px]"}`}>
+                    <FieldAttendanceTable />
                   </div>
                 </div>
               </ProtectedRoute>

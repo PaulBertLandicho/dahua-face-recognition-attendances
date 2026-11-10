@@ -114,6 +114,7 @@ export default function CameraPlayer({
   onFaceScan,
   registrationActive = false,
   hideSettingsCard = false,
+  userOnlyMode = false,
 }) {
   // If REACT_APP_WS_URL is not set, we skip WebSocket entirely and use local webcam.
   const wsUrl = (process.env.REACT_APP_WS_URL || "").trim() || null;
@@ -1109,7 +1110,13 @@ if (uniqueParts.length) {
     let videoEl = null;
     async function startLocalCamera() {
       try {
-        stream = await navigator.mediaDevices.getUserMedia({ video: true });
+        try {
+          stream = await navigator.mediaDevices.getUserMedia({
+            video: { facingMode: "user" },
+          });
+        } catch (e) {
+          stream = await navigator.mediaDevices.getUserMedia({ video: true });
+        }
         if (videoRef.current) {
           videoEl = videoRef.current;
           videoEl.srcObject = stream;
@@ -1534,7 +1541,7 @@ if (uniqueParts.length) {
     }
   };
   return (
-    <div ref={fullscreenRef} style={isFullscreen ? styles.containerFull : styles.container}>
+    <div ref={fullscreenRef} style={isFullscreen ? styles.containerFull : (userOnlyMode && isMobile ? { ...styles.container, padding: "8px 4px" } : styles.container)}>
       {/* Camera card */}
       <div style={isFullscreen ? { ...styles.cameraCard, ...styles.cameraCardFull } : (isMobile ? styles.cameraCardMobile : styles.cameraCard)}>
         <div style={styles.cameraHeader}>
@@ -1631,7 +1638,7 @@ if (uniqueParts.length) {
 
         {/* Settings info card */}
         {/* Hide settings info card if hideSettingsCard is true */}
-        {!hideSettingsCard && settings && validSettings && (
+        {!hideSettingsCard && !userOnlyMode && settings && validSettings && (
             <div style={isMobile ? styles.settingsCardMobile : styles.settingsCard}>
             <div style={styles.settingRow}>
               <span style={styles.settingIcon}><Icon as={FiSun} ariaLabel="Sun" /></span>

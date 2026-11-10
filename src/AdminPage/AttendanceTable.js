@@ -13,6 +13,7 @@ import {
   FiRotateCcw,
   FiX,
   FiRefreshCw,
+  FiMapPin,
 } from "react-icons/fi";
 
 export default function AttendanceTable() {
@@ -74,7 +75,7 @@ export default function AttendanceTable() {
       setError(null);
       const { data: attData, error: attErr } = await supabase
         .from("attendance")
-        .select("id, person_id, name, event, method, point, device_time, status, archived");
+        .select("id, person_id, name, event, method, point, device_time, status, archived, photo");
       if (attErr) throw attErr;
       const uniqueAttendance = Array.from(
         new Map(
@@ -907,16 +908,24 @@ export default function AttendanceTable() {
                       </td>
                       {columns.map((col) => {
                         if (col.key === "photo") {
+                          const displayPhoto = row.photo || person.registration_photo;
                           return (
                             <td key="photo" className="py-[13px] px-3.5 border-b border-[#edf2ee] align-middle">
-                              {person.registration_photo ? (
+                              {displayPhoto ? (
                                 <div className="flex flex-col items-center gap-1">
-                                  <img
-                                    src={person.registration_photo}
-                                    alt="registration"
-                                    className="w-[52px] h-[52px] object-cover rounded-[10px] border-2 border-[#edf2ee] shadow-[0_2px_6px_rgba(0,0,0,0.06)] cursor-pointer"
-                                    onClick={() => openPhotoModal(person.registration_photo, person.name || row.person_id)}
-                                  />
+                                  <div className="relative group inline-block">
+                                    <img
+                                      src={displayPhoto}
+                                      alt="attendance record"
+                                      className="w-[52px] h-[52px] object-cover rounded-[10px] border-2 border-[#edf2ee] shadow-[0_2px_6px_rgba(0,0,0,0.06)] cursor-pointer hover:border-[#237227] transition-all"
+                                      onClick={() => openPhotoModal(displayPhoto, (person.name || row.person_id) + (row.photo ? " (Store Proof)" : ""))}
+                                    />
+                                    {row.photo && (
+                                      <span className="absolute -bottom-1 -right-1 bg-[#237227] text-white text-[8px] font-bold px-1 py-0.2 rounded-full shadow">
+                                        Store
+                                      </span>
+                                    )}
+                                  </div>
                                   <span className="text-[0.68rem] text-[#677368] font-medium">
                                     {row.device_time
                                       ? new Date(row.device_time).toLocaleString(undefined, {
@@ -1010,6 +1019,29 @@ export default function AttendanceTable() {
                               ) : (
                                 "N/A"
                               )}
+                            </td>
+                          );
+                        }
+
+                        if (col.key === "method") {
+                          return (
+                            <td key="method" className="py-[13px] px-3.5 border-b border-[#edf2ee] align-middle text-[#2c382d]">
+                              <div className="flex items-center gap-1.5">
+                                <span className="inline-block px-2.5 py-0.5 rounded text-xs font-semibold bg-gray-50 border border-gray-200 text-gray-700">
+                                  {value || "N/A"}
+                                </span>
+                                {row.point && (
+                                  <a
+                                    href={"https://www.google.com/maps?q=" + encodeURIComponent(row.point)}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    title={"GPS: " + row.point + " - Open in Google Maps"}
+                                    className="text-blue-600 hover:text-blue-800 text-sm"
+                                  >
+                                    <FiMapPin />
+                                  </a>
+                                )}
+                              </div>
                             </td>
                           );
                         }

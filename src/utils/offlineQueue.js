@@ -325,6 +325,7 @@ export async function syncQueue(supabase) {
         device_time: it.device_time,
         status: it.status,
         photo: it.photo || null,
+        notes: it.notes || null,
       };
 
       // Server-side pre-checks: look for obvious duplicates on the server

@@ -227,7 +227,7 @@ async function recordDeviceSyncStatus({ type, success, error = null }) {
   }
 })();
 
-// Ensure ot_status column exists in attendance table for Overtime Approval (pending | approved | denied)
+// Ensure ot_status and notes columns exist in attendance table
 (async () => {
   try {
     const [cols] = await pool.query("SHOW COLUMNS FROM attendance");
@@ -235,8 +235,11 @@ async function recordDeviceSyncStatus({ type, success, error = null }) {
     if (!colNames.includes("ot_status")) {
       await pool.query("ALTER TABLE attendance ADD COLUMN ot_status VARCHAR(20) NOT NULL DEFAULT 'pending' AFTER status");
     }
+    if (!colNames.includes("notes")) {
+      await pool.query("ALTER TABLE attendance ADD COLUMN notes TEXT NULL AFTER photo");
+    }
   } catch (e) {
-    console.warn("Attendance ot_status column check warning:", e.message);
+    console.warn("Attendance columns check warning:", e.message);
   }
   try {
     const [pCols] = await pool.query("SHOW COLUMNS FROM payroll_periods");
@@ -2322,6 +2325,7 @@ app.post("/api/db/query", async (req, res) => {
             \`ot_status\` = COALESCE(VALUES(\`ot_status\`), \`ot_status\`),
             \`method\` = COALESCE(VALUES(\`method\`), \`method\`),
             \`photo\` = COALESCE(VALUES(\`photo\`), \`photo\`),
+            \`notes\` = COALESCE(VALUES(\`notes\`), \`notes\`),
             \`name\` = COALESCE(VALUES(\`name\`), \`name\`),
             \`department\` = COALESCE(VALUES(\`department\`), \`department\`)`;
         }
