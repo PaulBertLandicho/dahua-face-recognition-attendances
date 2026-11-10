@@ -1019,6 +1019,7 @@ export default function PayslipModal({
                     let otMinutes = 0;
                     let earlyInHoursForRow = 0;
                     let isEarlyOutForRow = false;
+                    let canManageOtForRow = false;
                     try {
                       const scheduledMorningStart =
                         (settings && settings.morning_start) || "08:00";
@@ -1058,6 +1059,9 @@ export default function PayslipModal({
                         typeof schedAfternoonEndMin === "number"
                       ) {
                         const effectiveAfternoonOutMin = afternoonOutMin < 3 * 60 ? afternoonOutMin + 24 * 60 : afternoonOutMin;
+                        if (effectiveAfternoonOutMin >= 17 * 60 + 30) {
+                          canManageOtForRow = true;
+                        }
                         if (effectiveAfternoonOutMin > schedAfternoonEndMin) {
                           const mins = effectiveAfternoonOutMin - schedAfternoonEndMin;
                           if (mins > schedAfternoonGrace) {
@@ -1175,7 +1179,7 @@ export default function PayslipModal({
                         <td className="py-2.5 px-2 border-b border-gray-200 font-semibold whitespace-nowrap min-w-[210px]">
                           <div className="flex items-center justify-between gap-2">
                             <div>
-                              {recOtHours > 0 ? (
+                              {recOtHours > 0 && canManageOtForRow ? (
                                 isOtApproved ? (
                                   <span className="text-[#237227] font-semibold">
                                     +₱{dayOtPay.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
@@ -1186,14 +1190,14 @@ export default function PayslipModal({
                               ) : (
                                 <span className="text-gray-400 font-normal">-</span>
                               )}
-                              {recOtHours > 0 && isOtDenied && (
+                              {recOtHours > 0 && canManageOtForRow && isOtDenied && (
                                 <span className="text-xs text-red-500 block font-normal">(OT Denied)</span>
                               )}
-                              {recOtHours > 0 && !isOtApproved && !isOtDenied && (
+                              {recOtHours > 0 && canManageOtForRow && !isOtApproved && !isOtDenied && (
                                 <span className="text-xs text-amber-600 block font-normal">(OT Pending)</span>
                               )}
                             </div>
-                            {recOtHours > 0 && !released && (
+                            {recOtHours > 0 && canManageOtForRow && !released && (
                               <div className="relative flex items-center gap-1 whitespace-nowrap">
                                 <div className="relative">
                                   <button
