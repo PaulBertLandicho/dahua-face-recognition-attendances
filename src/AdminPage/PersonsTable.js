@@ -19,6 +19,8 @@ import {
 } from "react-icons/fi";
 import { determineAttendanceStatus } from "./attendanceUtils";
 import { syncDahuaUsers } from "../utils/dahuaApi";
+import { buildDescriptors } from "../utils/buildFaceDescriptors";
+import { FiCpu } from "react-icons/fi";
 
 
 function DateTimeInput({ value, onChange, className, id, name }) {
@@ -77,6 +79,7 @@ export default function PersonsTable() {
   const [departments, setDepartments] = useState([]);
   const [deptRatesList, setDeptRatesList] = useState([]);
   const [syncingDahuaUsers, setSyncingDahuaUsers] = useState(false);
+  const [buildingDescriptors, setBuildingDescriptors] = useState(false);
   const [error, setError] = useState(null);
   const [showEditModal, setShowEditModal] = useState(false);
   const [editPerson, setEditPerson] = useState(null);
@@ -1247,6 +1250,67 @@ export default function PersonsTable() {
 
   const currentRecords = sortedPersons;
 
+
+  const handleRebuildFaceData = async (force = true) => {
+    if (buildingDescriptors) return;
+    setBuildingDescriptors(true);
+
+    Swal.fire({
+      title: "Building Face Recognition Data...",
+      html: `
+        <div class="flex flex-col items-center justify-center py-2 text-center font-sans">
+          <p class="text-sm text-gray-600 mb-2" id="face-build-progress">
+            Initializing face recognition models...
+          </p>
+        </div>
+      `,
+      allowOutsideClick: false,
+      allowEscapeKey: false,
+      showConfirmButton: false,
+      width: "420px",
+      didOpen: () => Swal.showLoading(),
+    });
+
+    try {
+      const summary = await buildDescriptors({
+        onProgress: ({ current, total, name }) => {
+          const el = document.getElementById("face-build-progress");
+          if (el) el.textContent = `Processing face for ${name} (${current} of ${total})...`;
+        },
+        force,
+      });
+
+      const { data: refreshedPersons } = await supabase.from("persons").select("*");
+      if (refreshedPersons) setPersons(refreshedPersons);
+
+      Swal.fire({
+        icon: "success",
+        title: "Face Data Rebuilt!",
+        html: `
+          <div class="text-sm text-gray-600 space-y-1 text-left max-w-xs mx-auto font-sans">
+            <p><strong>Processed:</strong> ${summary.built} person(s)</p>
+            ${summary.failedNoFace > 0 ? `<p class="text-amber-600"><strong>No face detected:</strong> ${summary.failedNoFace}</p>` : ""}
+            ${summary.failedMultipleFaces > 0 ? `<p class="text-amber-600"><strong>Multiple faces:</strong> ${summary.failedMultipleFaces}</p>` : ""}
+            ${summary.skippedNoPhoto > 0 ? `<p class="text-gray-500"><strong>No photo:</strong> ${summary.skippedNoPhoto}</p>` : ""}
+          </div>
+        `,
+        confirmButtonText: "OK",
+        buttonsStyling: false,
+        customClass: {
+          confirmButton: "!bg-[#237227] !text-white !font-semibold !rounded-xl !px-8 !py-2.5 !text-sm cursor-pointer",
+        },
+      });
+    } catch (err) {
+      Swal.fire({
+        icon: "error",
+        title: "Failed",
+        text: err.message || "Failed to build face descriptors",
+      });
+    } finally {
+      setBuildingDescriptors(false);
+    }
+  };
+
   // Export to Excel
   const handleSyncDahuaPersons = async () => {
     if (syncingDahuaUsers) return;
@@ -1276,6 +1340,19 @@ export default function PersonsTable() {
 
     try {
       const data = await syncDahuaUsers();
+
+      // Automatically generate face descriptors for newly synced users with photos
+      try {
+        await buildDescriptors({
+          onProgress: ({ current, total, name }) => {
+            const el = Swal.getHtmlContainer()?.querySelector("p");
+            if (el) el.textContent = `Extracting face vector for ${name} (${current} of ${total})...`;
+          },
+          force: false,
+        });
+      } catch (descErr) {
+        console.warn("[Dahua Sync] Auto-build descriptors warning:", descErr);
+      }
 
       try {
         const { data: refreshedPersons, error: refreshError } = await supabase
@@ -1468,6 +1545,17 @@ export default function PersonsTable() {
           >
             <FiRefreshCw className={`mr-1 text-white ${syncingDahuaUsers ? "animate-spin" : ""}`} />
             {syncingDahuaUsers ? "Syncing Dahua Users..." : "Sync Dahua Users"}
+          </button>
+          <button
+            onClick={() => handleRebuildFaceData(true)}
+            disabled={buildingDescriptors}
+            title="Extract face descriptors from registration photos for mobile face verification"
+            className={`inline-flex items-center justify-center gap-1.5 py-2 px-4 rounded-md text-sm font-semibold border border-[#237227] cursor-pointer transition-colors bg-white hover:bg-emerald-50 text-[#237227] shadow-sm whitespace-nowrap focus:outline-none ${
+              buildingDescriptors ? "opacity-70 cursor-not-allowed" : ""
+            }`}
+          >
+            <FiCpu className={`mr-1 text-[#237227] ${buildingDescriptors ? "animate-spin" : ""}`} />
+            {buildingDescriptors ? "Building Face Data..." : "Rebuild Face Data"}
           </button>
           <button
             onClick={handleExportExcel}

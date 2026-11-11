@@ -61,3 +61,88 @@ export function averageDescriptors(list) {
   for (let i = 0; i < len; i++) avg[i] = sum[i] / n;
   return normalizeDescriptor(avg);
 }
+
+/**
+ * Computes standard Eye Aspect Ratio (EAR) given 6 landmark points.
+ * @param {Array<{x: number, y: number}>} p - 6 points around an eye
+ * @returns {number} EAR value (typically 0.25 - 0.35 when open, < 0.20 when closed)
+ */
+export function eyeAspectRatio(p) {
+  if (!p || p.length < 6) return 0;
+  const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
+  const v1 = dist(p[1], p[5]);
+  const v2 = dist(p[2], p[4]);
+  const h = dist(p[0], p[3]);
+  if (h <= 0) return 0;
+  return (v1 + v2) / (2.0 * h);
+}
+
+/**
+ * Creates an adaptive stateful blink detector for anti-spoofing liveness checks.
+ * Learns the user's open-eye baseline EAR dynamically and detects a relative drop + reopen,
+ * or absolute threshold drop.
+ *
+ * @param {Object} [config]
+ * @param {number} [config.windowMs=4000]
+ * @returns {{ update: (ear: number, now?: number) => boolean, reset: () => void, getState: () => string, getBaseline: () => number }}
+ */
+export function createBlinkDetector({
+  windowMs = 4000,
+} = {}) {
+  let state = "WAIT_OPEN"; // "WAIT_OPEN" -> "READY_TO_BLINK" -> "CONFIRM_REOPEN" -> "BLINK_CONFIRMED"
+  let baselineEar = 0;
+  let closeTime = 0;
+
+  return {
+    update(ear, now = Date.now()) {
+      if (state === "BLINK_CONFIRMED") return true;
+      if (!ear || ear <= 0) return false;
+
+      // Initialize or smooth baseline open-eye EAR
+      if (baselineEar === 0) {
+        baselineEar = Math.max(0.20, Math.min(0.38, ear));
+      } else if (ear > baselineEar * 0.85) {
+        // Smoothly track open EAR
+        baselineEar = Math.max(baselineEar * 0.98, Math.min(0.38, ear));
+      }
+
+      // Close threshold is 22% below baseline, or absolute <= 0.20
+      const dynamicCloseThreshold = Math.min(0.20, baselineEar * 0.78);
+      // Reopen threshold is 86% of baseline, or absolute >= 0.20
+      const dynamicOpenThreshold = Math.max(0.20, baselineEar * 0.86);
+
+      if (state === "WAIT_OPEN") {
+        if (ear >= dynamicOpenThreshold) {
+          state = "READY_TO_BLINK";
+        }
+      } else if (state === "READY_TO_BLINK") {
+        if (ear <= dynamicCloseThreshold) {
+          state = "CONFIRM_REOPEN";
+          closeTime = now;
+        }
+      } else if (state === "CONFIRM_REOPEN") {
+        if (now - closeTime > 2500) {
+          // Eye closed too long (>2.5s), reset to open wait
+          state = "WAIT_OPEN";
+          closeTime = 0;
+        } else if (ear >= dynamicOpenThreshold) {
+          state = "BLINK_CONFIRMED";
+          return true;
+        }
+      }
+
+      return state === "BLINK_CONFIRMED";
+    },
+    reset() {
+      state = "WAIT_OPEN";
+      baselineEar = 0;
+      closeTime = 0;
+    },
+    getState() {
+      return state;
+    },
+    getBaseline() {
+      return baselineEar;
+    },
+  };
+}

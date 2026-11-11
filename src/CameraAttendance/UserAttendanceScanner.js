@@ -2,6 +2,8 @@ import React, { useState, useEffect, useRef, useCallback } from "react";
 import { Navigate } from "react-router-dom";
 import { supabase } from "../mysqlClient";
 import { recordAttendanceForPerson } from "../AdminPage/attendanceUtils";
+import FaceVerificationGate from "./FaceVerificationGate";
+import offlineQueue from "../utils/offlineQueue";
 import {
   FiCamera,
   FiRefreshCw,
@@ -59,6 +61,10 @@ export default function UserAttendanceScanner({ onSwitchToLogin, isMobile: propI
   const [isDevicePortrait, setIsDevicePortrait] = useState(() =>
     typeof window !== "undefined" ? window.innerHeight > window.innerWidth : false
   );
+
+  // Face Verification Gate state
+  const [verifiedPerson, setVerifiedPerson] = useState(null);
+  const [verificationToken, setVerificationToken] = useState(null);
 
   // Employees & Partner Group Dropdown
   const [employees, setEmployees] = useState([]);
@@ -163,28 +169,58 @@ export default function UserAttendanceScanner({ onSwitchToLogin, isMobile: propI
     };
   }, []);
 
-  // Fetch employees and settings
+  // Fetch employees and settings (Supports both Online & Offline IndexedDB fallback)
   useEffect(() => {
     async function fetchData() {
       try {
         setLoadingEmployees(true);
-        const { data: personsData, error: personsErr } = await supabase
-          .from("persons")
-          .select("id, name, department, registration_photo")
-          .eq("archived", 0)
-          .order("name", { ascending: true });
+        let persons = null;
+        let settings = null;
 
-        if (personsErr) throw personsErr;
-        setEmployees(personsData || []);
+        if (typeof navigator !== "undefined" && navigator.onLine) {
+          try {
+            const { data: personsData } = await supabase
+              .from("persons")
+              .select("id, name, department")
+              .eq("archived", 0)
+              .order("name", { ascending: true });
 
-        const { data: settingsData, error: settingsErr } = await supabase
-          .from("settings")
-          .select("*")
-          .single();
+            if (personsData && personsData.length > 0) {
+              persons = personsData;
+              offlineQueue.savePersons(personsData).catch(() => {});
+            }
 
-        if (!settingsErr && settingsData) {
-          setSettings(settingsData);
+            const { data: settingsData } = await supabase
+              .from("settings")
+              .select("*")
+              .single();
+
+            if (settingsData) {
+              settings = settingsData;
+              offlineQueue.saveSettings(settingsData).catch(() => {});
+            }
+          } catch (netErr) {
+            console.warn("[UserScanner] Online fetch failed, checking offline cache:", netErr);
+          }
         }
+
+        // If offline or network request returned empty, fall back to IndexedDB cache
+        if (!persons || persons.length === 0) {
+          const cachedPersons = await offlineQueue.getPersons();
+          if (cachedPersons && cachedPersons.length > 0) {
+            persons = cachedPersons;
+          }
+        }
+
+        if (!settings) {
+          const cachedSettings = await offlineQueue.getSettings();
+          if (cachedSettings) {
+            settings = cachedSettings;
+          }
+        }
+
+        if (persons) setEmployees(persons);
+        if (settings) setSettings(settings);
       } catch (err) {
         console.error("Error loading employees or settings:", err);
       } finally {
@@ -192,6 +228,23 @@ export default function UserAttendanceScanner({ onSwitchToLogin, isMobile: propI
       }
     }
     fetchData();
+  }, []);
+
+  // Auto-sync offline attendance queue as soon as internet connection is restored
+  useEffect(() => {
+    const handleOnline = async () => {
+      try {
+        const queue = await offlineQueue.getAllQueue();
+        if (queue && queue.length > 0) {
+          console.log(`[OfflineQueue] Connection restored! Auto-syncing ${queue.length} attendance record(s)...`);
+          await offlineQueue.syncQueue(supabase);
+        }
+      } catch (e) {
+        console.warn("[OfflineQueue] Auto-sync error:", e);
+      }
+    };
+    window.addEventListener("online", handleOnline);
+    return () => window.removeEventListener("online", handleOnline);
   }, []);
 
   // Fetch GPS Coordinates
@@ -221,6 +274,16 @@ export default function UserAttendanceScanner({ onSwitchToLogin, isMobile: propI
   useEffect(() => {
     fetchLocation();
   }, [fetchLocation]);
+
+  // Handle verification from FaceVerificationGate
+  const handleFaceVerified = useCallback(({ person, token }) => {
+    setVerifiedPerson(person);
+    setVerificationToken(token);
+    setSelectedIds((prev) => {
+      if (prev.includes(person.id)) return prev;
+      return [person.id, ...prev];
+    });
+  }, []);
 
   // Camera stream handler with robust front/back camera switching & resolution handling
   const startCamera = useCallback(async () => {
@@ -460,6 +523,7 @@ export default function UserAttendanceScanner({ onSwitchToLogin, isMobile: propI
 
   // Toggle employee selection
   const toggleSelectPerson = (id) => {
+    if (verifiedPerson && id === verifiedPerson.id) return;
     setSelectedIds((prev) =>
       prev.includes(id) ? prev.filter((pId) => pId !== id) : [...prev, id]
     );
@@ -467,6 +531,7 @@ export default function UserAttendanceScanner({ onSwitchToLogin, isMobile: propI
 
   // Remove single selected person badge
   const removeSelectedPerson = (id) => {
+    if (verifiedPerson && id === verifiedPerson.id) return;
     setSelectedIds((prev) => prev.filter((pId) => pId !== id));
   };
 
@@ -478,7 +543,11 @@ export default function UserAttendanceScanner({ onSwitchToLogin, isMobile: propI
 
   // Clear all selections
   const handleClearAll = () => {
-    setSelectedIds([]);
+    if (verifiedPerson) {
+      setSelectedIds([verifiedPerson.id]);
+    } else {
+      setSelectedIds([]);
+    }
   };
 
   // Filtered employees by search
@@ -486,6 +555,9 @@ export default function UserAttendanceScanner({ onSwitchToLogin, isMobile: propI
     (emp.name || "").toLowerCase().includes(searchQuery.toLowerCase()) ||
     (emp.department || "").toLowerCase().includes(searchQuery.toLowerCase())
   );
+
+  // Selected employee objects
+  const selectedEmployees = employees.filter((e) => selectedIds.includes(e.id));
 
   // Submit attendance for all selected partners (Opens custom confirmation modal)
   const handleSubmitAttendance = (forcedEvent) => {
@@ -544,6 +616,7 @@ export default function UserAttendanceScanner({ onSwitchToLogin, isMobile: propI
             point: locationPoint || null,
             notes: descriptionNote.trim() || null,
             forcedEvent,
+            verification_token: verificationToken,
           },
           method: "field-site",
         });
@@ -605,6 +678,8 @@ export default function UserAttendanceScanner({ onSwitchToLogin, isMobile: propI
     setCapturedPhoto(null);
     setDescriptionNote("");
     setSelectedIds([]);
+    setVerifiedPerson(null);
+    setVerificationToken(null);
   };
 
   const formattedTime = now.toLocaleTimeString("en-US", {
@@ -619,8 +694,18 @@ export default function UserAttendanceScanner({ onSwitchToLogin, isMobile: propI
     day: "numeric",
   });
 
-  // Selected employee objects
-  const selectedEmployees = employees.filter((e) => selectedIds.includes(e.id));
+  // If face is not verified yet, render full-screen FaceVerificationGate
+  if (!verifiedPerson) {
+    return (
+      <FaceVerificationGate
+        onVerified={handleFaceVerified}
+        locationPoint={locationPoint}
+        locationStatus={locationStatus}
+        formattedTime={formattedTime}
+        formattedDate={formattedDate}
+      />
+    );
+  }
 
   return (
     <div className="min-h-screen bg-gray-50 flex flex-col justify-between font-sans">
@@ -671,11 +756,24 @@ export default function UserAttendanceScanner({ onSwitchToLogin, isMobile: propI
           </span>
         </div>
 
-        {/* STEP 1: DROPDOWN MENU FOR PARTNER GROUP SELECTION */}
-        <div
-          ref={dropdownRef}
-          className="bg-white rounded-2xl border border-gray-200 p-3 shadow-xs flex flex-col gap-2 relative z-30"
-        >
+        {/* Verified Identity Badge */}
+        <div className="w-full bg-emerald-50 border border-emerald-200 rounded-xl px-3 py-2 flex items-center justify-between text-xs">
+              <div className="flex items-center gap-2">
+                <span className="w-2 h-2 rounded-full bg-[#237227] animate-pulse"></span>
+                <span className="text-gray-800 text-xs">
+                  Verified as: <strong className="text-[#237227]">{verifiedPerson.name}</strong> ({verifiedPerson.department || "Field"})
+                </span>
+              </div>
+              <span className="text-[10px] font-bold text-[#237227] bg-white border border-emerald-200 px-2 py-0.5 rounded-full">
+                Unlocked
+              </span>
+            </div>
+
+            {/* STEP 1: DROPDOWN MENU FOR PARTNER GROUP SELECTION */}
+            <div
+              ref={dropdownRef}
+              className="bg-white rounded-2xl border border-gray-200 p-3 shadow-xs flex flex-col gap-2 relative z-30"
+            >
           <div className="flex items-center justify-between">
             <span className="text-xs font-bold text-gray-900 uppercase tracking-wide flex items-center gap-1.5">
               <span className="w-5 h-5 rounded-full bg-[#237227] text-white flex items-center justify-center text-[10px]">
@@ -806,8 +904,14 @@ export default function UserAttendanceScanner({ onSwitchToLogin, isMobile: propI
                           </div>
                         </div>
                         {isSelected && (
-                          <span className="text-[10px] text-[#237227] font-bold">
-                            Selected ✓
+                          <span className={`text-[10px] font-bold ${
+                            verifiedPerson && emp.id === verifiedPerson.id
+                              ? "text-emerald-700 bg-emerald-100 px-2 py-0.5 rounded-full"
+                              : "text-[#237227]"
+                          }`}>
+                            {verifiedPerson && emp.id === verifiedPerson.id
+                              ? "You · Verified"
+                              : "Selected ✓"}
                           </span>
                         )}
                       </div>
@@ -1200,11 +1304,7 @@ export default function UserAttendanceScanner({ onSwitchToLogin, isMobile: propI
                   <button
                     type="button"
                     onClick={handleExecuteAttendance}
-                    className={`py-3 px-4 text-white font-bold text-sm rounded-xl shadow-md active:scale-98 transition-all cursor-pointer ${
-                      modalConfig.event === "time-in"
-                        ? "bg-[#237227] hover:bg-[#1a541c]"
-                        : "bg-[#1d4ed8] hover:bg-[#1e40af]"
-                    }`}
+                    className="py-3 px-4 text-white font-bold text-sm rounded-xl shadow-md active:scale-98 transition-all cursor-pointer bg-[#237227] hover:bg-[#1a541c]"
                   >
                     Record {modalConfig.event === "time-in" ? "Time In" : "Time Out"}
                   </button>

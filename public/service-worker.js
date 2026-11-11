@@ -1,9 +1,12 @@
-const CACHE_NAME = 'mf-attendance-v2';
+const CACHE_NAME = 'mf-attendance-v4';
 const OFFLINE_URL = '/offline.html';
 
 const ASSETS_TO_CACHE = [
   '/',
   '/index.html',
+  '/manifest.json',
+  '/favicon.ico',
+  '/image/logosidebar.jpg',
   OFFLINE_URL,
 ];
 
@@ -23,7 +26,11 @@ const MODEL_FILES = [
 
 self.addEventListener('install', (event) => {
   event.waitUntil(
-    caches.open(CACHE_NAME).then((cache) => cache.addAll(ASSETS_TO_CACHE.concat(MODEL_FILES)))
+    caches.open(CACHE_NAME).then((cache) =>
+      cache.addAll(ASSETS_TO_CACHE.concat(MODEL_FILES)).catch((err) => {
+        console.warn('[SW] Cache addAll warning:', err);
+      })
+    )
   );
   self.skipWaiting();
 });
@@ -42,44 +49,62 @@ self.addEventListener('activate', (event) => {
   self.clients.claim();
 });
 
-// Navigation: network-first, fallback to offline page
 self.addEventListener('fetch', (event) => {
   const req = event.request;
   const url = new URL(req.url);
-  // Network-first for navigation
+
+  // 1. Navigation requests: Network-first, fallback to cached /index.html (loads SPA offline)
   if (req.mode === 'navigate') {
     event.respondWith(
       fetch(req)
         .then((res) => {
-          // Update cache in background
-          const copy = res.clone();
-          caches.open(CACHE_NAME).then((cache) => cache.put(req, copy)).catch(() => {});
+          if (res && res.status === 200) {
+            const copy = res.clone();
+            caches.open(CACHE_NAME).then((cache) => cache.put(req, copy)).catch(() => {});
+          }
           return res;
         })
-        .catch(() => caches.match(OFFLINE_URL))
+        .catch(() => {
+          return caches.match('/index.html').then((indexRes) => {
+            return indexRes || caches.match('/') || caches.match(OFFLINE_URL);
+          });
+        })
     );
     return;
   }
 
-  // Cache-first for models and static assets to support offline face models
-  if (url.pathname.startsWith('/models') || url.pathname.startsWith('/static') || url.pathname.startsWith('/image') || url.pathname.endsWith('.wasm')) {
+  // 2. Cache-first for models, static JS/CSS bundles, images, wasm
+  if (
+    url.pathname.startsWith('/models') ||
+    url.pathname.startsWith('/static') ||
+    url.pathname.startsWith('/image') ||
+    url.pathname.endsWith('.wasm') ||
+    url.pathname.endsWith('.js') ||
+    url.pathname.endsWith('.css') ||
+    url.pathname.endsWith('.png') ||
+    url.pathname.endsWith('.jpg') ||
+    url.pathname.endsWith('.jpeg') ||
+    url.pathname.endsWith('.json')
+  ) {
     event.respondWith(
       caches.match(req).then((cacheRes) => {
         if (cacheRes) return cacheRes;
-        return fetch(req).then((res) => {
-          if (!res || res.status !== 200) return res;
-          const copy = res.clone();
-          caches.open(CACHE_NAME).then((cache) => cache.put(req, copy)).catch(() => {});
-          return res;
-        }).catch(() => caches.match(OFFLINE_URL));
+        return fetch(req)
+          .then((res) => {
+            if (!res || res.status !== 200) return res;
+            const copy = res.clone();
+            caches.open(CACHE_NAME).then((cache) => cache.put(req, copy)).catch(() => {});
+            return res;
+          })
+          .catch(() => null);
       })
     );
     return;
   }
 
-  // Default: try cache, then network, then offline fallback
+  // 3. Default fallback: network, then cache
   event.respondWith(
-    caches.match(req).then((cacheRes) => cacheRes || fetch(req).catch(() => caches.match(OFFLINE_URL)))
+    fetch(req).catch(() => caches.match(req))
   );
 });
 
@@ -97,7 +122,9 @@ self.addEventListener('sync', (event) => {
   }
 });
 
-// Allow runtime clients to message the SW (no-op currently)
+// Allow runtime clients to message the SW
 self.addEventListener('message', (event) => {
-  // placeholder for future commands
+  if (event.data && event.data.type === 'SKIP_WAITING') {
+    self.skipWaiting();
+  }
 });

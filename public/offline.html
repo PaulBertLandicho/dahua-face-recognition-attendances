@@ -8,8 +8,15 @@
   </head>
   <body>
     <div class="card">
-      <h1>You're offline</h1>
-      <p>The app is currently offline. Attendance will be queued and synchronized when a connection is available.</p>
+      <h1 style="color:#237227;margin-bottom:8px;">Offline Attendance Scanner</h1>
+      <p style="color:#64748b;margin-bottom:20px;font-size:14px;line-height:1.5;">You are currently in offline mode. The facial recognition scanner and attendance queue are available offline.</p>
+      <a href="/" style="display:inline-block;padding:12px 24px;background:#237227;color:#fff;text-decoration:none;border-radius:12px;font-weight:bold;font-size:14px;">Open Attendance Scanner</a>
     </div>
+    <script>
+      // Auto-redirect to cached app shell if available
+      if (window.location.pathname !== "/") {
+        setTimeout(function() { window.location.href = "/"; }, 500);
+      }
+    </script>
   </body>
 </html>

@@ -95,3 +95,59 @@ textarea {
     transform: translate3d(60px, 0, 0);
   }
 }
+
+/* Biometric Face Guide & Scanner Animations */
+@keyframes biometric-scan {
+  0% {
+    top: 6%;
+    opacity: 0;
+  }
+  20% {
+    opacity: 0.95;
+  }
+  80% {
+    opacity: 0.95;
+  }
+  100% {
+    top: 92%;
+    opacity: 0;
+  }
+}
+
+.biometric-scanner-beam {
+  animation: biometric-scan 1.5s ease-in-out infinite alternate;
+}
+
+@keyframes biometric-pulse-ring {
+  0% {
+    transform: scale(0.98);
+    opacity: 0.7;
+  }
+  50% {
+    transform: scale(1.02);
+    opacity: 1;
+  }
+  100% {
+    transform: scale(0.98);
+    opacity: 0.7;
+  }
+}
+
+.animate-pulse-ring {
+  animation: biometric-pulse-ring 2s ease-in-out infinite;
+}
+
+@keyframes scale-in {
+  0% {
+    opacity: 0;
+    transform: scale(0.9);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.animate-scaleIn {
+  animation: scale-in 0.25s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}

@@ -468,6 +468,9 @@ export async function recordAttendanceForPerson({
       status,
       photo: scanPayload?.photoDataUrl || null,
     };
+    if (scanPayload?.verification_token) {
+      insertPayload.verification_token = scanPayload.verification_token;
+    }
     const noteText = scanPayload?.notes || scanPayload?.note || null;
     if (noteText) {
       insertPayload.notes = noteText;
@@ -486,6 +489,14 @@ export async function recordAttendanceForPerson({
     return { inserted: true, blocked: false, event, status };
   } catch (e) {
     const errorMessage = String(e?.message || e || "");
+    if (/verification token/i.test(errorMessage)) {
+      return {
+        inserted: false,
+        blocked: true,
+        event,
+        message: "Face verification expired or invalid. Please scan face again.",
+      };
+    }
     if (/duplicate attendance|duplicate scan|duplicate|unique|constraint/i.test(errorMessage)) {
       return {
         inserted: false,
@@ -511,6 +522,7 @@ export async function recordAttendanceForPerson({
           status,
           photo: scanPayload?.photoDataUrl || null,
           notes: noteText,
+          verification_token: scanPayload?.verification_token || null,
         });
         // enqueueAttendance may return an object like { queued: false, reason }
         if (qres && typeof qres === 'object' && qres.queued === false) {
