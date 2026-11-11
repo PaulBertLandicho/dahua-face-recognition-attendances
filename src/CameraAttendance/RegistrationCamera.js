@@ -479,22 +479,17 @@ export default function RegistrationCamera({ onFaceScan, disabled }) {
               if (res.isConfirmed) {
                 // Capture a frame to include with the scan payload
                 const frameCanvas = document.createElement("canvas");
-                frameCanvas.width = canvas
-                  ? canvas.width
-                  : (isVideo ? source.videoWidth : source.naturalWidth) || 640;
-                frameCanvas.height = canvas
-                  ? canvas.height
-                  : (isVideo ? source.videoHeight : source.naturalHeight) ||
-                    480;
+                const rawW = canvas ? canvas.width : (isVideo ? source.videoWidth : source.naturalWidth) || 640;
+                const rawH = canvas ? canvas.height : (isVideo ? source.videoHeight : source.naturalHeight) || 480;
+                const maxDim = 380;
+                let fW = rawW, fH = rawH;
+                if (fW > fH && fW > maxDim) { fH = Math.round((fH * maxDim) / fW); fW = maxDim; }
+                else if (fH > maxDim) { fW = Math.round((fW * maxDim) / fH); fH = maxDim; }
+                frameCanvas.width = fW;
+                frameCanvas.height = fH;
                 const fctx = frameCanvas.getContext("2d");
-                fctx.drawImage(
-                  source,
-                  0,
-                  0,
-                  frameCanvas.width,
-                  frameCanvas.height,
-                );
-                const photoDataUrl = frameCanvas.toDataURL("image/jpeg", 0.85);
+                fctx.drawImage(source, 0, 0, fW, fH);
+                const photoDataUrl = frameCanvas.toDataURL("image/jpeg", 0.70);
                 // clear buffer so next person starts fresh
                 descBufferRef.current = [];
                 if (typeof onFaceScan === "function") {
@@ -517,21 +512,17 @@ export default function RegistrationCamera({ onFaceScan, disabled }) {
             } else {
               // Not a duplicate — send averaged descriptor as a single stable scan
               const frameCanvas = document.createElement("canvas");
-              frameCanvas.width = canvas
-                ? canvas.width
-                : (isVideo ? source.videoWidth : source.naturalWidth) || 640;
-              frameCanvas.height = canvas
-                ? canvas.height
-                : (isVideo ? source.videoHeight : source.naturalHeight) || 480;
+              const rawW2 = canvas ? canvas.width : (isVideo ? source.videoWidth : source.naturalWidth) || 640;
+              const rawH2 = canvas ? canvas.height : (isVideo ? source.videoHeight : source.naturalHeight) || 480;
+              const maxDim2 = 380;
+              let fW2 = rawW2, fH2 = rawH2;
+              if (fW2 > fH2 && fW2 > maxDim2) { fH2 = Math.round((fH2 * maxDim2) / fW2); fW2 = maxDim2; }
+              else if (fH2 > maxDim2) { fW2 = Math.round((fW2 * maxDim2) / fH2); fH2 = maxDim2; }
+              frameCanvas.width = fW2;
+              frameCanvas.height = fH2;
               const fctx = frameCanvas.getContext("2d");
-              fctx.drawImage(
-                source,
-                0,
-                0,
-                frameCanvas.width,
-                frameCanvas.height,
-              );
-              const photoDataUrl = frameCanvas.toDataURL("image/jpeg", 0.85);
+              fctx.drawImage(source, 0, 0, fW2, fH2);
+              const photoDataUrl = frameCanvas.toDataURL("image/jpeg", 0.70);
               descBufferRef.current = [];
               if (typeof onFaceScan === "function") {
                 const now = Date.now();

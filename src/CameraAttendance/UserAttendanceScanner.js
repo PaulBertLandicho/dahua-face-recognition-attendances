@@ -381,9 +381,24 @@ export default function UserAttendanceScanner({ onSwitchToLogin, isMobile: propI
     const video = videoRef.current;
     if (!video || !video.videoWidth) return;
 
+    const MAX_DIM = 320;
+    let w = video.videoWidth || 640;
+    let h = video.videoHeight || 480;
+    if (w > h) {
+      if (w > MAX_DIM) {
+        h = Math.round((h * MAX_DIM) / w);
+        w = MAX_DIM;
+      }
+    } else {
+      if (h > MAX_DIM) {
+        w = Math.round((w * MAX_DIM) / h);
+        h = MAX_DIM;
+      }
+    }
+
     const canvas = canvasRef.current || document.createElement("canvas");
-    canvas.width = video.videoWidth;
-    canvas.height = video.videoHeight;
+    canvas.width = w;
+    canvas.height = h;
 
     const ctx = canvas.getContext("2d");
     ctx.save();
@@ -393,10 +408,10 @@ export default function UserAttendanceScanner({ onSwitchToLogin, isMobile: propI
       ctx.scale(-1, 1);
     }
 
-    ctx.drawImage(video, -video.videoWidth / 2, -video.videoHeight / 2);
+    ctx.drawImage(video, -w / 2, -h / 2, w, h);
     ctx.restore();
 
-    const dataUrl = canvas.toDataURL("image/jpeg", 0.85);
+    const dataUrl = canvas.toDataURL("image/jpeg", 0.65);
     setCapturedPhoto(dataUrl);
 
     // Stop camera stream while previewing

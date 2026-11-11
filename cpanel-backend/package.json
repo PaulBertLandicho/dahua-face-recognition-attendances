@@ -1,0 +1,17 @@
+{
+  "name": "dahua-attendance-backend",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Optimized lightweight cPanel Node.js backend for Dahua Attendance",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "compression": "^1.8.0",
+    "cors": "^2.8.6",
+    "dotenv": "^17.4.2",
+    "express": "^5.2.1",
+    "mysql2": "^3.24.2"
+  }
+}

@@ -480,15 +480,36 @@ if (uniqueParts.length) {
 
   // ------------------- Helpers -------------------
   const captureCurrentFrame = useCallback(() => {
+    const MAX_DIM = 320;
+    const JPEG_QUALITY = 0.65;
+
+    const scaleDims = (origW, origH) => {
+      let w = origW || 640;
+      let h = origH || 480;
+      if (w > h) {
+        if (w > MAX_DIM) {
+          h = Math.round((h * MAX_DIM) / w);
+          w = MAX_DIM;
+        }
+      } else {
+        if (h > MAX_DIM) {
+          w = Math.round((w * MAX_DIM) / h);
+          h = MAX_DIM;
+        }
+      }
+      return { w, h };
+    };
+
     if (useLocalCamera) {
       const video = videoRef.current;
       if (!video || video.readyState !== 4) return null;
+      const { w, h } = scaleDims(video.videoWidth, video.videoHeight);
       const canvas = document.createElement("canvas");
-      canvas.width = video.videoWidth;
-      canvas.height = video.videoHeight;
+      canvas.width = w;
+      canvas.height = h;
       const ctx = canvas.getContext("2d");
-      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-      return canvas.toDataURL("image/jpeg", 0.85);
+      ctx.drawImage(video, 0, 0, w, h);
+      return canvas.toDataURL("image/jpeg", JPEG_QUALITY);
     } else {
       const img = imgRef.current;
       if (
@@ -498,12 +519,13 @@ if (uniqueParts.length) {
         img.naturalHeight === 0
       )
         return null;
+      const { w, h } = scaleDims(img.naturalWidth, img.naturalHeight);
       const canvas = document.createElement("canvas");
-      canvas.width = img.naturalWidth;
-      canvas.height = img.naturalHeight;
+      canvas.width = w;
+      canvas.height = h;
       const ctx = canvas.getContext("2d");
-      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-      return canvas.toDataURL("image/jpeg", 0.85);
+      ctx.drawImage(img, 0, 0, w, h);
+      return canvas.toDataURL("image/jpeg", JPEG_QUALITY);
     }
   }, [useLocalCamera]);
 
