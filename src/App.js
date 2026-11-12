@@ -127,7 +127,7 @@ function App() {
               <div className="flex items-center gap-3.5">
                 <img
                   src="/image/logosidebar.jpg"
-                  alt="Multifactors Sales Logo"
+                  alt="Multifactors Sales Attendance Logo"
                   className="h-[44px] object-contain"
                 />
                 <h1 className="text-black text-[1.35rem] lg:text-[1.45rem] font-bold m-0 p-0 tracking-[0.01em]">

@@ -528,7 +528,7 @@ export default function FaceVerificationGate({
           <div className="flex items-center gap-2 min-w-0">
             <img
               src="/image/logosidebar.jpg"
-              alt="Multifactors Sales"
+              alt="Multifactors Sales Attendance"
               className="h-5 sm:h-6 w-auto max-w-[85px] sm:max-w-[100px] object-contain rounded shrink-0"
             />
             <div className="flex items-center gap-1 min-w-0">
@@ -746,7 +746,7 @@ export default function FaceVerificationGate({
       {/* 4. BOTTOM FOOTER INSTRUCTION */}
       <footer className="relative z-20 pb-6 px-4 flex flex-col items-center text-center">
         <p className="text-[11px] text-gray-400 font-medium">
-          Dahua Biometric Authentication • Multifactors Sales
+          Dahua Biometric Authentication • Multifactors Sales Attendance
         </p>
       </footer>
     </div>

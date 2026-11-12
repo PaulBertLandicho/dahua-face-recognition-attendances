@@ -229,18 +229,20 @@ export default function ReleasedHistoryPayroll() {
     // Fetch attendance for this period
     let detailedAttendance = [];
     let fullPayroll = null;
+    let allAttendance = [];
     if (payroll.period && person) {
       // Parse period string: yyyy-mm-dd_to_yyyy-mm-dd
 
-      const { data: attendance } = await supabase
+      const { data: attData } = await supabase
         .from("attendance")
         .select("id, person_id, event, device_time, photo, status, ot_status, method, archived")
         .eq("person_id", payroll.person_id)
         .eq("archived", 0)
         .order("device_time", { ascending: true });
       
+      allAttendance = attData || [];
       detailedAttendance = getDetailedAttendance(
-        attendance || [],
+        allAttendance,
         payroll.person_id,
         settings || {},
       );
@@ -280,6 +282,7 @@ export default function ReleasedHistoryPayroll() {
       detailedAttendance,
       settings,
       payroll: fullPayroll,
+      allAttendance,
     });
     setSelected(fullPayroll);
   };
@@ -770,6 +773,7 @@ export default function ReleasedHistoryPayroll() {
               }
             }
             detailedAttendance={modalData.detailedAttendance}
+            allAttendance={modalData.allAttendance || []}
             onClose={() => {
               setShowPayslip(false);
               setSelected(null);

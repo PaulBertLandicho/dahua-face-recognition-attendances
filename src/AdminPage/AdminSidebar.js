@@ -120,7 +120,7 @@ export default function AdminSidebar({ onLogout, role }) {
           >
             <FiMenu />
           </button>
-          <div className="text-base font-bold text-gray-800">Multifactors Sales</div>
+          <div className="text-base font-bold text-gray-800">Multifactors Sales Attendance</div>
         </div>
       )}
 
@@ -159,7 +159,7 @@ export default function AdminSidebar({ onLogout, role }) {
         <div className="flex items-center gap-3 px-6 pb-4 mb-3 border-b border-[#9E9E9E] flex-shrink-0">
           <img
             src={process.env.PUBLIC_URL + "/image/logosidebar.jpg"}
-            alt="Multifactors Sales Logo"
+            alt="Multifactors Sales Attendance Logo"
             className="w-42 h-auto"
           />
         </div>

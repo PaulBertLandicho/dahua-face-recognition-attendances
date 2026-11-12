@@ -867,6 +867,7 @@ export default function PersonsTable() {
   };
 
   // Open Night Shift Differential Modal
+  // eslint-disable-next-line no-unused-vars
   const handleOpenNsdModal = (person) => {
     if (!person || !person.id) return;
     const currentVal =

@@ -73,9 +73,11 @@ export async function getAttendanceForPersonOnDay(personId, dayStartIso, dayEndI
   return fetchViaRest(qs);
 }
 
-export default {
+const supabaseHelpers = {
   getSettings,
   getPersons,
   getDepartmentRates,
   getAttendanceForPersonOnDay,
 };
+
+export default supabaseHelpers;

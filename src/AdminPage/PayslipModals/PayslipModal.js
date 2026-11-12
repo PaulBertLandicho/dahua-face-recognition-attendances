@@ -21,6 +21,7 @@ export default function PayslipModal({
   payroll,
   person,
   detailedAttendance = [],
+  allAttendance = [],
   onClose,
   showPrintButton,
   period,
@@ -31,6 +32,9 @@ export default function PayslipModal({
   onOtApprovalChange,
 }) {
   // useState declarations (only once)
+  const [internalAllAttendance, setInternalAllAttendance] = useState(
+    allAttendance || [],
+  );
   const [holidayDetails, setHolidayDetails] = useState([]);
   const [deptHolidayRates, setDeptHolidayRates] = useState({
     regular: 100,
@@ -188,6 +192,35 @@ export default function PayslipModal({
     }
     getHolidays();
   }, [person, period]);
+
+  // Fetch person's full attendance history if not already supplied via prop
+  useEffect(() => {
+    if (Array.isArray(allAttendance) && allAttendance.length > 0) {
+      setInternalAllAttendance(allAttendance);
+      return;
+    }
+    if (!person?.id) return;
+    let mounted = true;
+    async function fetchPersonAttendance() {
+      try {
+        const { data, error } = await supabase
+          .from("attendance")
+          .select(
+            "id, person_id, event, device_time, status, method, archived, attendance_work_date, date",
+          )
+          .eq("person_id", person.id)
+          .eq("archived", 0)
+          .order("device_time", { ascending: true });
+        if (!error && data && mounted) {
+          setInternalAllAttendance(data);
+        }
+      } catch (e) {}
+    }
+    fetchPersonAttendance();
+    return () => {
+      mounted = false;
+    };
+  }, [person?.id, allAttendance]);
 
   // Fetch total cash advances for this person within the payroll period
   useEffect(() => {
@@ -721,7 +754,12 @@ export default function PayslipModal({
         const hDate = safeFormatYMD(h.date || h.holiday_date);
         if (
           !hDate ||
-          !hasHolidayPayEligibility(detailedAttendance || [], hDate)
+          !hasHolidayPayEligibility(
+            detailedAttendance || [],
+            hDate,
+            internalAllAttendance,
+            holidayDetails,
+          )
         ) {
           return null;
         }
@@ -841,7 +879,6 @@ export default function PayslipModal({
       : Number(payroll.nsdHours ?? manualNsd ?? 0);
 
   const otMultiplier = 1;
-  const nsdMultiplier = 0.10;
   const standardOtPay = Math.round(baseHourlyRate * otMultiplier * otHours * 100) / 100;
   const nsdPay = 0;
   const otPay = Math.round((standardOtPay + nsdPay) * 100) / 100;
@@ -1123,14 +1160,18 @@ export default function PayslipModal({
                       <tr key={i} className={trClass}>
                         <td className="py-2.5 px-2 border-b border-gray-200 text-gray-800 font-mono text-sm font-semibold">
                           {rec.date}
-                          {matchedHolidayPay && (
+                          {matchedHolidayPay ? (
                             <span className="block text-[10px] font-sans font-semibold text-emerald-700 mt-0.5">
                               {matchedHolidayPay.description ||
                                 (matchedHolidayPay.type === "regular"
                                   ? "Regular Holiday"
                                   : "Special Holiday")}
                             </span>
-                          )}
+                          ) : isHolidayDate ? (
+                            <span className="block text-[10px] font-sans font-medium text-gray-400 mt-0.5">
+                              {(holidayDetails.find((h) => safeFormatYMD(h.date || h.holiday_date) === rec.date)?.description || "Holiday")} (No Holiday Pay)
+                            </span>
+                          ) : null}
                         </td>
                         <td className={`py-2.5 px-2 border-b border-gray-200 ${rec.morningInStatus === 'late' ? 'text-red-500' : earlyInHoursForRow > 0 || rec.morningInStatus === 'early-in' ? 'text-[#237227] font-semibold' : 'text-gray-800'}`}>
                           {attendanceInDisplay}
@@ -1163,10 +1204,10 @@ export default function PayslipModal({
                           {dayFraction === 0 && isWeekend && (
                             <span className="text-xs text-gray-400 block">(Rest Day)</span>
                           )}
-                          {dayFraction === 0 && isHolidayDate && !isWeekend && (
+                          {dayFraction === 0 && !isWeekend && matchedHolidayPay && (
                             <span className="text-xs text-emerald-600 font-semibold block">(Holiday)</span>
                           )}
-                          {dayFraction === 0 && !isWeekend && !isHolidayDate && (
+                          {dayFraction === 0 && !isWeekend && !matchedHolidayPay && (
                             <span className="text-xs text-red-500 block">(0 day)</span>
                           )}
                         </td>

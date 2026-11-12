@@ -333,8 +333,6 @@ export default function PayrollPage() {
 
       const schedMorningStart =
         parseTime(settingsData.morning_start || "08:00") || 480;
-      const lunchStart =
-        parseTime(settingsData.morning_end || "12:00") || 720;
       const schedAfternoonEnd =
         parseTime(settingsData.afternoon_end || "17:00") || 1020;
       const schedAfternoonGrace = Number.isFinite(
@@ -488,7 +486,6 @@ export default function PayrollPage() {
           );
           // Standard OT is at 1.25x rate under PH labor law when matching Excel, or flat when not
           const otMultiplier = 1;
-          const nsdMultiplier = 0.10; // extra 10% on night diff hours
           const standardOtPay = Math.round(baseHourlyRate * otMultiplier * totalOtHours * 100) / 100;
           const nsdPay = 0;
           basePayroll.otPay = Math.round((standardOtPay + nsdPay) * 100) / 100;
@@ -529,11 +526,22 @@ export default function PayrollPage() {
             const hd = formatYMD(h.date || h.holiday_date);
             return hd && hd >= sDate && hd <= eDate;
           });
+          const personAllAttendance = (attData || []).filter(
+            (a) => String(a.person_id) === String(person.id),
+          );
           let totalHolidayPay = 0;
           const holidayPayDetails = holidaysInPeriod
             .map((h) => {
               const hd = formatYMD(h.date || h.holiday_date);
-              if (!hd || !hasHolidayPayEligibility(detailed, hd)) {
+              if (
+                !hd ||
+                !hasHolidayPayEligibility(
+                  detailed,
+                  hd,
+                  personAllAttendance,
+                  holidaysInPeriod,
+                )
+              ) {
                 return null;
               }
               const hType = String(h.type || "regular").toLowerCase().trim();
@@ -1604,11 +1612,15 @@ export default function PayrollPage() {
       person.id,
       settings,
     );
+    const personAllAttendance = (rawAttendanceRef.current || []).filter(
+      (a) => String(a.person_id) === String(person.id),
+    );
     setSelected({
       person,
       payslip: payroll,
       detailedAttendance,
       period,
+      allAttendance: personAllAttendance,
     });
     setShowPayslip(true);
   };
@@ -2025,12 +2037,17 @@ export default function PayrollPage() {
         let holidayPayDetails = [];
         let totalHolidayPay = 0;
         if (holidayDetails.length > 0) {
+          const personAllAttendance = (rawAttendanceRef.current || []).filter(
+            (a) => String(a.person_id) === String(person.id),
+          );
           holidayPayDetails = holidayDetails
             .map((h) => {
               if (
                 !hasHolidayPayEligibility(
                   detailedAttendance || [],
                   h.date || h.holiday_date,
+                  personAllAttendance,
+                  holidayDetails,
                 )
               ) {
                 return null;
@@ -3011,6 +3028,7 @@ export default function PayrollPage() {
           person={selected.person}
           daysWorked={selected.daysWorked}
           detailedAttendance={selected.detailedAttendance}
+          allAttendance={selected.allAttendance || []}
           onClose={handleClosePayslip}
           onPrint={handlePrintPayslip}
           showPrintButton={true}

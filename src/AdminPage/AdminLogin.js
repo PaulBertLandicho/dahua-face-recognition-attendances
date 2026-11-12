@@ -62,7 +62,7 @@ export default function AdminLogin() {
           <div className="flex justify-center mb-1" aria-hidden>
             <img
               src="/image/login-logo.png"
-              alt="Multifactors Sales Logo"
+              alt="Multifactors Sales Attendance Logo"
               className="w-[140px] h-[140px] object-contain"
             />
           </div>
@@ -144,7 +144,7 @@ export default function AdminLogin() {
 
       {/* Footer */}
       <div className="sticky bottom-0 left-0 mt-auto py-6 px-8 text-left text-[#0000000] text-md bg-gray-50 w-full border-t border-gray-200 box-border z-10">
-        © 2026 Multifactors Sales. All rights reserved.
+        © 2026 Multifactors Sales Attendance. All rights reserved.
       </div>
     </div>
   );

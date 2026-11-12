@@ -303,6 +303,7 @@ export default function CameraPlayer({
   const getCurrentLocationPoint = useCallback(async () => {
     return buildLocationResult(null, "disabled", "Browser location access is disabled.");
 
+    // eslint-disable-next-line no-unreachable
     const now = Date.now();
 
     if (typeof window !== "undefined" && window.isSecureContext === false) {

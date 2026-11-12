@@ -726,7 +726,7 @@ export default function UserAttendanceScanner({ onSwitchToLogin, isMobile: propI
           <div className="flex items-center gap-2">
             <img
               src="/image/logosidebar.jpg"
-              alt="Multifactors Sales Logo"
+              alt="Multifactors Sales Attendance Logo"
               className="h-6 object-contain"
             />
             <span className="font-bold text-gray-900 text-xs">
@@ -1246,7 +1246,7 @@ export default function UserAttendanceScanner({ onSwitchToLogin, isMobile: propI
 
       {/* Footer */}
       <footer className="w-full bg-white border-t border-gray-200 py-3 px-4 flex items-center justify-center text-[11px] text-gray-500">
-        <span>© 2026 Multifactors Sales</span>
+        <span>© 2026 Multifactors Sales Attendance</span>
       </footer>
 
       {/* Custom Attendance Action Modal (Confirm, Loading, Success, Notice) */}

@@ -35,12 +35,17 @@ export async function applyHolidayRates(
     let holidayDays = 0;
     let holidayPay = 0;
     const personAttendance = attendance.filter(
-      (a) => a.person_id === personPay.id && a.event === "time-in"
+      (a) => String(a.person_id) === String(personPay.id),
     );
-    personAttendance.forEach((a) => {
-      const attDate = a.device_time.split("T")[0];
-      const holiday = holidays.find((h) => h.date === attDate);
-      if (holiday && hasHolidayPayEligibility(personAttendance, holiday.date)) {
+    holidays.forEach((holiday) => {
+      if (
+        hasHolidayPayEligibility(
+          personAttendance,
+          holiday.date,
+          attendance,
+          holidays,
+        )
+      ) {
         holidayDays++;
         if (holiday.type === "regular") {
           holidayPay += personPay.dailyRate * (regularRate / 100);

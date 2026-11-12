@@ -694,7 +694,7 @@ function PhotoOverlayModal({ photoModal, onClose, onUpdatePhoto }) {
             {/* TOP-RIGHT OVERLAY: Watermark / App Badge (matching Image 2) */}
             <div className="absolute top-3 right-3 z-20 pointer-events-none bg-black/60 backdrop-blur-xs text-white px-2.5 py-1 rounded-md border border-white/15 flex items-center gap-1.5 shadow-md text-[10px] font-sans">
               <span className="w-2 h-2 rounded-full bg-[#237227] ring-2 ring-white/60"></span>
-              <span className="font-bold tracking-wide">Multifactors Sales</span>
+              <span className="font-bold tracking-wide">Multifactors Sales Attendance</span>
               <span className="text-gray-400">|</span>
               <span className="text-gray-300">Field GPS Proof</span>
             </div>
@@ -705,7 +705,7 @@ function PhotoOverlayModal({ photoModal, onClose, onUpdatePhoto }) {
               <div className="mb-0.5 flex items-center">
                 <img
                   src="/image/logo/multifactors_overlay_logo.png"
-                  alt="Multifactors Sales"
+                  alt="Multifactors Sales Attendance"
                   className="h-6 sm:h-7 object-contain bg-white/95 px-2 py-0.5 rounded shadow-sm"
                 />
               </div>
