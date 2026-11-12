@@ -2798,7 +2798,7 @@ app.post("/api/face/verify", async (req, res) => {
     // Direct high-confidence match if bestDist <= 0.32 (natural selfie variance from Dahua photo).
     // If bestDist is between 0.32 and FACE_VERIFY_THRESHOLD (0.38), require a distinct gap (>= FACE_MARGIN_THRESHOLD) from the second best candidate.
     const isMatched = bestPerson && (
-      (bestDist <= 0.32) ||
+      (bestDist <= 0.32) ||``
       (bestDist <= FACE_VERIFY_THRESHOLD && (secondBestDist - bestDist >= FACE_MARGIN_THRESHOLD))
     );
 

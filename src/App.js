@@ -93,7 +93,7 @@ function App() {
   const location = useLocation();
   const navigate = useNavigate();
   // const isAdminPath = location.pathname.startsWith("/admin");
-  const isAdminLoginPath = (location.pathname === "/admin" || location.pathname === "/");
+  const isAdminLoginPath = location.pathname === "/admin";
   const currentRole = getSessionRole(session);
   const hasStaffAccess = hasAllowedRole(session, STAFF_ROLES);
 
@@ -156,13 +156,7 @@ function App() {
         <Routes>
           <Route
             path="/"
-            element={
-              hasStaffAccess ? (
-                <Navigate to={getLoginRedirectPath(session)} replace />
-              ) : (
-                <DefaultLanding session={session} />
-              )
-            }
+            element={<DefaultLanding session={session} />}
           />
           <Route
             path="/scan"

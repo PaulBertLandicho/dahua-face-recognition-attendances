@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
-import { Navigate } from "react-router-dom";
+import { Navigate, Link } from "react-router-dom";
 import { supabase } from "../mysqlClient";
 import { recordAttendanceForPerson } from "../AdminPage/attendanceUtils";
 import FaceVerificationGate from "./FaceVerificationGate";
@@ -22,6 +22,7 @@ import {
   FiMinimize,
   FiAlertCircle,
   FiFileText,
+  FiHome,
 } from "react-icons/fi";
 import { checkIsMobileDevice } from "../utils/deviceUtils";
 
@@ -724,6 +725,14 @@ export default function UserAttendanceScanner({ onSwitchToLogin, isMobile: propI
         {/* Minimal Site Info & Clock Strip */}
         <div className="w-full bg-white rounded-xl border border-gray-200 px-3 py-2 flex items-center justify-between text-xs shadow-xs">
           <div className="flex items-center gap-2">
+            <Link
+              to="/"
+              aria-label="Exit to Portal"
+              title="Exit to Portal"
+              className="shrink-0 w-6 h-6 rounded-full bg-gray-100 hover:bg-gray-200 text-gray-600 flex items-center justify-center transition-colors"
+            >
+              <FiHome />
+            </Link>
             <img
               src="/image/logosidebar.jpg"
               alt="Multifactors Sales Attendance Logo"

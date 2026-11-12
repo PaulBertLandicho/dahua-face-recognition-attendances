@@ -3,6 +3,7 @@ import * as faceapi from "face-api.js";
 import { ensureFaceModelsLoaded, buildDescriptors } from "../utils/buildFaceDescriptors";
 import { averageDescriptors, normalizeDescriptor, toFloat32Array } from "../utils/faceUtils";
 import offlineQueue from "../utils/offlineQueue";
+import { Link } from "react-router-dom";
 import {
   FiRefreshCw,
   FiCheckCircle,
@@ -13,6 +14,7 @@ import {
   FiCamera,
   FiMapPin,
   FiClock,
+  FiHome,
 } from "react-icons/fi";
 
 const playVoice = (text) => {
@@ -526,6 +528,14 @@ export default function FaceVerificationGate({
         <div className="w-full max-w-md mx-auto backdrop-blur-md bg-black/60 border border-white/15 rounded-2xl px-3.5 py-2 flex items-center justify-between text-white shadow-2xl gap-2">
           {/* Brand Logo & Verification Title */}
           <div className="flex items-center gap-2 min-w-0">
+            <Link
+              to="/"
+              aria-label="Back to Portal"
+              title="Back to Portal"
+              className="shrink-0 w-7 h-7 rounded-full bg-white/15 hover:bg-white/30 text-white flex items-center justify-center transition-colors"
+            >
+              <FiHome className="text-xs" />
+            </Link>
             <img
               src="/image/logosidebar.jpg"
               alt="Multifactors Sales Attendance"
