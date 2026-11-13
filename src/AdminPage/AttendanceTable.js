@@ -101,7 +101,7 @@ export default function AttendanceTable() {
       
       const { data: personsData, error: personsErr } = await supabase
         .from("persons")
-        .select("id, name, department");
+        .select("id, name, department, registration_photo");
       if (personsErr) throw personsErr;
       setPersons(personsData || []);
       
@@ -894,7 +894,7 @@ export default function AttendanceTable() {
                 </tr>
               ) : (
                 currentRecords.map((row, idx) => {
-                  const person = persons.find((p) => p.id === row.person_id) || {};
+                  const person = persons.find((p) => String(p.id) === String(row.person_id)) || {};
                   
                   return (
                     <tr key={row.id} className="odd:bg-white even:bg-[#f9fafb]">
