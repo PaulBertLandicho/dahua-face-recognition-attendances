@@ -311,8 +311,14 @@ async function recordDeviceSyncStatus({ type, success, error = null }) {
     if (!personColNames.includes("token_version")) {
       await pool.query("ALTER TABLE persons ADD COLUMN token_version INT NOT NULL DEFAULT 1");
     }
+    if (!personColNames.includes("card_no")) {
+      await pool.query("ALTER TABLE persons ADD COLUMN card_no VARCHAR(100) NULL DEFAULT NULL AFTER registration_photo");
+    }
+    if (!personColNames.includes("updated_at")) {
+      await pool.query("ALTER TABLE persons ADD COLUMN updated_at DATETIME NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP AFTER created_at");
+    }
   } catch (e) {
-    console.warn("persons token_version check warning:", e.message);
+    console.warn("persons columns check warning:", e.message);
   }
   try {
     await pool.query(`
@@ -2816,7 +2822,7 @@ const TABLE_SCHEMA_COLUMNS = {
     "id", "name", "department", "created_at", "descriptor", "daily_rate", "late_penalty",
     "phone_number", "address", "sex", "approved", "archived", "registration_photo",
     "sss", "pag_ibig", "philhealth", "cash_advance", "email", "password", "role",
-    "night_shift_diff", "token_version",
+    "night_shift_diff", "token_version", "card_no", "updated_at",
   ]),
   attendance: new Set([
     "id", "person_id", "name", "department", "event", "point", "method", "device_time",
