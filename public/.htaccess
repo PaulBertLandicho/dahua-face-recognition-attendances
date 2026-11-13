@@ -92,6 +92,10 @@ Options -MultiViews
 <IfModule mod_rewrite.c>
   RewriteEngine On
   RewriteBase /
+
+  # Preserve Authorization: Bearer header for Express / CloudLinux Passenger
+  RewriteRule .* - [E=HTTP_AUTHORIZATION:%{HTTP:Authorization}]
+
   RewriteRule ^index\.html$ - [L]
 
   # Exclude API endpoints and backend routes from SPA index.html rewrite

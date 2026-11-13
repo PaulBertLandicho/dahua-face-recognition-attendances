@@ -10,7 +10,7 @@ import {
 } from "react-icons/fa";
 import { supabase } from "../mysqlClient";
 import {
-  SECRETARY_ROLE,
+  ADMIN_ROLE,
   getLoginRedirectPath,
   getSessionRole,
 } from "../utils/authRoles";
@@ -52,13 +52,9 @@ export default function StaffLoginModal({ open, onClose, onStaffLoggedIn }) {
       }
 
       const role = getSessionRole(data);
-      if (role !== SECRETARY_ROLE) {
+      if (role !== ADMIN_ROLE) {
         await supabase.auth.signOut();
-        setError(
-          role === "admin"
-            ? "This is the admin account. Please use secretary account instead."
-            : "That account does not have secretary access yet.",
-        );
+        setError("Only administrator accounts can access this portal.");
         setLoading(false);
         return;
       }
@@ -91,13 +87,12 @@ export default function StaffLoginModal({ open, onClose, onStaffLoggedIn }) {
 
         <div style={styles.badge}>
           <FaUserShield style={{ marginRight: 8 }} />
-          Secretary Login
+          Admin Login
         </div>
 
-        <h2 style={styles.title}>Open the attendance account</h2>
+        <h2 style={styles.title}>Admin Access</h2>
         <p style={styles.subtitle}>
-          Sign in with the secretary email and password. Admin accounts must use
-          the Admin Login page.
+          Sign in with your administrator email and password.
         </p>
 
         <form onSubmit={handleSubmit} style={styles.form}>

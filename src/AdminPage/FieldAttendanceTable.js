@@ -4,6 +4,7 @@ import { supabase } from "../mysqlClient";
 import * as XLSX from "xlsx";
 import Swal from "sweetalert2";
 import { formatAttendanceDateTime } from "../utils/attendanceTime";
+import { getStoredSession } from "../utils/authSession";
 import {
   FiSearch,
   FiDownload,
@@ -17,11 +18,27 @@ import {
   FiGrid,
   FiList,
   FiCheckCircle,
+  FiAlertTriangle,
   FiUsers,
   FiUserCheck,
   FiRotateCw,
   FiFileText,
 } from "react-icons/fi";
+
+const OFFLINE_UNVERIFIED_TAG = "[OFFLINE-UNVERIFIED - Pending Review]";
+
+function isOfflineUnverifiedNote(notes) {
+  return typeof notes === "string" && notes.includes(OFFLINE_UNVERIFIED_TAG);
+}
+
+function formatOfflineReviewedNote(notes, reviewerName = "Staff") {
+  const remaining = String(notes || "")
+    .split("|")
+    .map((part) => part.trim())
+    .filter((part) => part && !/^\[offline-unverified/i.test(part));
+  const reviewedTag = `[OFFLINE-REVIEWED by ${reviewerName}]`;
+  return remaining.length > 0 ? `${reviewedTag} | ${remaining.join(" | ")}` : reviewedTag;
+}
 
 // Formatter matching GPS Camera timestamp overlay (e.g. 10.30.2026 06:09 PM)
 function formatOverlayDateTime(dateStr) {
@@ -199,7 +216,7 @@ function useSiteLocation(coords) {
 }
 
 // Field Attendance Card Component (Renders 1 card per punch: single employee or group)
-function FieldAttendanceCard({ card, index, openPhotoModal, persons }) {
+function FieldAttendanceCard({ card, index, openPhotoModal, persons, onMarkReviewed }) {
   const isGroup = card.members && card.members.length > 1;
   const isTimeIn = card.event === "time-in";
   const photoSrc = card.photo;
@@ -229,6 +246,9 @@ function FieldAttendanceCard({ card, index, openPhotoModal, persons }) {
       registration_photo: p.registration_photo || null,
     };
   });
+
+  const unverifiedMembers = (card.members || []).filter((m) => isOfflineUnverifiedNote(m.notes));
+  const isOfflineUnverified = unverifiedMembers.length > 0 || isOfflineUnverifiedNote(card.notes);
 
   const memberNames = memberDetails.map((m) => m.name).join(", ");
   const uniqueDepts = Array.from(new Set(memberDetails.map((m) => m.department))).join(", ");
@@ -338,10 +358,17 @@ function FieldAttendanceCard({ card, index, openPhotoModal, persons }) {
                 <span className="truncate" title={memberNames}>
                   {memberNames}
                 </span>
-                <FiCheckCircle
-                  className="text-emerald-600 text-xs flex-shrink-0"
-                  title={isGroup ? "Verified Group Attendance" : "Verified Attendance"}
-                />
+                {isOfflineUnverified ? (
+                  <FiAlertTriangle
+                    className="text-amber-500 text-xs flex-shrink-0"
+                    title="Offline Unverified — Pending Review"
+                  />
+                ) : (
+                  <FiCheckCircle
+                    className="text-emerald-600 text-xs flex-shrink-0"
+                    title={isGroup ? "Verified Group Attendance" : "Verified Attendance"}
+                  />
+                )}
               </div>
 
               {/* Site Location Name with Pin */}
@@ -353,6 +380,30 @@ function FieldAttendanceCard({ card, index, openPhotoModal, persons }) {
               </div>
             </div>
           </div>
+
+          {isOfflineUnverified && (
+            <div className="flex items-center justify-between gap-2 text-xs bg-amber-50 px-2.5 py-1.5 rounded-lg border border-amber-200">
+              <span className="inline-flex items-center gap-1 text-[11px] font-bold text-amber-800">
+                <FiAlertTriangle className="text-amber-600 shrink-0" />
+                Offline Unverified (Pending Review)
+              </span>
+              {typeof onMarkReviewed === "function" && (
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onMarkReviewed(
+                      unverifiedMembers.length > 0 ? unverifiedMembers : [card],
+                      memberNames
+                    );
+                  }}
+                  className="px-2 py-0.5 rounded bg-amber-600 hover:bg-amber-700 text-white text-[10px] font-bold border-none cursor-pointer transition-colors shrink-0"
+                >
+                  Mark Reviewed
+                </button>
+              )}
+            </div>
+          )}
 
           {/* Group Partner Chips */}
           {isGroup && (
@@ -405,10 +456,27 @@ function FieldAttendanceCard({ card, index, openPhotoModal, persons }) {
 
             {/* Description / Store Note */}
             {card.notes && (
-              <div className="flex items-start gap-1.5 text-xs bg-emerald-50/60 px-2.5 py-1.5 rounded-lg border border-emerald-100">
-                <FiFileText className="text-emerald-700 text-xs mt-0.5 shrink-0" />
+              <div
+                className={`flex items-start gap-1.5 text-xs px-2.5 py-1.5 rounded-lg border ${
+                  isOfflineUnverified
+                    ? "bg-amber-50/60 border-amber-100"
+                    : "bg-emerald-50/60 border-emerald-100"
+                }`}
+              >
+                <FiFileText
+                  className={`${
+                    isOfflineUnverified ? "text-amber-700" : "text-emerald-700"
+                  } text-xs mt-0.5 shrink-0`}
+                />
                 <span className="text-[11px] text-gray-700 italic break-words line-clamp-2">
-                  <strong className="text-emerald-900 not-italic font-semibold">Note:</strong> {card.notes}
+                  <strong
+                    className={`${
+                      isOfflineUnverified ? "text-amber-900" : "text-emerald-900"
+                    } not-italic font-semibold`}
+                  >
+                    Note:
+                  </strong>{" "}
+                  {card.notes}
                 </span>
               </div>
             )}
@@ -463,21 +531,81 @@ function FieldAttendanceCard({ card, index, openPhotoModal, persons }) {
   );
 }
 
-// High-Resolution Photo Overlay Lightbox Modal (White theme, bigger size, rotation with save position)
+// High-Resolution Fullscreen Photo Overlay Lightbox Modal
 function PhotoOverlayModal({ photoModal, onClose, onUpdatePhoto }) {
   const [rotation, setRotation] = useState(0);
   const [zoom, setZoom] = useState(1);
   const [saving, setSaving] = useState(false);
   const [skipTransition, setSkipTransition] = useState(false);
   const [currentSrc, setCurrentSrc] = useState(photoModal.src);
+  const [naturalSize, setNaturalSize] = useState({ width: 0, height: 0 });
+  const [viewportSize, setViewportSize] = useState({ width: 0, height: 0 });
+  const [imgError, setImgError] = useState(false);
   const imageViewportRef = useRef(null);
+  const imgRef = useRef(null);
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
   const resolvedLocation = useSiteLocation(photoModal.record?.point);
 
   useEffect(() => {
     setCurrentSrc(photoModal.src);
     setRotation(0);
     setZoom(1);
+    setImgError(false);
+    setNaturalSize({ width: 0, height: 0 });
   }, [photoModal.src]);
+
+  useEffect(() => {
+    const img = imgRef.current;
+    if (img && img.complete && img.naturalWidth > 0) {
+      setNaturalSize({
+        width: img.naturalWidth,
+        height: img.naturalHeight,
+      });
+    }
+  }, [currentSrc]);
+
+  // Measure available fullscreen viewport area so small images scale up cleanly
+  useEffect(() => {
+    const el = imageViewportRef.current;
+    if (!el) return;
+
+    const updateViewport = () => {
+      setViewportSize({
+        width: el.clientWidth,
+        height: el.clientHeight,
+      });
+    };
+
+    updateViewport();
+
+    if (typeof ResizeObserver !== "undefined") {
+      const observer = new ResizeObserver(updateViewport);
+      observer.observe(el);
+      return () => observer.disconnect();
+    }
+
+    window.addEventListener("resize", updateViewport);
+    return () => window.removeEventListener("resize", updateViewport);
+  }, []);
+
+  // Lock page scroll and allow Escape to close fullscreen viewer
+  useEffect(() => {
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+
+    const handleKeyDown = (e) => {
+      if (e.key === "Escape") {
+        onCloseRef.current?.();
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+
+    return () => {
+      document.body.style.overflow = prevOverflow;
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, []);
 
   // Mouse wheel scroll to zoom in & zoom out
   useEffect(() => {
@@ -488,7 +616,7 @@ function PhotoOverlayModal({ photoModal, onClose, onUpdatePhoto }) {
       e.preventDefault();
       setZoom((prevZoom) => {
         // e.deltaY < 0 is scroll up (zoom in), e.deltaY > 0 is scroll down (zoom out)
-        const step = 0.15;
+        const step = 0.2;
         let nextZoom = e.deltaY < 0 ? prevZoom + step : prevZoom - step;
         if (nextZoom < 1) nextZoom = 1;
         if (nextZoom > 4) nextZoom = 4;
@@ -516,12 +644,38 @@ function PhotoOverlayModal({ photoModal, onClose, onUpdatePhoto }) {
     ? `https://www.google.com/maps?q=${encodeURIComponent(photoModal.record.point)}`
     : null;
 
+  const normalizedRotation = ((rotation % 360) + 360) % 360;
+  const isRotated90 = normalizedRotation % 180 !== 0;
+  const effW = isRotated90 ? naturalSize.height : naturalSize.width;
+  const effH = isRotated90 ? naturalSize.width : naturalSize.height;
+
+  let frameW = null;
+  let frameH = null;
+  if (
+    viewportSize.width > 0 &&
+    viewportSize.height > 0 &&
+    effW > 0 &&
+    effH > 0
+  ) {
+    const fitScale = Math.min(
+      viewportSize.width / effW,
+      viewportSize.height / effH
+    );
+    const baseW = Math.max(1, Math.round(effW * fitScale));
+    const baseH = Math.max(1, Math.round(effH * fitScale));
+    frameW = Math.max(1, Math.round(baseW * zoom));
+    frameH = Math.max(1, Math.round(baseH * zoom));
+  }
+
+  const imgW = frameW && frameH ? (isRotated90 ? frameH : frameW) : null;
+  const imgH = frameW && frameH ? (isRotated90 ? frameW : frameH) : null;
+
   // Handle Save Rotated Photo Position (Keeps photo completely steady with zero visual jumps)
   const handleSavePosition = async () => {
-    if (rotation === 0) return;
+    if (normalizedRotation === 0) return;
     try {
       setSaving(true);
-      const rotatedBase64 = await rotateImageBase64(currentSrc, rotation);
+      const rotatedBase64 = await rotateImageBase64(currentSrc, normalizedRotation);
 
       // Preload image into memory so it renders instantly without flicker
       const preImg = new Image();
@@ -542,6 +696,12 @@ function PhotoOverlayModal({ photoModal, onClose, onUpdatePhoto }) {
 
       // Freeze transform transition so the image stays rock-steady without spinning back
       setSkipTransition(true);
+      if (preImg.naturalWidth && preImg.naturalHeight) {
+        setNaturalSize({
+          width: preImg.naturalWidth,
+          height: preImg.naturalHeight,
+        });
+      }
       setCurrentSrc(rotatedBase64);
       setRotation(0);
 
@@ -563,15 +723,14 @@ function PhotoOverlayModal({ photoModal, onClose, onUpdatePhoto }) {
 
   return (
     <div
-      onClick={onClose}
-      className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[10000] flex items-center justify-center p-2 sm:p-4 animate-fadeIn"
+      className="fixed inset-0 z-[10000] w-screen h-screen bg-black flex flex-col overflow-hidden"
     >
       <div
         onClick={(e) => e.stopPropagation()}
-        className="max-w-6xl w-[96vw] max-h-[96vh] rounded-3xl overflow-hidden bg-white border border-gray-200 shadow-2xl flex flex-col animate-scaleIn"
+        className="w-full h-full flex flex-col bg-neutral-950 overflow-hidden"
       >
-        {/* Modal Top Bar (White / Light Theme) */}
-        <div className="flex items-center justify-between px-5 py-3.5 bg-white border-b border-gray-100">
+        {/* Fullscreen Top Bar */}
+        <div className="flex items-center justify-between gap-3 px-4 sm:px-6 py-2.5 sm:py-3 bg-white border-b border-gray-200 shrink-0 z-30">
           <div className="flex items-center gap-2.5 min-w-0 pr-2">
             <h3 className="font-bold text-gray-900 text-sm sm:text-base m-0 truncate">
               {photoModal.title || "Store Image Proof"}
@@ -588,13 +747,42 @@ function PhotoOverlayModal({ photoModal, onClose, onUpdatePhoto }) {
           </div>
 
           <div className="flex items-center gap-2 flex-shrink-0">
-            {/* Zoom Indicator / Reset Button (Appears when zoomed in) */}
+            {/* Zoom Controls */}
+            <div className="hidden sm:inline-flex items-center rounded-xl bg-gray-100 border border-gray-200 overflow-hidden">
+              <button
+                type="button"
+                onClick={() => setZoom((z) => Math.max(1, Number((z - 0.25).toFixed(2))))}
+                disabled={zoom <= 1}
+                title="Zoom out"
+                className="px-2 py-1.5 text-xs font-bold text-gray-700 hover:bg-gray-200 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer bg-transparent border-none"
+              >
+                −
+              </button>
+              <button
+                type="button"
+                onClick={() => setZoom(1)}
+                title="Reset zoom to 100%"
+                className="px-2 py-1.5 text-xs font-bold text-gray-700 hover:bg-gray-200 cursor-pointer bg-transparent border-none min-w-[46px]"
+              >
+                {Math.round(zoom * 100)}%
+              </button>
+              <button
+                type="button"
+                onClick={() => setZoom((z) => Math.min(4, Number((z + 0.25).toFixed(2))))}
+                disabled={zoom >= 4}
+                title="Zoom in"
+                className="px-2 py-1.5 text-xs font-bold text-gray-700 hover:bg-gray-200 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer bg-transparent border-none"
+              >
+                +
+              </button>
+            </div>
+
             {zoom > 1 && (
               <button
                 type="button"
                 onClick={() => setZoom(1)}
                 title="Reset zoom to 100%"
-                className="px-2.5 py-1.5 rounded-xl bg-gray-100 hover:bg-gray-200 text-gray-700 text-xs font-bold transition-colors cursor-pointer border border-gray-200 flex items-center gap-1"
+                className="sm:hidden px-2.5 py-1.5 rounded-xl bg-gray-100 hover:bg-gray-200 text-gray-700 text-xs font-bold transition-colors cursor-pointer border border-gray-200 flex items-center gap-1"
               >
                 <span>{Math.round(zoom * 100)}%</span>
                 <span className="text-[10px] text-gray-400 font-normal">Reset</span>
@@ -604,7 +792,7 @@ function PhotoOverlayModal({ photoModal, onClose, onUpdatePhoto }) {
             {/* Rotate Button (No degree text) */}
             <button
               type="button"
-              onClick={() => setRotation((r) => (r + 90) % 360)}
+              onClick={() => setRotation((r) => r + 90)}
               title="Rotate image 90° clockwise"
               className="px-3 py-1.5 rounded-xl bg-gray-100 hover:bg-gray-200 text-gray-700 text-xs font-bold flex items-center gap-1.5 transition-colors cursor-pointer border border-gray-200"
             >
@@ -613,13 +801,13 @@ function PhotoOverlayModal({ photoModal, onClose, onUpdatePhoto }) {
             </button>
 
             {/* Save Button (Appears when rotated) */}
-            {rotation !== 0 && (
+            {normalizedRotation !== 0 && (
               <button
                 type="button"
                 onClick={handleSavePosition}
                 disabled={saving}
                 title="Save rotated image permanently"
-                className="px-4 py-1.5 rounded-xl bg-[#237227] hover:bg-[#1a541c] text-white text-xs font-bold transition-all cursor-pointer shadow-sm active:scale-98 disabled:opacity-50"
+                className="px-4 py-1.5 rounded-xl bg-[#237227] hover:bg-[#1a541c] text-white text-xs font-bold transition-all cursor-pointer shadow-sm active:scale-[0.98] disabled:opacity-50 border-none"
               >
                 {saving ? "Saving..." : "Save"}
               </button>
@@ -649,112 +837,174 @@ function PhotoOverlayModal({ photoModal, onClose, onUpdatePhoto }) {
           </div>
         </div>
 
-        {/* Modal Body: Bigger Image Viewport with Mouse Wheel Zoom */}
+        {/* Fullscreen Image Viewport with Mouse Wheel Zoom */}
         <div
           ref={imageViewportRef}
-          className="p-3 sm:p-5 bg-slate-100/80 flex items-center justify-center overflow-auto flex-1 min-h-[420px]"
+          onClick={(e) => {
+            if (e.target === imageViewportRef.current && zoom === 1) {
+              onClose();
+            }
+          }}
+          className="relative flex-1 w-full min-h-0 bg-neutral-950 flex overflow-auto select-none"
           title="Scroll mouse wheel over photo to zoom in/out, double click to reset zoom"
         >
-          <div className="relative inline-block max-w-full rounded-2xl overflow-hidden shadow-xl border border-gray-200/80 bg-black">
-            {/* The Captured Store Photo with mouse wheel zoom & rotation */}
-            <img
-              src={currentSrc}
-              alt="Store proof with overlay"
-              onDoubleClick={() => setZoom((z) => (z > 1 ? 1 : 2))}
-              style={{
-                transform: `rotate(${rotation}deg) scale(${zoom})`,
-                transformOrigin: "center center",
-                transition: skipTransition ? "none" : "transform 0.15s ease-out",
-                cursor: zoom > 1 ? "zoom-out" : "zoom-in",
-              }}
-              className="max-h-[76vh] w-auto max-w-full block object-contain mx-auto select-none"
-            />
-
-            {/* TOP-LEFT OVERLAY: Event Badge & Group Count */}
-            <div className="absolute top-3 left-3 z-20 pointer-events-none flex items-center gap-1.5">
-              <span
-                className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[11px] font-extrabold uppercase tracking-wider text-white shadow-lg ${
-                  isTimeIn
-                    ? "bg-emerald-600/90 backdrop-blur-xs border border-emerald-400/30"
-                    : "bg-blue-600/90 backdrop-blur-xs border border-blue-400/30"
-                }`}
-              >
-                <span className="w-2 h-2 rounded-full bg-white animate-pulse"></span>
-                {isTimeIn ? "TIME IN" : "TIME OUT"}
-              </span>
-
-              {photoModal.memberDetails && photoModal.memberDetails.length > 1 && (
-                <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-bold bg-black/60 backdrop-blur-xs text-white border border-white/20 shadow-md">
-                  <FiUsers className="text-[10px] text-emerald-400" />
-                  <span>Group ({photoModal.memberDetails.length})</span>
-                </span>
-              )}
+          {imgError || !currentSrc ? (
+            <div className="m-auto flex flex-col items-center justify-center text-gray-400 gap-2 p-6">
+              <FiCamera className="text-4xl text-gray-500" />
+              <span className="text-sm font-medium">Unable to load store proof image</span>
             </div>
+          ) : (
+            <div
+              style={
+                frameW && frameH
+                  ? { width: `${frameW}px`, height: `${frameH}px` }
+                  : { width: "100%", height: "100%" }
+              }
+              className="relative m-auto shrink-0 overflow-hidden bg-black shadow-2xl"
+            >
+              {/* The Captured Store Photo scaled to fill the fullscreen viewport */}
+              <img
+                ref={imgRef}
+                src={currentSrc}
+                alt="Store proof with overlay"
+                onLoad={(e) => {
+                  const { naturalWidth, naturalHeight } = e.currentTarget;
+                  if (naturalWidth && naturalHeight) {
+                    setNaturalSize({
+                      width: naturalWidth,
+                      height: naturalHeight,
+                    });
+                  }
+                }}
+                onError={() => setImgError(true)}
+                onDoubleClick={() => setZoom((z) => (z > 1 ? 1 : 2))}
+                draggable={false}
+                style={
+                  imgW && imgH
+                    ? {
+                        position: "absolute",
+                        top: "50%",
+                        left: "50%",
+                        width: `${imgW}px`,
+                        height: `${imgH}px`,
+                        maxWidth: "none",
+                        maxHeight: "none",
+                        transform: `translate(-50%, -50%) rotate(${rotation}deg)`,
+                        transformOrigin: "center center",
+                        transition: skipTransition ? "none" : "transform 0.2s ease-out",
+                        cursor: zoom > 1 ? "zoom-out" : "zoom-in",
+                      }
+                    : {
+                        width: "100%",
+                        height: "100%",
+                        transform: `rotate(${rotation}deg) scale(${zoom})`,
+                        transformOrigin: "center center",
+                        transition: skipTransition ? "none" : "transform 0.2s ease-out",
+                        cursor: zoom > 1 ? "zoom-out" : "zoom-in",
+                      }
+                }
+                className={
+                  imgW && imgH
+                    ? "block select-none"
+                    : "w-full h-full object-contain block select-none"
+                }
+              />
 
-            {/* TOP-RIGHT OVERLAY: Watermark / App Badge (matching Image 2) */}
-            <div className="absolute top-3 right-3 z-20 pointer-events-none bg-black/60 backdrop-blur-xs text-white px-2.5 py-1 rounded-md border border-white/15 flex items-center gap-1.5 shadow-md text-[10px] font-sans">
-              <span className="w-2 h-2 rounded-full bg-[#237227] ring-2 ring-white/60"></span>
-              <span className="font-bold tracking-wide">Multifactors Sales Attendance</span>
-              <span className="text-gray-400">|</span>
-              <span className="text-gray-300">Field GPS Proof</span>
-            </div>
-
-            {/* BOTTOM-LEFT OVERLAY: Details Box (matching Image 2) */}
-            <div className="absolute bottom-3 left-3 sm:bottom-4 sm:left-4 z-20 max-w-[85%] sm:max-w-md bg-black/65 backdrop-blur-xs text-white p-3 sm:p-4 rounded-xl border border-white/20 shadow-2xl flex flex-col gap-1 text-left pointer-events-none">
-              {/* Logo from Image 3 */}
-              <div className="mb-0.5 flex items-center">
-                <img
-                  src="/image/logo/multifactors_overlay_logo.png"
-                  alt="Multifactors Sales Attendance"
-                  className="h-6 sm:h-7 object-contain bg-white/95 px-2 py-0.5 rounded shadow-sm"
-                />
-              </div>
-
-              {/* Company Name */}
-              <div className="text-[11px] font-bold text-gray-300 tracking-wider">
-                Multifactors Sales
-              </div>
-
-              {/* Site Location Name in Bold Uppercase */}
-              <div className="text-xs sm:text-sm font-black text-white tracking-wider uppercase leading-tight font-sans drop-shadow-sm">
-                {landmark}
-              </div>
-
-              {/* Formatted Date & Time (MM.DD.YYYY hh:mm A) */}
-              <div className="text-[11px] sm:text-xs font-mono text-gray-200 tracking-wide">
-                {formattedDateTime}
-              </div>
-
-              {/* GPS Coordinates (Lat, Long) */}
-              {photoModal.record?.point && (
-                <div className="text-[11px] sm:text-xs font-mono text-emerald-400 font-bold tracking-wide">
-                  {formattedCoords}
-                </div>
-              )}
-
-              {/* Detailed Address */}
-              {fullAddress && (
-                <div className="text-[10px] sm:text-[11px] text-gray-300 font-sans leading-snug line-clamp-2 max-w-sm">
-                  {fullAddress}
-                </div>
-              )}
-
-              {/* Description / Store Note */}
-              {photoModal.record?.notes && (
-                <div className="text-[10px] sm:text-[11px] text-emerald-200 font-sans italic leading-snug line-clamp-2 max-w-sm pt-1 border-t border-white/10 flex items-start gap-1">
-                  <FiFileText className="text-emerald-400 mt-0.5 shrink-0 text-xs" />
-                  <span>
-                    <strong className="text-white not-italic font-semibold">Note:</strong> {photoModal.record.notes}
+              {/* TOP OVERLAYS: Event Badge, Group Count & Watermark (flex layout prevents overlap) */}
+              <div className="absolute top-3 inset-x-3 z-20 pointer-events-none flex flex-wrap items-start justify-between gap-2">
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  <span
+                    className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[11px] font-extrabold uppercase tracking-wider text-white shadow-lg backdrop-blur-sm ${
+                      isTimeIn
+                        ? "bg-emerald-600/90 border border-emerald-400/30"
+                        : "bg-blue-600/90 border border-blue-400/30"
+                    }`}
+                  >
+                    <span className="w-2 h-2 rounded-full bg-white animate-pulse"></span>
+                    {isTimeIn ? "TIME IN" : "TIME OUT"}
                   </span>
+
+                  {photoModal.memberDetails && photoModal.memberDetails.length > 1 && (
+                    <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-bold bg-black/60 backdrop-blur-sm text-white border border-white/20 shadow-md">
+                      <FiUsers className="text-[10px] text-emerald-400" />
+                      <span>Group ({photoModal.memberDetails.length})</span>
+                    </span>
+                  )}
                 </div>
-              )}
+
+                <div className="bg-black/60 backdrop-blur-sm text-white px-2.5 py-1 rounded-md border border-white/15 flex items-center gap-1.5 shadow-md text-[10px] font-sans whitespace-nowrap">
+                  <span className="w-2 h-2 rounded-full bg-[#237227] ring-2 ring-white/60 shrink-0"></span>
+                  <span className="font-bold tracking-wide">Multifactors Sales Attendance</span>
+                  <span className="text-gray-400">|</span>
+                  <span className="text-gray-300">Field GPS Proof</span>
+                </div>
+              </div>
+
+              {/* BOTTOM-LEFT OVERLAY: Compact Details Box */}
+              <div className="absolute bottom-3 left-3 sm:bottom-4 sm:left-4 z-20 max-w-[calc(100%-1.5rem)] sm:max-w-sm bg-black/60 backdrop-blur-sm text-white p-2.5 sm:p-3.5 rounded-xl border border-white/20 shadow-2xl flex flex-col gap-0.5 text-left pointer-events-none">
+                {/* Logo */}
+                <div className="mb-0.5 flex items-center">
+                  <img
+                    src="/image/logo/multifactors_overlay_logo.png"
+                    alt="Multifactors Sales Attendance"
+                    className="h-5 sm:h-6 object-contain bg-white/95 px-2 py-0.5 rounded shadow-sm"
+                  />
+                </div>
+
+                {/* Company Name */}
+                <div className="text-[11px] font-bold text-gray-300 tracking-wider">
+                  Multifactors Sales
+                </div>
+
+                {/* Site Location Name in Bold Uppercase */}
+                <div className="text-xs sm:text-sm font-black text-white tracking-wider uppercase leading-tight font-sans drop-shadow-sm">
+                  {landmark}
+                </div>
+
+                {/* Formatted Date & Time (MM.DD.YYYY hh:mm A) */}
+                <div className="text-[11px] sm:text-xs font-mono text-gray-200 tracking-wide">
+                  {formattedDateTime}
+                </div>
+
+                {/* GPS Coordinates (Lat, Long) */}
+                {photoModal.record?.point && (
+                  <div className="text-[11px] sm:text-xs font-mono text-emerald-400 font-bold tracking-wide">
+                    {formattedCoords}
+                  </div>
+                )}
+
+                {/* Detailed Address */}
+                {fullAddress && (
+                  <div className="text-[10px] sm:text-[11px] text-gray-300 font-sans leading-snug line-clamp-2 max-w-sm">
+                    {fullAddress}
+                  </div>
+                )}
+
+                {/* Offline Unverified Warning & Note */}
+                {isOfflineUnverifiedNote(photoModal.record?.notes) && (
+                  <div className="inline-flex items-center gap-1.5 text-[10px] sm:text-[11px] font-bold text-amber-200 bg-amber-950/70 border border-amber-400/50 rounded-md px-2 py-0.5 mt-0.5">
+                    <FiAlertTriangle className="text-amber-300 shrink-0 text-xs" />
+                    <span>Offline Unverified — Pending Review</span>
+                  </div>
+                )}
+
+                {/* Description / Store Note */}
+                {photoModal.record?.notes && (
+                  <div className="text-[10px] sm:text-[11px] text-emerald-200 font-sans italic leading-snug line-clamp-2 max-w-sm pt-1 mt-0.5 border-t border-white/10 flex items-start gap-1">
+                    <FiFileText className="text-emerald-400 mt-0.5 shrink-0 text-xs" />
+                    <span>
+                      <strong className="text-white not-italic font-semibold">Note:</strong> {photoModal.record.notes}
+                    </span>
+                  </div>
+                )}
+              </div>
             </div>
-          </div>
+          )}
         </div>
 
-        {/* Modal Bottom: Partner Chips (if group punch) (White / Light Theme) */}
+        {/* Fullscreen Bottom: Partner Chips (if group punch) */}
         {photoModal.memberDetails && photoModal.memberDetails.length > 1 && (
-          <div className="px-5 py-3 bg-[#fafbfa] border-t border-gray-100 flex flex-wrap items-center justify-between gap-2 text-xs">
+          <div className="px-4 sm:px-6 py-2.5 bg-white border-t border-gray-200 flex flex-wrap items-center justify-between gap-2 text-xs shrink-0 z-30">
             <div className="flex flex-wrap items-center gap-1.5">
               <span className="text-gray-600 font-bold flex items-center gap-1">
                 <FiUsers className="text-[#237227]" /> Group Partners ({photoModal.memberDetails.length}):
@@ -762,7 +1012,7 @@ function PhotoOverlayModal({ photoModal, onClose, onUpdatePhoto }) {
               {photoModal.memberDetails.map((m) => (
                 <span
                   key={m.id || m.person_id}
-                  className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-semibold bg-white text-gray-800 border border-gray-200 shadow-2xs"
+                  className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-semibold bg-gray-50 text-gray-800 border border-gray-200 shadow-sm"
                 >
                   <FiUserCheck className="text-emerald-600 text-xs" />
                   <span>{m.name}</span>
@@ -1162,6 +1412,72 @@ export default function FieldAttendanceTable() {
     });
   };
 
+  const handleMarkReviewed = async (targetRows, labelName = "selected employee") => {
+    const rows = (Array.isArray(targetRows) ? targetRows : [targetRows]).filter(
+      (r) => r && r.id && isOfflineUnverifiedNote(r.notes)
+    );
+    if (rows.length === 0) return;
+
+    const confirmRes = await Swal.fire({
+      icon: "question",
+      title: "Mark Offline Attendance as Reviewed?",
+      text: `Confirm review for ${labelName} (${rows.length} record${rows.length > 1 ? "s" : ""}).`,
+      showCancelButton: true,
+      confirmButtonColor: "#237227",
+      confirmButtonText: "Yes, Mark Reviewed",
+      customClass: { popup: "!rounded-2xl font-sans" },
+    });
+    if (!confirmRes.isConfirmed) return;
+
+    const session = getStoredSession();
+    const reviewerName = session?.user?.name || session?.user?.email || "Staff";
+
+    try {
+      const updatedMap = new Map();
+      await Promise.all(
+        rows.map(async (row) => {
+          const nextNotes = formatOfflineReviewedNote(row.notes, reviewerName);
+          const { error } = await supabase
+            .from("attendance")
+            .update({ notes: nextNotes })
+            .eq("id", row.id);
+          if (error) throw error;
+          updatedMap.set(row.id, nextNotes);
+        })
+      );
+
+      setRecords((prev) =>
+        prev.map((r) => (updatedMap.has(r.id) ? { ...r, notes: updatedMap.get(r.id) } : r))
+      );
+
+      setPhotoModal((prev) => {
+        if (!prev.record) return prev;
+        const nextModalNotes = updatedMap.get(prev.record.id);
+        return nextModalNotes !== undefined
+          ? { ...prev, record: { ...prev.record, notes: nextModalNotes } }
+          : prev;
+      });
+
+      Swal.fire({
+        toast: true,
+        position: "top-end",
+        icon: "success",
+        title: "Offline attendance marked as reviewed",
+        showConfirmButton: false,
+        timer: 2500,
+        timerProgressBar: true,
+        iconColor: "#237227",
+      });
+    } catch (err) {
+      Swal.fire({
+        icon: "error",
+        title: "Review Failed",
+        text: err.message || "Could not update review status.",
+        customClass: { popup: "!rounded-2xl font-sans" },
+      });
+    }
+  };
+
   const departmentsList = useMemo(() => {
     return Array.from(
       new Set(
@@ -1342,6 +1658,7 @@ export default function FieldAttendanceTable() {
                     index={globalIndex}
                     openPhotoModal={openPhotoModal}
                     persons={persons}
+                    onMarkReviewed={handleMarkReviewed}
                   />
                 );
               })}
@@ -1401,6 +1718,7 @@ export default function FieldAttendanceTable() {
                     const dept = row.department || person.department || "General";
                     const photoSrc = row.photo;
                     const isTimeIn = row.event === "time-in";
+                    const rowUnverified = isOfflineUnverifiedNote(row.notes);
                     const mapsUrl = row.point
                       ? `https://www.google.com/maps?q=${encodeURIComponent(row.point)}`
                       : null;
@@ -1433,8 +1751,17 @@ export default function FieldAttendanceTable() {
                         </td>
 
                         <td className="py-3 px-4 align-middle">
-                          <div className="font-bold text-gray-900 leading-tight">
-                            {empName}
+                          <div className="font-bold text-gray-900 leading-tight flex items-center gap-1.5">
+                            <span>{empName}</span>
+                            {rowUnverified && (
+                              <span
+                                className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-50 text-amber-800 border border-amber-200"
+                                title="Synced from offline queue without verified session"
+                              >
+                                <FiAlertTriangle className="text-amber-600 text-[10px]" />
+                                Offline Unverified
+                              </span>
+                            )}
                           </div>
                           <div className="text-xs text-gray-500 font-mono mt-0.5">
                             ID: {row.person_id}
@@ -1491,10 +1818,21 @@ export default function FieldAttendanceTable() {
                               </a>
                               {row.notes && (
                                 <span
-                                  className="text-[11px] text-gray-700 italic bg-emerald-50/70 border border-emerald-100 rounded px-2 py-0.5 line-clamp-2 max-w-[220px]"
+                                  className={`text-[11px] text-gray-700 italic rounded px-2 py-0.5 line-clamp-2 max-w-[220px] border ${
+                                    rowUnverified
+                                      ? "bg-amber-50/70 border-amber-200"
+                                      : "bg-emerald-50/70 border-emerald-100"
+                                  }`}
                                   title={row.notes}
                                 >
-                                  <strong className="text-emerald-900 not-italic">Note:</strong> {row.notes}
+                                  <strong
+                                    className={`${
+                                      rowUnverified ? "text-amber-900" : "text-emerald-900"
+                                    } not-italic`}
+                                  >
+                                    Note:
+                                  </strong>{" "}
+                                  {row.notes}
                                 </span>
                               )}
                             </div>
@@ -1512,15 +1850,26 @@ export default function FieldAttendanceTable() {
                         </td>
 
                         <td className="py-3 px-4 align-middle text-center">
-                          {photoSrc && (
-                            <button
-                              type="button"
-                              onClick={() => openPhotoModal(photoSrc, title, row)}
-                              className="inline-flex items-center gap-1 py-1.5 px-3 rounded-lg bg-[#f0f7f0] hover:bg-[#e0efe0] text-[#237227] text-xs font-bold border border-[#c3e3c3] cursor-pointer transition-colors"
-                            >
-                              <FiEye /> View Store Image
-                            </button>
-                          )}
+                          <div className="inline-flex flex-col items-center gap-1.5">
+                            {photoSrc && (
+                              <button
+                                type="button"
+                                onClick={() => openPhotoModal(photoSrc, title, row)}
+                                className="inline-flex items-center gap-1 py-1.5 px-3 rounded-lg bg-[#f0f7f0] hover:bg-[#e0efe0] text-[#237227] text-xs font-bold border border-[#c3e3c3] cursor-pointer transition-colors"
+                              >
+                                <FiEye /> View Store Image
+                              </button>
+                            )}
+                            {rowUnverified && (
+                              <button
+                                type="button"
+                                onClick={() => handleMarkReviewed([row], empName)}
+                                className="inline-flex items-center gap-1 py-1 px-2.5 rounded-lg bg-amber-600 hover:bg-amber-700 text-white text-[11px] font-bold border-none cursor-pointer transition-colors"
+                              >
+                                <FiCheckCircle /> Mark Reviewed
+                              </button>
+                            )}
+                          </div>
                         </td>
                       </tr>
                     );

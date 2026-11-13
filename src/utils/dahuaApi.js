@@ -1,3 +1,9 @@
+import {
+  getStoredAccessToken,
+  notifyAuthExpired,
+  updateStoredSession,
+} from "./authSession";
+
 /**
  * Helper to communicate with Dahua backend endpoints safely.
  * Uses a dedicated backend host (REACT_APP_BACKEND_URL) or relative API paths.
@@ -61,6 +67,10 @@ export async function fetchDahuaApi(endpoint, options = {}) {
       const headers = {
         ...(options.headers || {}),
       };
+      const staffToken = getStoredAccessToken();
+      if (staffToken && !headers.Authorization) {
+        headers.Authorization = `Bearer ${staffToken}`;
+      }
       if (options.body && !headers["Content-Type"]) {
         headers["Content-Type"] = "application/json";
       }
@@ -75,14 +85,16 @@ export async function fetchDahuaApi(endpoint, options = {}) {
       const data = parseResponseJson(text, String(res.status));
 
       if (!res.ok) {
-        const httpError = new Error(
+        const message =
           res.status === 431
             ? "Request was rejected (HTTP 431: Request Header Fields Too Large). Please clear site cookies for this app or open it in an incognito window, then retry."
-            :
-          data.error ||
-          data.message ||
-          `Request failed with status ${res.status}`
-        );
+            : (typeof data.error === "object" ? data.error?.message : data.error) ||
+              data.message ||
+              `Request failed with status ${res.status}`;
+        if (res.status === 401 && staffToken) {
+          notifyAuthExpired(message);
+        }
+        const httpError = new Error(message);
         httpError.isHttpError = true;
         httpError.status = res.status;
         throw httpError;
@@ -158,17 +170,25 @@ export async function testDeviceConnection() {
 }
 
 export async function changePassword({ userId, email, currentPassword, newPassword }) {
-  return fetchDahuaApi("/api/auth/change-password", {
+  const data = await fetchDahuaApi("/api/auth/change-password", {
     method: "POST",
     body: JSON.stringify({ userId, email, currentPassword, newPassword }),
   });
+  if (data?.access_token || data?.user) {
+    updateStoredSession({ user: data.user, access_token: data.access_token });
+  }
+  return data;
 }
 
 export async function updateUserProfile({ userId, email, newName, newEmail, currentPassword, newPassword }) {
-  return fetchDahuaApi("/api/auth/update-profile", {
+  const data = await fetchDahuaApi("/api/auth/update-profile", {
     method: "POST",
     body: JSON.stringify({ userId, email, newName, newEmail, currentPassword, newPassword }),
   });
+  if (data?.access_token || data?.user) {
+    updateStoredSession({ user: data.user, access_token: data.access_token });
+  }
+  return data;
 }
 
 export async function getAdminAccounts() {

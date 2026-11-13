@@ -409,6 +409,8 @@ export default function PayrollPage() {
             personAttendance,
             person.id,
             settingsData,
+            deptData,
+            person,
           );
 
           let totalOtHours = 0;
@@ -420,6 +422,18 @@ export default function PayrollPage() {
           const isEarlyInWaived = Boolean(existingPeriodRow?.waive_early_in);
           const isOvertimeWaived = Boolean(existingPeriodRow?.waive_overtime);
 
+          const personDept = String(person.department || "").trim().toLowerCase();
+          const isUtilityPerson = personDept === "utility";
+          const personDeptRate = (deptData || []).find((d) => String(d.department || "").trim().toLowerCase() === personDept);
+
+          const personSchedMorningStart = personDeptRate?.has_custom_workhours && personDeptRate.morning_start
+            ? (parseTime(personDeptRate.morning_start) || 420)
+            : (isUtilityPerson ? 420 : schedMorningStart);
+
+          const personSchedAfternoonEnd = personDeptRate?.has_custom_workhours && personDeptRate.afternoon_end
+            ? (parseTime(personDeptRate.afternoon_end) || 1020)
+            : (isUtilityPerson ? 1020 : schedAfternoonEnd);
+
           detailed.forEach((rec) => {
             if (rec.otApprovalStatus !== "approved") return;
             const mIn = parseTime(rec.morningIn || rec.attendanceIn);
@@ -427,20 +441,19 @@ export default function PayrollPage() {
             let dayOtMins = 0;
             let dayNsdMins = 0;
 
-            // Early-in computation: 03:00 AM - 07:00 AM only added to OT
+            // Early-in computation: punch before shift start (e.g. before 07:00 AM for UTILITY, or before 08:00 AM for standard)
             if (
               mIn !== null &&
               mIn >= 3 * 60 &&
-              mIn <= 7 * 60 + 30 &&
-              mIn < schedMorningStart
+              mIn < personSchedMorningStart
             ) {
-              totalEarlyInMins += schedMorningStart - mIn;
-              dayOtMins += schedMorningStart - mIn;
+              totalEarlyInMins += personSchedMorningStart - mIn;
+              dayOtMins += personSchedMorningStart - mIn;
             }
             if (aOut !== null) {
               const effectiveAOut = aOut < 3 * 60 ? aOut + 24 * 60 : aOut;
-              if (effectiveAOut > schedAfternoonEnd) {
-                const otMins = effectiveAOut - schedAfternoonEnd;
+              if (effectiveAOut > personSchedAfternoonEnd) {
+                const otMins = effectiveAOut - personSchedAfternoonEnd;
                 if (otMins > schedAfternoonGrace) {
                   totalAfterOtMins += otMins;
                   dayOtMins += otMins;
@@ -1611,6 +1624,8 @@ export default function PayrollPage() {
       attendance,
       person.id,
       settings,
+      deptRates,
+      person,
     );
     const personAllAttendance = (rawAttendanceRef.current || []).filter(
       (a) => String(a.person_id) === String(person.id),
@@ -2137,8 +2152,9 @@ export default function PayrollPage() {
         let totalOtMinutes = 0;
         try {
           const sched = payroll && payroll.settings ? payroll.settings : {};
-          const schedMorningStart = sched.morning_start || "08:00";
-          const schedAfternoonEnd = sched.afternoon_end || "17:00";
+          const isPdfUtility = String(person?.department || "").trim().toLowerCase() === "utility";
+          const schedMorningStart = isPdfUtility ? "07:00" : (sched.morning_start || "08:00");
+          const schedAfternoonEnd = isPdfUtility ? "17:00" : (sched.afternoon_end || "17:00");
           const schedAfternoonGrace = Number.isFinite(
             Number(sched.afternoon_grace_minutes),
           )
@@ -2173,12 +2189,11 @@ export default function PayrollPage() {
               const mStartMin = parseT(schedMorningStart) || 480;
               const aEndMin = parseT(schedAfternoonEnd);
 
-              // Early-in computation: 03:00 AM - 07:00 AM only added to OT
+              // Early-in computation: punch before shift start added to OT
               if (
                 typeof mInMin === "number" &&
                 mInMin >= 3 * 60 &&
-                mInMin <= 7 * 60 + 30 &&
-                mInMin < mStartMin
+                (isPdfUtility ? mInMin < mStartMin : (mInMin <= 7 * 60 + 30 && mInMin < mStartMin))
               ) {
                 totalOtMinutes += mStartMin - mInMin;
               }
@@ -3033,6 +3048,8 @@ export default function PayrollPage() {
           onPrint={handlePrintPayslip}
           showPrintButton={true}
           period={selected.period}
+          settings={settings}
+          departmentRates={deptRates}
           released={(() => {
             const match = payrollPeriods.find(
               (p) =>

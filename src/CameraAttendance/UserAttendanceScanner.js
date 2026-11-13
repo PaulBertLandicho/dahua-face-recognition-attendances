@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import { Navigate, Link } from "react-router-dom";
-import { supabase } from "../mysqlClient";
+import { supabase, setActiveFaceToken } from "../mysqlClient";
+import { getApiBase } from "../utils/authSession";
 import { recordAttendanceForPerson } from "../AdminPage/attendanceUtils";
 import FaceVerificationGate from "./FaceVerificationGate";
 import offlineQueue from "../utils/offlineQueue";
@@ -25,6 +26,7 @@ import {
   FiHome,
 } from "react-icons/fi";
 import { checkIsMobileDevice } from "../utils/deviceUtils";
+import { createAutoGpsTracker, isValidGpsCoords } from "../utils/gpsLocation";
 
 const playVoice = (text) => {
   try {
@@ -79,7 +81,14 @@ export default function UserAttendanceScanner({ onSwitchToLogin, isMobile: propI
   const [settings, setSettings] = useState(null);
   const [locationPoint, setLocationPoint] = useState("");
   const [locationStatus, setLocationStatus] = useState("detecting");
+  const [locationAccuracy, setLocationAccuracy] = useState(null);
+  const [locationMessage, setLocationMessage] = useState(
+    "Auto-detecting GPS coordinates..."
+  );
   const [submitting, setSubmitting] = useState(false);
+  const gpsTrackerRef = useRef(null);
+  const locationPointRef = useRef("");
+  locationPointRef.current = locationPoint;
 
   // Custom Punch Modal State (Replaces default generic SweetAlert2)
   const [modalConfig, setModalConfig] = useState({
@@ -170,7 +179,7 @@ export default function UserAttendanceScanner({ onSwitchToLogin, isMobile: propI
     };
   }, []);
 
-  // Fetch employees and settings (Supports both Online & Offline IndexedDB fallback)
+  // Fetch non-PII employees and schedule settings via /api/face/scan-context (with IndexedDB offline fallback)
   useEffect(() => {
     async function fetchData() {
       try {
@@ -180,28 +189,25 @@ export default function UserAttendanceScanner({ onSwitchToLogin, isMobile: propI
 
         if (typeof navigator !== "undefined" && navigator.onLine) {
           try {
-            const { data: personsData } = await supabase
-              .from("persons")
-              .select("id, name, department")
-              .eq("archived", 0)
-              .order("name", { ascending: true });
-
-            if (personsData && personsData.length > 0) {
-              persons = personsData;
-              offlineQueue.savePersons(personsData).catch(() => {});
-            }
-
-            const { data: settingsData } = await supabase
-              .from("settings")
-              .select("*")
-              .single();
-
-            if (settingsData) {
-              settings = settingsData;
-              offlineQueue.saveSettings(settingsData).catch(() => {});
+            const res = await fetch(`${getApiBase()}/api/face/scan-context`, {
+              method: "GET",
+              credentials: "omit",
+            });
+            if (res.ok) {
+              const ctxData = await res.json();
+              if (ctxData?.success) {
+                if (Array.isArray(ctxData.persons) && ctxData.persons.length > 0) {
+                  persons = ctxData.persons;
+                  offlineQueue.savePersons(ctxData.persons).catch(() => {});
+                }
+                if (ctxData.settings) {
+                  settings = ctxData.settings;
+                  offlineQueue.saveSettings(ctxData.settings).catch(() => {});
+                }
+              }
             }
           } catch (netErr) {
-            console.warn("[UserScanner] Online fetch failed, checking offline cache:", netErr);
+            console.warn("[UserScanner] Online scan-context fetch failed, checking offline cache:", netErr);
           }
         }
 
@@ -229,6 +235,7 @@ export default function UserAttendanceScanner({ onSwitchToLogin, isMobile: propI
       }
     }
     fetchData();
+    return () => setActiveFaceToken(null);
   }, []);
 
   // Auto-sync offline attendance queue as soon as internet connection is restored
@@ -248,42 +255,48 @@ export default function UserAttendanceScanner({ onSwitchToLogin, isMobile: propI
     return () => window.removeEventListener("online", handleOnline);
   }, []);
 
-  // Fetch GPS Coordinates
-  const fetchLocation = useCallback(() => {
-    if (typeof navigator !== "undefined" && "geolocation" in navigator) {
-      setLocationStatus("detecting");
-      navigator.geolocation.getCurrentPosition(
-        (pos) => {
-          const lat = pos.coords.latitude.toFixed(6);
-          const lng = pos.coords.longitude.toFixed(6);
-          setLocationPoint(`${lat}, ${lng}`);
-          setLocationStatus("ok");
-        },
-        (err) => {
-          console.warn("Geolocation warning:", err.message);
-          setLocationPoint("Location unavailable");
-          setLocationStatus("error");
-        },
-        { enableHighAccuracy: true, timeout: 8000 }
-      );
-    } else {
-      setLocationPoint("Geolocation not supported");
-      setLocationStatus("error");
-    }
+  // Auto-on GPS Location Tracking (watchPosition + auto-retry + permission/visibility recovery)
+  useEffect(() => {
+    if (!isMobile) return undefined;
+
+    const tracker = createAutoGpsTracker({
+      onChange: ({ status, coords, accuracy, message }) => {
+        setLocationStatus(status);
+        setLocationPoint(coords || "");
+        setLocationAccuracy(accuracy ?? null);
+        setLocationMessage(message || "");
+      },
+    });
+
+    gpsTrackerRef.current = tracker;
+    tracker.start();
+
+    return () => {
+      tracker.stop();
+      if (gpsTrackerRef.current === tracker) {
+        gpsTrackerRef.current = null;
+      }
+    };
+  }, [isMobile]);
+
+  const refreshLocation = useCallback((options = {}) => {
+    gpsTrackerRef.current?.refresh({ forceDetecting: true, ...options });
   }, []);
 
-  useEffect(() => {
-    fetchLocation();
-  }, [fetchLocation]);
-
   // Handle verification from FaceVerificationGate
-  const handleFaceVerified = useCallback(({ person, token }) => {
+  const handleFaceVerified = useCallback(({ person, token, isOffline }) => {
     setVerifiedPerson(person);
     setVerificationToken(token);
+    setActiveFaceToken(!isOffline ? token : null);
     setSelectedIds((prev) => {
       if (prev.includes(person.id)) return prev;
       return [person.id, ...prev];
     });
+    if (!isValidGpsCoords(locationPointRef.current)) {
+      gpsTrackerRef.current?.refresh({ forceDetecting: true });
+    } else {
+      gpsTrackerRef.current?.refresh({ forceDetecting: false });
+    }
   }, []);
 
   // Camera stream handler with robust front/back camera switching & resolution handling
@@ -478,6 +491,10 @@ export default function UserAttendanceScanner({ onSwitchToLogin, isMobile: propI
     const dataUrl = canvas.toDataURL("image/jpeg", 0.65);
     setCapturedPhoto(dataUrl);
 
+    if (!isValidGpsCoords(locationPointRef.current)) {
+      gpsTrackerRef.current?.refresh({ forceDetecting: true });
+    }
+
     // Stop camera stream while previewing
     if (streamRef.current) {
       streamRef.current.getTracks().forEach((track) => track.stop());
@@ -509,6 +526,9 @@ export default function UserAttendanceScanner({ onSwitchToLogin, isMobile: propI
     const reader = new FileReader();
     reader.onload = (event) => {
       setCapturedPhoto(event.target.result);
+      if (!isValidGpsCoords(locationPointRef.current)) {
+        gpsTrackerRef.current?.refresh({ forceDetecting: true });
+      }
       if (streamRef.current) {
         streamRef.current.getTracks().forEach((track) => track.stop());
         setCameraActive(false);
@@ -605,6 +625,19 @@ export default function UserAttendanceScanner({ onSwitchToLogin, isMobile: propI
     });
     setSubmitting(true);
 
+    let resolvedPoint = isValidGpsCoords(locationPointRef.current)
+      ? locationPointRef.current
+      : null;
+    if (gpsTrackerRef.current) {
+      const freshPoint = await gpsTrackerRef.current.getFreshSnapshot({
+        maxAgeMs: 30000,
+        timeoutMs: 3500,
+      });
+      if (isValidGpsCoords(freshPoint)) {
+        resolvedPoint = freshPoint;
+      }
+    }
+
     const results = [];
     for (const person of selectedEmployees) {
       try {
@@ -614,7 +647,7 @@ export default function UserAttendanceScanner({ onSwitchToLogin, isMobile: propI
           settings,
           scanPayload: {
             photoDataUrl: capturedPhoto,
-            point: locationPoint || null,
+            point: resolvedPoint,
             notes: descriptionNote.trim() || null,
             forcedEvent,
             verification_token: verificationToken,
@@ -650,13 +683,14 @@ export default function UserAttendanceScanner({ onSwitchToLogin, isMobile: propI
         errorList,
       });
     } else {
+      const blockedDetail = blockedList.find((b) => b.res?.message)?.res?.message;
       setModalConfig({
         isOpen: true,
         type: "warning",
         title: "Attendance Notice",
         message:
           blockedList.length > 0
-            ? "Selected partner(s) have already recorded attendance for this shift."
+            ? blockedDetail || "Selected partner(s) have already recorded attendance for this shift."
             : "Could not record attendance. Please check network and retry.",
         blockedList,
         errorList,
@@ -681,6 +715,7 @@ export default function UserAttendanceScanner({ onSwitchToLogin, isMobile: propI
     setSelectedIds([]);
     setVerifiedPerson(null);
     setVerificationToken(null);
+    setActiveFaceToken(null);
   };
 
   const formattedTime = now.toLocaleTimeString("en-US", {
@@ -702,6 +737,7 @@ export default function UserAttendanceScanner({ onSwitchToLogin, isMobile: propI
         onVerified={handleFaceVerified}
         locationPoint={locationPoint}
         locationStatus={locationStatus}
+        locationMessage={locationMessage}
         formattedTime={formattedTime}
         formattedDate={formattedDate}
       />
@@ -750,19 +786,60 @@ export default function UserAttendanceScanner({ onSwitchToLogin, isMobile: propI
           </div>
         </div>
 
-        {/* GPS Location badge */}
-        <div className="flex items-center justify-between bg-gray-100 px-3 py-1.5 rounded-lg text-[11px] text-gray-600 border border-gray-200">
-          <span className="flex items-center gap-1">
+        {/* Auto-On Field GPS Proof badge */}
+        <div
+          className={`flex items-center justify-between gap-2 px-3 py-1.5 rounded-lg text-[11px] border transition-colors ${
+            locationStatus === "ok"
+              ? "bg-emerald-50/80 text-emerald-900 border-emerald-200"
+              : locationStatus === "denied"
+              ? "bg-red-50 text-red-700 border-red-200"
+              : "bg-amber-50/80 text-amber-800 border-amber-200"
+          }`}
+        >
+          <span className="flex items-center gap-1.5 min-w-0">
             <FiMapPin
-              className={
-                locationStatus === "ok" ? "text-emerald-600" : "text-amber-500"
-              }
+              className={`shrink-0 ${
+                locationStatus === "ok"
+                  ? "text-emerald-600"
+                  : locationStatus === "denied"
+                  ? "text-red-500"
+                  : "text-amber-500 animate-pulse"
+              }`}
             />
-            <span>{locationPoint || "Detecting GPS coordinates..."}</span>
+            <span className="truncate font-medium">
+              {locationStatus === "ok" && locationPoint
+                ? `${locationPoint}${
+                    locationAccuracy !== null ? ` (±${locationAccuracy}m)` : ""
+                  }`
+                : locationMessage || "Auto-detecting GPS coordinates..."}
+            </span>
           </span>
-          <span className="text-[10px] text-gray-400 uppercase tracking-wider font-semibold">
-            Field GPS Proof
-          </span>
+          <div className="flex items-center gap-1.5 shrink-0">
+            <span
+              className={`text-[10px] uppercase tracking-wider font-bold ${
+                locationStatus === "ok"
+                  ? "text-emerald-700"
+                  : locationStatus === "denied"
+                  ? "text-red-600"
+                  : "text-amber-700"
+              }`}
+            >
+              {locationStatus === "ok" ? "Auto GPS ON" : "Field GPS Proof"}
+            </span>
+            <button
+              type="button"
+              onClick={() => refreshLocation({ forceDetecting: true })}
+              title="Refresh GPS location"
+              aria-label="Refresh GPS location"
+              className="p-1 rounded-md bg-white/80 hover:bg-white border border-black/10 text-gray-600 cursor-pointer active:scale-95 transition-all"
+            >
+              <FiRefreshCw
+                className={`w-3 h-3 ${
+                  locationStatus === "detecting" ? "animate-spin text-amber-600" : ""
+                }`}
+              />
+            </button>
+          </div>
         </div>
 
         {/* Verified Identity Badge */}
@@ -1293,9 +1370,31 @@ export default function UserAttendanceScanner({ onSwitchToLogin, isMobile: propI
                     </span>
                   </div>
 
-                  <p className="text-xs text-gray-500 m-0 pt-2 border-t border-gray-200/60 leading-relaxed">
-                    Store photo and GPS will be recorded as attendance proof.
-                  </p>
+                  <div className="pt-2 border-t border-gray-200/60 flex flex-col gap-1">
+                    <p className="text-xs text-gray-500 m-0 leading-relaxed">
+                      Store photo and GPS will be recorded as attendance proof.
+                    </p>
+                    <div className="flex items-center gap-1.5 text-[11px] font-mono">
+                      <FiMapPin
+                        className={
+                          isValidGpsCoords(locationPoint)
+                            ? "text-emerald-600 shrink-0"
+                            : "text-amber-500 shrink-0"
+                        }
+                      />
+                      <span
+                        className={
+                          isValidGpsCoords(locationPoint)
+                            ? "text-emerald-700 font-semibold"
+                            : "text-amber-700"
+                        }
+                      >
+                        {isValidGpsCoords(locationPoint)
+                          ? locationPoint
+                          : "Acquiring live GPS fix on submit..."}
+                      </span>
+                    </div>
+                  </div>
 
                   {descriptionNote.trim() && (
                     <div className="flex items-start gap-1.5 pt-2 border-t border-gray-200/60 text-xs text-left">

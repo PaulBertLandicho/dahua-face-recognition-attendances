@@ -26,7 +26,7 @@ export function saveOtStatusLocal(personId, dateStr, status) {
   } catch (e) {}
 }
 
-export function getDetailedAttendance(attendance, personId, settings = {}) {
+export function getDetailedAttendance(attendance, personId, settings = {}, departmentRates = null, person = null) {
   // Group attendance by date
   const byDate = {};
   attendance
@@ -57,11 +57,32 @@ export function getDetailedAttendance(attendance, personId, settings = {}) {
       byDate[dateStr].push({ ...r, dt });
     });
 
-  const morningStart = settings.morning_start || "08:00";
+  // Resolve department-specific workhours if applicable
+  const empDept = String(
+    person?.department ||
+    (Array.isArray(attendance) ? attendance.find((r) => r && r.department)?.department : "") ||
+    attendance?.[0]?.department ||
+    ""
+  ).trim().toLowerCase();
+  const isUtility = empDept === "utility";
+  const deptRate = Array.isArray(departmentRates)
+    ? departmentRates.find((d) => String(d.department || "").trim().toLowerCase() === empDept)
+    : null;
+
+  const morningStart = deptRate?.has_custom_workhours && deptRate.morning_start
+    ? String(deptRate.morning_start).slice(0, 5)
+    : (isUtility ? "07:00" : (settings.morning_start || "08:00"));
+
+  const onTimeUntil = deptRate?.has_custom_workhours && deptRate.on_time_until
+    ? String(deptRate.on_time_until).slice(0, 5)
+    : (isUtility ? "08:00" : null);
+
   const morningLateMinutes = Number(
     settings.morning_late_minutes ?? settings.morning_grace_minutes ?? 0
   );
-  const afternoonStart = settings.afternoon_start || "13:00";
+  const afternoonStart = deptRate?.has_custom_workhours && deptRate.afternoon_start
+    ? String(deptRate.afternoon_start).slice(0, 5)
+    : (settings.afternoon_start || "13:00");
   const afternoonLateMinutes = Number(
     settings.afternoon_late_minutes ?? settings.afternoon_grace_minutes ?? 0
   );
@@ -70,13 +91,20 @@ export function getDetailedAttendance(attendance, personId, settings = {}) {
     const mins = dt.getHours() * 60 + dt.getMinutes();
     const [h, m] = morningStart.split(":").map(Number);
     const startMins = h * 60 + m;
+    if (onTimeUntil) {
+      return mins >= 3 * 60 && mins < startMins;
+    }
     return mins >= 3 * 60 && mins <= 7 * 60 + 30 && mins < startMins;
   }
 
   function isLate(dt, session) {
-    // Returns true if dt is after (start + late_minutes)
     const mins = dt.getHours() * 60 + dt.getMinutes();
     if (session === "morning") {
+      if (onTimeUntil) {
+        const [uh, um] = onTimeUntil.split(":").map(Number);
+        const untilMins = uh * 60 + um;
+        return mins > untilMins + morningLateMinutes;
+      }
       const [h, m] = morningStart.split(":").map(Number);
       const startMins = h * 60 + m;
       return mins > startMins + morningLateMinutes;
@@ -90,6 +118,11 @@ export function getDetailedAttendance(attendance, personId, settings = {}) {
   function getMinutesLate(dt, session) {
     const mins = dt.getHours() * 60 + dt.getMinutes();
     if (session === "morning") {
+      if (onTimeUntil) {
+        const [uh, um] = onTimeUntil.split(":").map(Number);
+        const untilMins = uh * 60 + um;
+        return Math.max(1, mins - untilMins);
+      }
       const [h, m] = morningStart.split(":").map(Number);
       const startMins = h * 60 + m;
       return Math.max(1, mins - startMins);

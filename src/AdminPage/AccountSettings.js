@@ -12,6 +12,7 @@ import {
   FiSave,
 } from "react-icons/fi";
 import { updateUserProfile } from "../utils/dahuaApi";
+import { updateStoredSession } from "../utils/authSession";
 import { supabase } from "../mysqlClient";
 
 export default function AccountSettings() {
@@ -64,13 +65,23 @@ export default function AccountSettings() {
     }
 
     // If attempting to change password
-    const isChangingPassword = Boolean(newPassword && newPassword.trim().length > 0);
+    const isChangingPassword = newPassword.length > 0;
     if (isChangingPassword) {
-      if (newPassword.length < 4) {
+      if (newPassword.trim().length < 8) {
         Swal.fire({
           icon: "warning",
           title: "Weak Password",
-          text: "New password must be at least 4 characters long.",
+          text: "New password must be at least 8 non-space characters long.",
+          customClass: { popup: "!rounded-2xl font-sans" },
+        });
+        return;
+      }
+
+      if (new TextEncoder().encode(newPassword).length > 72) {
+        Swal.fire({
+          icon: "warning",
+          title: "Password Too Long",
+          text: "New password must not exceed 72 bytes.",
           customClass: { popup: "!rounded-2xl font-sans" },
         });
         return;
@@ -108,17 +119,14 @@ export default function AccountSettings() {
         newPassword: isChangingPassword ? newPassword : undefined,
       });
 
-      if (res?.user) {
-        // Update local session
-        const stored = localStorage.getItem("sb-session");
-        if (stored) {
-          try {
-            const parsed = JSON.parse(stored);
-            parsed.user = { ...parsed.user, ...res.user };
-            localStorage.setItem("sb-session", JSON.stringify(parsed));
-          } catch (e) {}
+      if (res?.access_token || res?.user) {
+        updateStoredSession({
+          user: res.user,
+          access_token: res.access_token,
+        });
+        if (res.user) {
+          setCurrentUser(res.user);
         }
-        setCurrentUser(res.user);
       }
 
       Swal.fire({
@@ -275,8 +283,8 @@ export default function AccountSettings() {
                     type={showNew ? "text" : "password"}
                     value={newPassword}
                     onChange={(e) => setNewPassword(e.target.value)}
-                    placeholder="Enter new password (min. 4 characters)"
-                    minLength={4}
+                    placeholder="Enter new password (min. 8 characters)"
+                    minLength={8}
                     className="flex-1 py-2 text-sm bg-transparent border-none outline-none text-gray-900"
                   />
                   <button
@@ -301,7 +309,7 @@ export default function AccountSettings() {
                     value={confirmPassword}
                     onChange={(e) => setConfirmPassword(e.target.value)}
                     placeholder="Confirm new password"
-                    minLength={4}
+                    minLength={8}
                     className="flex-1 py-2 text-sm bg-transparent border-none outline-none text-gray-900"
                   />
                   <button

@@ -1,12 +1,20 @@
 // src/supabaseClient.js
 // Custom MySQL Client Adapter to completely replace Supabase
+import {
+  getApiBase,
+  getStoredSession,
+  getStoredAccessToken,
+  saveStoredSession,
+  updateStoredSession,
+  clearStoredSession,
+  subscribeAuthStateChange,
+  emitAuthStateChange,
+  notifyAuthExpired,
+  setActiveFaceToken,
+  getActiveFaceToken,
+} from "./utils/authSession";
 
-const API_BASE =
-  typeof process !== "undefined" &&
-  process.env &&
-  process.env.REACT_APP_BACKEND_URL
-    ? String(process.env.REACT_APP_BACKEND_URL).trim().replace(/\/$/, "")
-    : "";
+const API_BASE = getApiBase();
 
 async function safeJsonParse(res) {
   const text = await res.text().catch(() => "");
@@ -159,9 +167,20 @@ class QueryBuilder {
 
   async execute() {
     try {
+      const staffToken = getStoredAccessToken();
+      const faceToken = getActiveFaceToken();
+      const headers = { "Content-Type": "application/json" };
+      if (staffToken) {
+        headers.Authorization = `Bearer ${staffToken}`;
+      }
+      if (faceToken) {
+        headers["X-Face-Token"] = faceToken;
+      }
+
       const res = await fetch(`${API_BASE}/api/db/query`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers,
+        credentials: "omit",
         body: JSON.stringify({
           action: this.action,
           table: this.table,
@@ -179,6 +198,9 @@ class QueryBuilder {
       });
 
       const parsed = await safeJsonParse(res);
+      if (res.status === 401 && staffToken) {
+        notifyAuthExpired(parsed?.error?.message || "Your session has expired. Please sign in again.");
+      }
       if (!res.ok || parsed.error) {
         return { data: null, error: parsed.error || { message: `Request failed with status ${res.status}` } };
       }
@@ -194,14 +216,13 @@ class QueryBuilder {
   }
 }
 
-const authListeners = new Set();
-
 const auth = {
   async signInWithPassword({ email, password }) {
     try {
       const res = await fetch(`${API_BASE}/api/auth/login`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        credentials: "omit",
         body: JSON.stringify({ email, password }),
       });
       const data = await safeJsonParse(res);
@@ -209,10 +230,8 @@ const auth = {
         return { data: null, error: data.error || { message: "Invalid login credentials." } };
       }
       if (data.data?.session) {
-        localStorage.setItem("sb-session", JSON.stringify(data.data.session));
-        authListeners.forEach((cb) => {
-          try { cb("SIGNED_IN", data.data.session); } catch (e) {}
-        });
+        saveStoredSession(data.data.session);
+        emitAuthStateChange("SIGNED_IN", data.data.session);
       }
       return { data: data.data, error: null };
     } catch (err) {
@@ -222,11 +241,45 @@ const auth = {
 
   async getSession() {
     try {
-      const stored = localStorage.getItem("sb-session");
-      const session = stored ? JSON.parse(stored) : null;
+      const session = getStoredSession();
+      if (!session || typeof session.access_token !== "string" || !session.access_token.trim()) {
+        if (session) clearStoredSession();
+        return { data: { session: null }, error: null };
+      }
       return { data: { session }, error: null };
     } catch (err) {
       return { data: { session: null }, error: null };
+    }
+  },
+
+  async getVerifiedSession() {
+    const stored = getStoredSession();
+    const token = getStoredAccessToken();
+    if (!stored || !token) {
+      if (stored) clearStoredSession();
+      return { data: { session: null }, error: null };
+    }
+
+    try {
+      const res = await fetch(`${API_BASE}/api/auth/session`, {
+        method: "GET",
+        headers: { Authorization: `Bearer ${token}` },
+        credentials: "omit",
+      });
+      const parsed = await safeJsonParse(res);
+      if (res.status === 401) {
+        notifyAuthExpired(parsed?.error?.message || "Session expired or revoked.");
+        return { data: { session: null }, error: parsed.error || { message: "Session expired" } };
+      }
+      if (res.ok && parsed.data?.user) {
+        const refreshed = updateStoredSession({ user: parsed.data.user });
+        return { data: { session: refreshed }, error: null };
+      }
+      return { data: { session: stored }, error: parsed.error || null };
+    } catch (err) {
+      // Preserve locally cached session only during transient offline/network interruptions;
+      // server still enforces valid Bearer JWT on all protected endpoints.
+      return { data: { session: stored }, error: { message: err.message || "Network error" } };
     }
   },
 
@@ -236,19 +289,25 @@ const auth = {
   },
 
   async signOut() {
-    localStorage.removeItem("sb-session");
-    authListeners.forEach((cb) => {
-      try { cb("SIGNED_OUT", null); } catch (e) {}
-    });
+    const token = getStoredAccessToken();
+    clearStoredSession();
+    emitAuthStateChange("SIGNED_OUT", null);
+    if (token) {
+      fetch(`${API_BASE}/api/auth/logout`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}` },
+        credentials: "omit",
+      }).catch(() => {});
+    }
     return { error: null };
   },
 
   onAuthStateChange(callback) {
-    authListeners.add(callback);
+    const unsubscribe = subscribeAuthStateChange(callback);
     return {
       data: {
         subscription: {
-          unsubscribe: () => authListeners.delete(callback),
+          unsubscribe,
         },
       },
     };
@@ -282,3 +341,6 @@ export const supabase = {
 export function subscribeToTable({ table = 'attendance', callback }) {
   return channelMock;
 }
+
+export { setActiveFaceToken, getActiveFaceToken };
+

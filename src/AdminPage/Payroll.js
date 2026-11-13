@@ -54,18 +54,33 @@ export function calculatePayroll(
     if (!otHourlyRate && dailyRate) otHourlyRate = dailyRate / 8;
 
     let otHours = 0;
-    const morningStart = settings.morning_start || "08:00";
-    const [startHour, startMinute] = morningStart.split(":").map(Number);
-    const startTotal = (startHour || 8) * 60 + (startMinute || 0);
+    const isUtility = String(person.department || "").trim().toLowerCase() === "utility";
+    const parseTimeStr = (t) => {
+      if (!t) return null;
+      const parts = String(t).split(":").map(Number);
+      return (parts[0] || 0) * 60 + (parts[1] || 0);
+    };
 
-    const afternoonEnd = settings.afternoon_end || "17:00";
-    const [endHour, endMinute] = afternoonEnd.split(":").map(Number);
-    const endTotal = (endHour || 17) * 60 + (endMinute || 0);
+    const morningStart = deptRate?.has_custom_workhours && deptRate.morning_start
+      ? deptRate.morning_start
+      : (isUtility ? "07:00" : (settings.morning_start || "08:00"));
+    const startTotal = parseTimeStr(morningStart) || (isUtility ? 420 : 480);
+
+    const onTimeUntil = deptRate?.has_custom_workhours && deptRate.on_time_until
+      ? deptRate.on_time_until
+      : (isUtility ? "08:00" : null);
+    const onTimeUntilTotal = onTimeUntil ? parseTimeStr(onTimeUntil) : (isUtility ? 480 : null);
+
+    const afternoonEnd = deptRate?.has_custom_workhours && deptRate.afternoon_end
+      ? deptRate.afternoon_end
+      : (settings.afternoon_end || "17:00");
+    const endTotal = parseTimeStr(afternoonEnd) || 1020;
+
     const afternoonGrace = Number.isFinite(Number(settings.afternoon_grace_minutes))
       ? Number(settings.afternoon_grace_minutes)
-      : 0;
+      : 30;
 
-    // 1. Early-in OT: 03:00 AM - 07:00 AM only (only when approved)
+    // 1. Early-in OT: punch before morning start buffer (7:00-8:00 is on time, no early in OT)
     attendance
       .filter(
         (a) =>
@@ -76,12 +91,21 @@ export function calculatePayroll(
       .forEach((a) => {
         const dt = new Date(a.device_time);
         const inTotal = dt.getHours() * 60 + dt.getMinutes();
-        if (inTotal >= 3 * 60 && inTotal <= 7 * 60 + 30 && inTotal < startTotal) {
-          otHours += (startTotal - inTotal) / 60;
+        if (inTotal >= 3 * 60) {
+          if (onTimeUntilTotal !== null) {
+            // Within on-time window (e.g. 7:00 - 8:00): NO early-in OT
+            if (inTotal >= startTotal && inTotal <= onTimeUntilTotal) {
+              // 0 OT
+            } else if (inTotal < startTotal - 30) {
+              otHours += (startTotal - inTotal) / 60;
+            }
+          } else if (inTotal <= 7 * 60 + 30 && inTotal < startTotal) {
+            otHours += (startTotal - inTotal) / 60;
+          }
         }
       });
 
-    // 2. Afternoon Out OT (past afternoonEnd + afternoonGrace, e.g. 5:01 PM when grace is 0, only when approved)
+    // 2. Afternoon Out OT (past afternoonEnd, rendered when 5:30 above, only when approved)
     attendance
       .filter(
         (a) =>
@@ -95,7 +119,7 @@ export function calculatePayroll(
         if (outTotal < 3 * 60) {
           outTotal += 24 * 60;
         }
-        if (outTotal > endTotal) {
+        if (outTotal >= 17 * 60 + 30 && outTotal > endTotal) {
           const otMins = outTotal - endTotal;
           if (otMins > afternoonGrace) {
             otHours += otMins / 60;
@@ -132,6 +156,13 @@ export function calculatePayroll(
       holidayDays: 0,
       holidayPay: 0,
       lateCount: 0, // will be set in PayrollPage
+      settings: {
+        ...settings,
+        morning_start: morningStart,
+        afternoon_end: afternoonEnd,
+        afternoon_grace_minutes: afternoonGrace,
+        on_time_until: onTimeUntil,
+      },
     };
   });
 }

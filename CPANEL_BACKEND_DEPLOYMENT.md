@@ -25,6 +25,12 @@
 In `/public_html/api/.env.local`, set:
 
 ```env
+# Environment Mode & Required Signing Secrets (MUST be unique >=32-byte random hex strings)
+NODE_ENV=production
+AUTH_TOKEN_SECRET=<replace-with-random-64-hex-chars>
+FACE_TOKEN_SECRET=<replace-with-different-random-64-hex-chars>
+SYNC_SERVICE_TOKEN=<replace-with-random-64-hex-chars>
+
 # Database (localhost because backend and MySQL are on the same cPanel server)
 DB_HOST=localhost
 DB_PORT=3306
@@ -110,11 +116,12 @@ Your backend server now includes **automatic 60-day photo retention**:
 
 ### Manual Storage & Prune Endpoints
 
-You can also trigger or inspect storage at any time via API or browser:
+All maintenance endpoints require an authenticated `admin` Bearer JWT (`Authorization: Bearer <admin-jwt>`):
 
 * **Check Storage Stats**:
   ```bash
-  curl https://attendance.multifactors-sales.com/api/api/maintenance/storage-stats
+  curl -H "Authorization: Bearer <admin-jwt>" \
+    https://attendance.multifactors-sales.com/api/api/maintenance/storage-stats
   ```
   Returns:
   ```json
@@ -128,12 +135,14 @@ You can also trigger or inspect storage at any time via API or browser:
 
 * **Manually Prune Old Photos (e.g., older than 60 days)**:
   ```bash
-  curl -X POST https://attendance.multifactors-sales.com/api/api/maintenance/prune-photos
+  curl -X POST -H "Authorization: Bearer <admin-jwt>" \
+    https://attendance.multifactors-sales.com/api/api/maintenance/prune-photos
   ```
 
 * **Reclaim Free Space in MySQL (OPTIMIZE TABLE)**:
   ```bash
-  curl -X POST https://attendance.multifactors-sales.com/api/api/maintenance/optimize-tables
+  curl -X POST -H "Authorization: Bearer <admin-jwt>" \
+    https://attendance.multifactors-sales.com/api/api/maintenance/optimize-tables
   ```
 
 ---
@@ -148,3 +157,44 @@ You can also trigger or inspect storage at any time via API or browser:
    ```
    *(With `.env.production` having `GENERATE_SOURCEMAP=false`, this produces a clean ~15 MB production bundle without heavy `.map` files).*
 2. Upload the **contents** of your local `build/` folder directly to `/public_html` (so `index.html` sits directly inside `/public_html/index.html`).
+
+---
+
+## 5. Password Security & Bcrypt Migration
+
+Passwords in `persons.password` are hashed with `bcryptjs` (`BCRYPT_SALT_ROUNDS`, default `12`, allowed range `10`–`14`).
+
+1. After uploading updated `server.js` and `cpanel-backend/package.json` to `~/public_html/api`, run `npm install --omit=dev --no-audit --no-fund` in cPanel Terminal and restart the Node.js App.
+2. Hash any existing plaintext passwords in MySQL using the migration script (run locally with remote `.env.local` or upload temporarily and remove after use):
+   ```bash
+   node scripts/hashExistingPasswords.js --dry-run
+   node scripts/hashExistingPasswords.js --apply
+   ```
+3. Legacy plaintext accounts are transparently upgraded to bcrypt on their next successful login by default. Once all accounts have been migrated via step 2, add `ALLOW_LEGACY_PLAINTEXT_UPGRADE=false` to `/public_html/api/.env.local` and restart the Node.js App.
+
+---
+
+## 6. Server-Side JWT Auth Secrets & LiteSpeed `.htaccess` Header Pass-Through
+
+In `NODE_ENV=production`, `server.js` fails closed if either `AUTH_TOKEN_SECRET` or `FACE_TOKEN_SECRET` is missing:
+
+1. Generate two distinct 32-byte random hex secrets and set them in `/public_html/api/.env.local`:
+   ```bash
+   node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
+   ```
+   * `AUTH_TOKEN_SECRET` signs staff (`admin` / `secretary`) Bearer session JWTs (`AUTH_TOKEN_TTL_SECONDS`, default 12 hours).
+   * `FACE_TOKEN_SECRET` signs short-lived `/scan` face verification tokens (`FACE_TOKEN_TTL_SECONDS`, default 180 seconds).
+   * `SYNC_SERVICE_TOKEN` (and optional legacy `ATTENDANCE_IMPORT_TOKEN`) authorizes automated LAN sync daemons (`/api/attendance/import`, `/api/dahua/import`, `/api/users/import`, `/api/dahua/push-users`, `/api/dahua/pending-deletions*`) via `X-Sync-Token`, `X-Attendance-Import-Token`, or `Authorization: Bearer <token>`. If unset, only logged-in `admin` JWTs may call those endpoints.
+
+2. **LiteSpeed / Apache `Authorization` Header Forwarding**:
+   cPanel / LiteSpeed proxies sometimes strip incoming `Authorization` headers before forwarding requests to Phusion Passenger unless explicitly passed through. Ensure `/public_html/.htaccess` (and/or `/public_html/api/.htaccess`) includes:
+   ```apache
+   <IfModule mod_rewrite.c>
+     RewriteEngine On
+     RewriteCond %{HTTP:Authorization} .
+     RewriteRule .* - [E=HTTP_AUTHORIZATION:%{HTTP:Authorization}]
+   </IfModule>
+   ```
+   *(If LiteSpeed still restricts `Authorization`, `server.js` also accepts `X-Auth-Token` as a fallback header while standard frontend requests send `Authorization: Bearer <token>`.)*
+
+

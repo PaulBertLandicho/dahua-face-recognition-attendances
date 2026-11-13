@@ -7,6 +7,7 @@ const https = require("https");
 const crypto = require("crypto");
 const path = require("path");
 const fs = require("fs");
+const bcrypt = require("bcryptjs");
 const mysql = require("mysql2/promise");
 
 let ffmpeg = null;
@@ -31,12 +32,33 @@ try {
   console.warn("compression package not loaded:", e.message);
 }
 
-app.use(cors());
+app.use(cors({
+  origin: true,
+  methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
+  allowedHeaders: [
+    "Content-Type",
+    "Authorization",
+    "X-Auth-Token",
+    "X-Face-Token",
+    "X-Attendance-Import-Token",
+    "X-Sync-Token",
+  ],
+}));
 app.use(express.json({ limit: "50mb" }));
 app.use(express.urlencoded({ extended: true, limit: "50mb" }));
 
 const PORT = Number(process.env.PORT || 4000);
 const STREAM_STALE_MS = 5000;
+
+// Password Hashing Configuration (bcrypt via pure-JS bcryptjs for cPanel compatibility)
+const BCRYPT_SALT_ROUNDS = Math.min(
+  14,
+  Math.max(10, Number(process.env.BCRYPT_SALT_ROUNDS || 12) || 12)
+);
+const BCRYPT_HASH_REGEX = /^\$2[aby]\$\d{2}\$[./A-Za-z0-9]{53}$/;
+const ALLOW_LEGACY_PLAINTEXT_UPGRADE =
+  String(process.env.ALLOW_LEGACY_PLAINTEXT_UPGRADE ?? "true").toLowerCase() !== "false";
+const MIN_PASSWORD_LENGTH = Math.max(4, Number(process.env.MIN_PASSWORD_LENGTH || 8) || 8);
 
 // Dahua Configuration
 const RTSP_URL = process.env.DAHUA_RTSP_URL;
@@ -167,7 +189,7 @@ async function recordDeviceSyncStatus({ type, success, error = null }) {
   }
 }
 
-// Ensure employer share columns exist in department_rates
+// Ensure employer share and custom attendance workhour columns exist in department_rates
 (async () => {
   try {
     const [cols] = await pool.query("SHOW COLUMNS FROM department_rates");
@@ -181,8 +203,38 @@ async function recordDeviceSyncStatus({ type, success, error = null }) {
     if (!colNames.includes("philhealth_employer")) {
       await pool.query("ALTER TABLE department_rates ADD COLUMN philhealth_employer DECIMAL(10,2) NOT NULL DEFAULT 0.00 AFTER pag_ibig_employer");
     }
+    if (!colNames.includes("has_custom_workhours")) {
+      await pool.query("ALTER TABLE department_rates ADD COLUMN has_custom_workhours TINYINT(1) NOT NULL DEFAULT 0 AFTER special_holiday_rate");
+    }
+    if (!colNames.includes("morning_start")) {
+      await pool.query("ALTER TABLE department_rates ADD COLUMN morning_start TIME NULL DEFAULT NULL AFTER has_custom_workhours");
+    }
+    if (!colNames.includes("morning_end")) {
+      await pool.query("ALTER TABLE department_rates ADD COLUMN morning_end TIME NULL DEFAULT NULL AFTER morning_start");
+    }
+    if (!colNames.includes("afternoon_start")) {
+      await pool.query("ALTER TABLE department_rates ADD COLUMN afternoon_start TIME NULL DEFAULT NULL AFTER morning_end");
+    }
+    if (!colNames.includes("afternoon_end")) {
+      await pool.query("ALTER TABLE department_rates ADD COLUMN afternoon_end TIME NULL DEFAULT NULL AFTER afternoon_start");
+    }
+    if (!colNames.includes("on_time_until")) {
+      await pool.query("ALTER TABLE department_rates ADD COLUMN on_time_until TIME NULL DEFAULT NULL AFTER afternoon_end");
+    }
+
+    // Initialize UTILITY department with specific attendance work hours (Time-in 7:00 AM, 7:00-8:00 on-time badge, Time-out 5:00 PM)
+    await pool.query(`
+      UPDATE department_rates
+         SET has_custom_workhours = 1,
+             morning_start = COALESCE(morning_start, '07:00:00'),
+             morning_end = COALESCE(morning_end, '11:59:00'),
+             afternoon_start = COALESCE(afternoon_start, '13:00:00'),
+             afternoon_end = COALESCE(afternoon_end, '17:00:00'),
+             on_time_until = COALESCE(on_time_until, '08:00:00')
+       WHERE department = 'UTILITY'
+    `);
   } catch (e) {
-    console.warn("Employer share columns check warning:", e.message);
+    console.warn("Department rates workhour columns check warning:", e.message);
   }
 })();
 
@@ -253,9 +305,32 @@ async function recordDeviceSyncStatus({ type, success, error = null }) {
   } catch (e) {
     console.warn("payroll_periods waive columns check warning:", e.message);
   }
+  try {
+    const [personCols] = await pool.query("SHOW COLUMNS FROM persons");
+    const personColNames = (personCols || []).map((c) => c.Field);
+    if (!personColNames.includes("token_version")) {
+      await pool.query("ALTER TABLE persons ADD COLUMN token_version INT NOT NULL DEFAULT 1");
+    }
+  } catch (e) {
+    console.warn("persons token_version check warning:", e.message);
+  }
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS face_token_uses (
+        jti VARCHAR(64) NOT NULL,
+        verifier_pid VARCHAR(191) NOT NULL,
+        target_person_id VARCHAR(191) NOT NULL,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (jti, target_person_id),
+        INDEX idx_face_token_uses_created (created_at)
+      )
+    `);
+  } catch (e) {
+    console.warn("face_token_uses table init warning:", e.message);
+  }
 })();
 
-// Ensure attendance slot triggers allow early-in scans before morning_start and auto-calculate status
+// Ensure attendance slot triggers allow early-in scans before morning_start and auto-calculate status with department-specific workhour support
 (async () => {
   try {
     await pool.query("DROP TRIGGER IF EXISTS attendance_before_insert_slot");
@@ -270,7 +345,17 @@ async function recordDeviceSyncStatus({ type, success, error = null }) {
         DECLARE configured_afternoon_end TIME DEFAULT '17:00:00';
         DECLARE configured_morning_grace INT DEFAULT 0;
         DECLARE configured_afternoon_grace INT DEFAULT 0;
+        DECLARE configured_on_time_until TIME DEFAULT NULL;
 
+        DECLARE emp_dept VARCHAR(191) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT NEW.department;
+        DECLARE dept_m_start TIME DEFAULT NULL;
+        DECLARE dept_m_end TIME DEFAULT NULL;
+        DECLARE dept_a_start TIME DEFAULT NULL;
+        DECLARE dept_a_end TIME DEFAULT NULL;
+        DECLARE dept_on_time_until TIME DEFAULT NULL;
+        DECLARE dept_has_custom INT DEFAULT 0;
+
+        -- 1. Load global settings
         SELECT COALESCE(morning_start, '08:00:00'),
                COALESCE(morning_end, '11:59:00'),
                COALESCE(afternoon_start, '13:00:00'),
@@ -279,6 +364,40 @@ async function recordDeviceSyncStatus({ type, success, error = null }) {
                COALESCE(afternoon_grace_minutes, 0)
           INTO configured_morning_start, configured_morning_end, configured_afternoon_start, configured_afternoon_end, configured_morning_grace, configured_afternoon_grace
           FROM settings ORDER BY id LIMIT 1;
+
+        -- 2. Resolve department if not specified on the record
+        IF (emp_dept IS NULL OR emp_dept = '') AND NEW.person_id IS NOT NULL THEN
+          SELECT department INTO emp_dept FROM persons WHERE id = NEW.person_id LIMIT 1;
+          IF emp_dept IS NOT NULL AND (NEW.department IS NULL OR NEW.department = '') THEN
+            SET NEW.department = emp_dept;
+          END IF;
+        END IF;
+
+        -- 3. Check for department-specific attendance workhours (e.g. UTILITY: 7:00 AM start, 7:00-8:00 AM on-time)
+        IF emp_dept IS NOT NULL AND emp_dept != '' THEN
+          SELECT morning_start, morning_end, afternoon_start, afternoon_end, on_time_until, COALESCE(has_custom_workhours, 0)
+            INTO dept_m_start, dept_m_end, dept_a_start, dept_a_end, dept_on_time_until, dept_has_custom
+            FROM department_rates
+           WHERE department = emp_dept LIMIT 1;
+
+          IF dept_has_custom = 1 OR dept_m_start IS NOT NULL THEN
+            IF dept_m_start IS NOT NULL THEN
+              SET configured_morning_start = dept_m_start;
+            END IF;
+            IF dept_m_end IS NOT NULL THEN
+              SET configured_morning_end = dept_m_end;
+            END IF;
+            IF dept_a_start IS NOT NULL THEN
+              SET configured_afternoon_start = dept_a_start;
+            END IF;
+            IF dept_a_end IS NOT NULL THEN
+              SET configured_afternoon_end = dept_a_end;
+            END IF;
+            IF dept_on_time_until IS NOT NULL THEN
+              SET configured_on_time_until = dept_on_time_until;
+            END IF;
+          END IF;
+        END IF;
 
         IF TIME(NEW.device_time) < '03:00:00' THEN
           SET NEW.event = 'time-out';
@@ -303,12 +422,24 @@ async function recordDeviceSyncStatus({ type, success, error = null }) {
           SET NEW.attendance_slot = 'morning_time_in';
           SET NEW.attendance_work_date = IF(NEW.device_time IS NULL, NULL, DATE(NEW.device_time));
           IF NEW.status IS NULL OR NEW.status = '' OR NEW.status = 'present' OR NEW.status = 'on-time' THEN
-            IF TIME(NEW.device_time) <= '07:30:59' AND TIME(NEW.device_time) < configured_morning_start THEN
-              SET NEW.status = 'early-in';
-            ELSEIF TIME(NEW.device_time) < ADDTIME(configured_morning_start, SEC_TO_TIME((configured_morning_grace + 1) * 60)) THEN
-              SET NEW.status = 'on-time';
+            IF configured_on_time_until IS NOT NULL THEN
+              -- Department-specific on-time window (e.g. UTILITY: 7:00 - 8:00 AM)
+              IF TIME(NEW.device_time) < configured_morning_start THEN
+                SET NEW.status = 'early-in';
+              ELSEIF TIME(NEW.device_time) <= ADDTIME(configured_on_time_until, SEC_TO_TIME((configured_morning_grace + 1) * 60 - 1)) THEN
+                SET NEW.status = 'on-time';
+              ELSE
+                SET NEW.status = 'late';
+              END IF;
             ELSE
-              SET NEW.status = 'late';
+              -- Global settings
+              IF TIME(NEW.device_time) <= '07:30:59' AND TIME(NEW.device_time) < configured_morning_start THEN
+                SET NEW.status = 'early-in';
+              ELSEIF TIME(NEW.device_time) < ADDTIME(configured_morning_start, SEC_TO_TIME((configured_morning_grace + 1) * 60)) THEN
+                SET NEW.status = 'on-time';
+              ELSE
+                SET NEW.status = 'late';
+              END IF;
             END IF;
           END IF;
         ELSE
@@ -330,7 +461,17 @@ async function recordDeviceSyncStatus({ type, success, error = null }) {
         DECLARE configured_afternoon_end TIME DEFAULT '17:00:00';
         DECLARE configured_morning_grace INT DEFAULT 0;
         DECLARE configured_afternoon_grace INT DEFAULT 0;
+        DECLARE configured_on_time_until TIME DEFAULT NULL;
 
+        DECLARE emp_dept VARCHAR(191) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT NEW.department;
+        DECLARE dept_m_start TIME DEFAULT NULL;
+        DECLARE dept_m_end TIME DEFAULT NULL;
+        DECLARE dept_a_start TIME DEFAULT NULL;
+        DECLARE dept_a_end TIME DEFAULT NULL;
+        DECLARE dept_on_time_until TIME DEFAULT NULL;
+        DECLARE dept_has_custom INT DEFAULT 0;
+
+        -- 1. Load global settings
         SELECT COALESCE(morning_start, '08:00:00'),
                COALESCE(morning_end, '11:59:00'),
                COALESCE(afternoon_start, '13:00:00'),
@@ -339,6 +480,40 @@ async function recordDeviceSyncStatus({ type, success, error = null }) {
                COALESCE(afternoon_grace_minutes, 0)
           INTO configured_morning_start, configured_morning_end, configured_afternoon_start, configured_afternoon_end, configured_morning_grace, configured_afternoon_grace
           FROM settings ORDER BY id LIMIT 1;
+
+        -- 2. Resolve department if not specified on the record
+        IF (emp_dept IS NULL OR emp_dept = '') AND NEW.person_id IS NOT NULL THEN
+          SELECT department INTO emp_dept FROM persons WHERE id = NEW.person_id LIMIT 1;
+          IF emp_dept IS NOT NULL AND (NEW.department IS NULL OR NEW.department = '') THEN
+            SET NEW.department = emp_dept;
+          END IF;
+        END IF;
+
+        -- 3. Check for department-specific attendance workhours (e.g. UTILITY: 7:00 AM start, 7:00-8:00 AM on-time)
+        IF emp_dept IS NOT NULL AND emp_dept != '' THEN
+          SELECT morning_start, morning_end, afternoon_start, afternoon_end, on_time_until, COALESCE(has_custom_workhours, 0)
+            INTO dept_m_start, dept_m_end, dept_a_start, dept_a_end, dept_on_time_until, dept_has_custom
+            FROM department_rates
+           WHERE department = emp_dept LIMIT 1;
+
+          IF dept_has_custom = 1 OR dept_m_start IS NOT NULL THEN
+            IF dept_m_start IS NOT NULL THEN
+              SET configured_morning_start = dept_m_start;
+            END IF;
+            IF dept_m_end IS NOT NULL THEN
+              SET configured_morning_end = dept_m_end;
+            END IF;
+            IF dept_a_start IS NOT NULL THEN
+              SET configured_afternoon_start = dept_a_start;
+            END IF;
+            IF dept_a_end IS NOT NULL THEN
+              SET configured_afternoon_end = dept_a_end;
+            END IF;
+            IF dept_on_time_until IS NOT NULL THEN
+              SET configured_on_time_until = dept_on_time_until;
+            END IF;
+          END IF;
+        END IF;
 
         IF TIME(NEW.device_time) < '03:00:00' THEN
           SET NEW.event = 'time-out';
@@ -363,12 +538,24 @@ async function recordDeviceSyncStatus({ type, success, error = null }) {
           SET NEW.attendance_slot = 'morning_time_in';
           SET NEW.attendance_work_date = IF(NEW.device_time IS NULL, NULL, DATE(NEW.device_time));
           IF NEW.status IS NULL OR NEW.status = '' OR NEW.status = OLD.status OR OLD.event != 'time-in' OR NEW.status = 'present' OR NEW.status = 'on-time' THEN
-            IF TIME(NEW.device_time) <= '07:30:59' AND TIME(NEW.device_time) < configured_morning_start THEN
-              SET NEW.status = 'early-in';
-            ELSEIF TIME(NEW.device_time) < ADDTIME(configured_morning_start, SEC_TO_TIME((configured_morning_grace + 1) * 60)) THEN
-              SET NEW.status = 'on-time';
+            IF configured_on_time_until IS NOT NULL THEN
+              -- Department-specific on-time window (e.g. UTILITY: 7:00 - 8:00 AM)
+              IF TIME(NEW.device_time) < configured_morning_start THEN
+                SET NEW.status = 'early-in';
+              ELSEIF TIME(NEW.device_time) <= ADDTIME(configured_on_time_until, SEC_TO_TIME((configured_morning_grace + 1) * 60 - 1)) THEN
+                SET NEW.status = 'on-time';
+              ELSE
+                SET NEW.status = 'late';
+              END IF;
             ELSE
-              SET NEW.status = 'late';
+              -- Global settings
+              IF TIME(NEW.device_time) <= '07:30:59' AND TIME(NEW.device_time) < configured_morning_start THEN
+                SET NEW.status = 'early-in';
+              ELSEIF TIME(NEW.device_time) < ADDTIME(configured_morning_start, SEC_TO_TIME((configured_morning_grace + 1) * 60)) THEN
+                SET NEW.status = 'on-time';
+              ELSE
+                SET NEW.status = 'late';
+              END IF;
             END IF;
           END IF;
         ELSE
@@ -1184,12 +1371,352 @@ async function getDahuaUsersViaConnector(requestedUserIds = null) {
 }
 
 // ==========================================
+// PASSWORD HASHING & AUTH HELPERS
+// ==========================================
+
+/** Return true if value is already a standard bcrypt ($2a$/$2b$/$2y$) hash. */
+function isBcryptHash(value) {
+  return typeof value === "string" && BCRYPT_HASH_REGEX.test(value);
+}
+
+/** Validate plaintext password length and bcrypt 72-byte UTF-8 ceiling. */
+function validatePasswordStrength(password) {
+  if (typeof password !== "string" || password.trim().length < MIN_PASSWORD_LENGTH) {
+    return `Password must be at least ${MIN_PASSWORD_LENGTH} characters long.`;
+  }
+  if (Buffer.byteLength(password, "utf8") > 72) {
+    return "Password must not exceed 72 bytes.";
+  }
+  return null;
+}
+
+/** Hash a plaintext password with bcryptjs using BCRYPT_SALT_ROUNDS. */
+async function hashPassword(plainPassword) {
+  return bcrypt.hash(String(plainPassword), BCRYPT_SALT_ROUNDS);
+}
+
+/** Constant-time equality check used strictly for migrating legacy plaintext passwords. */
+function timingSafePlaintextEquals(a, b) {
+  const bufA = Buffer.from(String(a), "utf8");
+  const bufB = Buffer.from(String(b), "utf8");
+  if (bufA.length !== bufB.length) return false;
+  return crypto.timingSafeEqual(bufA, bufB);
+}
+
+/** Verify candidate password against stored hash (or legacy plaintext when migration is enabled). */
+async function verifyUserPassword(plainPassword, storedPassword) {
+  if (!plainPassword || !storedPassword || typeof plainPassword !== "string") {
+    return { valid: false, needsRehash: false };
+  }
+  const stored = String(storedPassword);
+  if (isBcryptHash(stored)) {
+    const valid = await bcrypt.compare(plainPassword, stored);
+    return { valid, needsRehash: false };
+  }
+  if (ALLOW_LEGACY_PLAINTEXT_UPGRADE) {
+    const valid = timingSafePlaintextEquals(plainPassword, stored);
+    return { valid, needsRehash: valid };
+  }
+  return { valid: false, needsRehash: false };
+}
+
+/** Look up a person record by id or trimmed email for auth/profile endpoints. */
+async function findPersonForAuth({ userId, email }) {
+  if (userId) {
+    const [rows] = await pool.query("SELECT * FROM persons WHERE id = ? LIMIT 1", [userId]);
+    return rows[0] || null;
+  }
+  if (email) {
+    const [rows] = await pool.query("SELECT * FROM persons WHERE email = ? LIMIT 1", [String(email).trim()]);
+    return rows[0] || null;
+  }
+  return null;
+}
+
+/** Require and verify currentPassword whenever changing an existing account password. */
+async function verifyCurrentPasswordForChange(user, currentPassword) {
+  if (!user.password) {
+    return { ok: false, message: "Account password is not initialized. Contact an administrator." };
+  }
+  if (typeof currentPassword !== "string" || currentPassword.length === 0) {
+    return { ok: false, message: "Current password is required." };
+  }
+  const { valid } = await verifyUserPassword(currentPassword, user.password);
+  if (!valid) {
+    return { ok: false, message: "Current password does not match our records." };
+  }
+  return { ok: true, message: null };
+}
+
+// ==========================================
+// SERVER-SIDE JWT AUTH & RBAC MIDDLEWARE
+// ==========================================
+const EPHEMERAL_DEV_AUTH_SECRET = crypto.randomBytes(32).toString("hex");
+const EPHEMERAL_DEV_FACE_SECRET = crypto.randomBytes(32).toString("hex");
+const STAFF_TOKEN_TTL_SECONDS = Math.max(300, Number(process.env.AUTH_TOKEN_TTL_SECONDS || 12 * 3600) || 12 * 3600);
+const VALID_STAFF_ROLES = new Set(["admin"]);
+const AUTH_CACHE_TTL_MS = 5000;
+const authUserCache = new Map();
+const authRateLimits = new Map();
+
+function isProductionEnv() {
+  return String(process.env.NODE_ENV || "").toLowerCase() === "production";
+}
+
+function getAuthTokenSecret() {
+  const configured = String(process.env.AUTH_TOKEN_SECRET || process.env.JWT_SECRET || "").trim();
+  if (configured) return configured;
+  return isProductionEnv() ? null : EPHEMERAL_DEV_AUTH_SECRET;
+}
+
+function getFaceTokenSecret() {
+  const configured = String(process.env.FACE_TOKEN_SECRET || "").trim();
+  if (configured) return configured;
+  return isProductionEnv() ? null : EPHEMERAL_DEV_FACE_SECRET;
+}
+
+function getSyncServiceSecret() {
+  return String(process.env.SYNC_SERVICE_TOKEN || process.env.ATTENDANCE_IMPORT_TOKEN || "").trim();
+}
+
+function normalizeStaffRole(rawRole) {
+  const normalized = String(rawRole || "").trim().toLowerCase();
+  return VALID_STAFF_ROLES.has(normalized) ? normalized : null;
+}
+
+function isAccountActive(user) {
+  if (!user) return false;
+  if (user.archived === 1 || user.archived === true) return false;
+  if (user.approved === 0 || user.approved === false) return false;
+  return true;
+}
+
+function clearAuthUserCache(userId = null) {
+  if (userId) {
+    authUserCache.delete(String(userId));
+  } else {
+    authUserCache.clear();
+  }
+}
+
+function buildSessionUser(user) {
+  const role = normalizeStaffRole(user.role) || user.role || "employee";
+  return {
+    id: user.id,
+    email: user.email,
+    name: user.name,
+    department: user.department,
+    role,
+    user_metadata: {
+      role,
+      name: user.name,
+    },
+    app_metadata: {
+      role,
+    },
+  };
+}
+
+/** Mint compact HS256 staff session JWT signed with AUTH_TOKEN_SECRET. */
+function signStaffJwt(user) {
+  const secret = getAuthTokenSecret();
+  if (!secret) {
+    throw new Error("AUTH_TOKEN_SECRET is required in production.");
+  }
+  const role = normalizeStaffRole(user.role);
+  if (!role) {
+    throw new Error("Only active staff accounts can obtain session tokens.");
+  }
+  const nowSec = Math.floor(Date.now() / 1000);
+  const headerB64 = Buffer.from(JSON.stringify({ alg: "HS256", typ: "JWT" })).toString("base64url");
+  const payloadB64 = Buffer.from(JSON.stringify({
+    typ: "staff",
+    sub: String(user.id),
+    email: user.email || "",
+    name: user.name || "",
+    role,
+    tv: Number(user.token_version || 1),
+    jti: crypto.randomUUID(),
+    iat: nowSec,
+    exp: nowSec + STAFF_TOKEN_TTL_SECONDS,
+  })).toString("base64url");
+  const signingInput = `${headerB64}.${payloadB64}`;
+  const sigB64 = crypto.createHmac("sha256", secret).update(signingInput).digest("base64url");
+  return `${signingInput}.${sigB64}`;
+}
+
+/** Verify HS256 staff session JWT signature, structure, purpose, and expiration. */
+function verifyStaffJwtToken(token) {
+  const secret = getAuthTokenSecret();
+  if (!secret) {
+    return { valid: false, status: 503, code: "SERVER_MISCONFIGURED", error: "Server auth secret is not configured." };
+  }
+  if (!token || typeof token !== "string") {
+    return { valid: false, status: 401, code: "TOKEN_MISSING", error: "Authentication token is required." };
+  }
+  const parts = token.trim().split(".");
+  if (parts.length !== 3) {
+    return { valid: false, status: 401, code: "TOKEN_MALFORMED", error: "Invalid token format." };
+  }
+  const [headerB64, payloadB64, sigB64] = parts;
+  let header;
+  try {
+    header = JSON.parse(Buffer.from(headerB64, "base64url").toString("utf8"));
+  } catch (e) {
+    return { valid: false, status: 401, code: "TOKEN_MALFORMED", error: "Invalid token header." };
+  }
+  if (!header || header.alg !== "HS256" || header.typ !== "JWT") {
+    return { valid: false, status: 401, code: "TOKEN_INVALID", error: "Unsupported token header." };
+  }
+
+  const expectedSig = crypto.createHmac("sha256", secret).update(`${headerB64}.${payloadB64}`).digest("base64url");
+  const sigBuf = Buffer.from(sigB64);
+  const expBuf = Buffer.from(expectedSig);
+  if (sigBuf.length !== expBuf.length || !crypto.timingSafeEqual(sigBuf, expBuf)) {
+    return { valid: false, status: 401, code: "TOKEN_INVALID", error: "Invalid token signature." };
+  }
+
+  let payload;
+  try {
+    payload = JSON.parse(Buffer.from(payloadB64, "base64url").toString("utf8"));
+  } catch (e) {
+    return { valid: false, status: 401, code: "TOKEN_MALFORMED", error: "Invalid token payload." };
+  }
+
+  const nowSec = Math.floor(Date.now() / 1000);
+  if (!payload || payload.typ !== "staff" || !payload.sub || !VALID_STAFF_ROLES.has(payload.role)) {
+    return { valid: false, status: 401, code: "TOKEN_INVALID", error: "Invalid session claims." };
+  }
+  if (!payload.exp || nowSec >= Number(payload.exp)) {
+    return { valid: false, status: 401, code: "TOKEN_EXPIRED", error: "Session expired. Please sign in again." };
+  }
+  return { valid: true, payload };
+}
+
+function extractBearerToken(req) {
+  const authHeader = req.headers?.authorization || "";
+  if (typeof authHeader === "string" && authHeader.toLowerCase().startsWith("bearer ")) {
+    const token = authHeader.slice(7).trim();
+    if (token) return token;
+  }
+  const fallbackHeader = req.headers?.["x-auth-token"];
+  if (typeof fallbackHeader === "string" && fallbackHeader.trim()) {
+    return fallbackHeader.trim();
+  }
+  return null;
+}
+
+async function fetchActiveStaffRecord(userId) {
+  const key = String(userId);
+  const cached = authUserCache.get(key);
+  if (cached && cached.expiresAt > Date.now()) {
+    return cached.user;
+  }
+  const [rows] = await pool.query("SELECT * FROM persons WHERE id = ? LIMIT 1", [key]);
+  const user = rows?.[0] || null;
+  authUserCache.set(key, { user, expiresAt: Date.now() + AUTH_CACHE_TTL_MS });
+  return user;
+}
+
+/** Validate incoming staff JWT against live DB record and token_version. */
+async function resolveStaffSession(req) {
+  const token = extractBearerToken(req);
+  if (!token) {
+    return { ok: false, status: 401, code: "AUTH_REQUIRED", error: "Authentication required." };
+  }
+  const verified = verifyStaffJwtToken(token);
+  if (!verified.valid) {
+    return { ok: false, status: verified.status, code: verified.code, error: verified.error };
+  }
+  const dbUser = await fetchActiveStaffRecord(verified.payload.sub);
+  if (!dbUser) {
+    return { ok: false, status: 401, code: "TOKEN_REVOKED", error: "Account no longer exists." };
+  }
+  if (!isAccountActive(dbUser)) {
+    return { ok: false, status: 403, code: "ACCOUNT_DISABLED", error: "Account is disabled or archived." };
+  }
+  const liveRole = normalizeStaffRole(dbUser.role);
+  if (!liveRole || liveRole !== verified.payload.role) {
+    return { ok: false, status: 401, code: "TOKEN_REVOKED", error: "Account privileges changed. Please sign in again." };
+  }
+  const liveTokenVersion = Number(dbUser.token_version || 1);
+  if (liveTokenVersion !== Number(verified.payload.tv || 1)) {
+    return { ok: false, status: 401, code: "TOKEN_REVOKED", error: "Session revoked. Please sign in again." };
+  }
+  return { ok: true, user: { ...dbUser, role: liveRole }, claims: verified.payload };
+}
+
+async function requireStaffAuth(req, res, next) {
+  try {
+    const resolved = await resolveStaffSession(req);
+    if (!resolved.ok) {
+      return res.status(resolved.status).json({ error: { message: resolved.error, code: resolved.code } });
+    }
+    req.staffUser = resolved.user;
+    req.staffClaims = resolved.claims;
+    return next();
+  } catch (err) {
+    console.error("Auth verification error:", err.message);
+    return res.status(500).json({ error: { message: "Authentication check failed." } });
+  }
+}
+
+function requireAdmin(req, res, next) {
+  return requireStaffAuth(req, res, () => {
+    if (req.staffUser?.role !== "admin") {
+      return res.status(403).json({ error: { message: "Administrator privileges required.", code: "FORBIDDEN" } });
+    }
+    return next();
+  });
+}
+
+async function requireAdminOrServiceToken(req, res, next) {
+  const clientServiceToken = String(req.headers["x-sync-token"] || req.headers["x-attendance-import-token"] || "").trim();
+  if (clientServiceToken) {
+    const expectedSecret = getSyncServiceSecret();
+    if (!expectedSecret || !timingSafePlaintextEquals(clientServiceToken, expectedSecret)) {
+      return res.status(401).json({ error: { message: "Invalid service sync token.", code: "INVALID_SERVICE_TOKEN" } });
+    }
+    req.isServiceClient = true;
+    return next();
+  }
+  return requireAdmin(req, res, next);
+}
+
+function checkAuthRateLimit(ip, email = "") {
+  const now = Date.now();
+  const key = `${ip || "unknown"}:${String(email || "").trim().toLowerCase()}`;
+  const entry = authRateLimits.get(key) || { count: 0, resetTime: now + 5 * 60 * 1000 };
+  if (now > entry.resetTime) {
+    entry.count = 1;
+    entry.resetTime = now + 5 * 60 * 1000;
+  } else {
+    entry.count += 1;
+  }
+  authRateLimits.set(key, entry);
+  return entry.count <= 30;
+}
+
+if (isProductionEnv() && (!process.env.AUTH_TOKEN_SECRET || !process.env.FACE_TOKEN_SECRET)) {
+  console.error("[SECURITY WARNING] AUTH_TOKEN_SECRET and/or FACE_TOKEN_SECRET is unset while NODE_ENV=production. Protected token operations will fail closed until configured.");
+}
+
+// ==========================================
 // AUTHENTICATION API ROUTES (MySQL)
 // ==========================================
 app.post("/api/auth/login", async (req, res) => {
   const { email, password } = req.body || {};
-  if (!email || !password) {
+  if (!email || typeof password !== "string" || !password) {
     return res.status(400).json({ error: { message: "Email and password are required." } });
+  }
+
+  const clientIp = req.ip || req.connection?.remoteAddress || "unknown";
+  if (!checkAuthRateLimit(clientIp, email)) {
+    return res.status(429).json({ error: { message: "Too many login attempts. Please wait a few minutes and try again." } });
+  }
+
+  if (!getAuthTokenSecret()) {
+    return res.status(503).json({ error: { message: "Server authentication secret is not configured." } });
   }
 
   try {
@@ -1203,29 +1730,35 @@ app.post("/api/auth/login", async (req, res) => {
     }
 
     const user = rows[0];
-
-    if (user.password && user.password !== password) {
+    const { valid, needsRehash } = await verifyUserPassword(password, user.password);
+    if (!valid) {
       return res.status(401).json({ error: { message: "Invalid email or password." } });
     }
 
-    const role = user.role || "employee";
-    const sessionUser = {
-      id: user.id,
-      email: user.email,
-      name: user.name,
-      department: user.department,
-      role: role,
-      user_metadata: {
-        role: role,
-        name: user.name,
-      },
-      app_metadata: {
-        role: role,
-      },
-    };
+    if (!isAccountActive(user)) {
+      return res.status(403).json({ error: { message: "Account is suspended or archived." } });
+    }
 
+    const staffRole = normalizeStaffRole(user.role);
+    if (!staffRole) {
+      return res.status(403).json({ error: { message: "This account does not have staff portal access." } });
+    }
+
+    if (needsRehash) {
+      try {
+        const upgradedHash = await hashPassword(password);
+        await pool.query("UPDATE persons SET password = ? WHERE id = ?", [upgradedHash, user.id]);
+      } catch (rehashErr) {
+        console.warn("Legacy password rehash warning:", rehashErr.message);
+      }
+    }
+
+    const sessionUser = buildSessionUser({ ...user, role: staffRole });
+    const accessToken = signStaffJwt({ ...user, role: staffRole });
     const session = {
-      access_token: `token_${user.id}_${Date.now()}`,
+      access_token: accessToken,
+      token_type: "Bearer",
+      expires_in: STAFF_TOKEN_TTL_SECONDS,
       user: sessionUser,
     };
 
@@ -1236,54 +1769,67 @@ app.post("/api/auth/login", async (req, res) => {
   }
 });
 
-app.post("/api/auth/change-password", async (req, res) => {
-  const { userId, email, currentPassword, newPassword } = req.body || {};
-  if (!newPassword || String(newPassword).trim().length < 4) {
-    return res.status(400).json({ error: { message: "New password must be at least 4 characters long." } });
+app.get("/api/auth/session", requireStaffAuth, async (req, res) => {
+  const sessionUser = buildSessionUser(req.staffUser);
+  return res.json({ data: { user: sessionUser }, error: null });
+});
+
+app.post("/api/auth/logout", requireStaffAuth, async (req, res) => {
+  try {
+    await pool.query("UPDATE persons SET token_version = COALESCE(token_version, 1) + 1 WHERE id = ?", [req.staffUser.id]).catch(() => {});
+    clearAuthUserCache(req.staffUser.id);
+    return res.json({ success: true });
+  } catch (err) {
+    return res.status(500).json({ error: { message: err.message || "Failed to log out cleanly." } });
+  }
+});
+
+app.post("/api/auth/change-password", requireStaffAuth, async (req, res) => {
+  const { userId, currentPassword, newPassword } = req.body || {};
+  if (userId && String(userId) !== String(req.staffUser.id)) {
+    return res.status(403).json({ error: { message: "You can only change your own password." } });
+  }
+  const strengthError = validatePasswordStrength(newPassword);
+  if (strengthError) {
+    return res.status(400).json({ error: { message: strengthError } });
   }
 
   try {
-    let user = null;
-    if (userId) {
-      const [rows] = await pool.query("SELECT * FROM persons WHERE id = ? LIMIT 1", [userId]);
-      user = rows[0];
-    } else if (email) {
-      const [rows] = await pool.query("SELECT * FROM persons WHERE email = ? LIMIT 1", [String(email).trim()]);
-      user = rows[0];
-    }
-
+    const user = await findPersonForAuth({ userId: req.staffUser.id });
     if (!user) {
       return res.status(404).json({ error: { message: "User account not found." } });
     }
 
-    // Verify current password if specified and user has an existing password
-    if (user.password && currentPassword !== undefined) {
-      if (user.password !== currentPassword) {
-        return res.status(400).json({ error: { message: "Current password does not match our records." } });
-      }
+    const verifyResult = await verifyCurrentPasswordForChange(user, currentPassword);
+    if (!verifyResult.ok) {
+      return res.status(400).json({ error: { message: verifyResult.message } });
     }
 
-    await pool.query("UPDATE persons SET password = ? WHERE id = ?", [newPassword, user.id]);
-    return res.json({ success: true, message: "Password updated successfully." });
+    const hashedPassword = await hashPassword(newPassword);
+    const nextTokenVersion = Number(user.token_version || 1) + 1;
+    await pool.query("UPDATE persons SET password = ?, token_version = ? WHERE id = ?", [hashedPassword, nextTokenVersion, user.id]);
+    clearAuthUserCache(user.id);
+
+    const freshToken = signStaffJwt({ ...user, token_version: nextTokenVersion });
+    return res.json({
+      success: true,
+      message: "Password updated successfully.",
+      access_token: freshToken,
+    });
   } catch (err) {
     console.error("Change password error:", err.message);
     return res.status(500).json({ error: { message: err.message || "Failed to update password." } });
   }
 });
 
-app.post("/api/auth/update-profile", async (req, res) => {
-  const { userId, email: currentEmail, newName, newEmail, currentPassword, newPassword } = req.body || {};
+app.post("/api/auth/update-profile", requireStaffAuth, async (req, res) => {
+  const { userId, newName, newEmail, currentPassword, newPassword } = req.body || {};
+  if (userId && String(userId) !== String(req.staffUser.id)) {
+    return res.status(403).json({ error: { message: "You can only update your own account profile." } });
+  }
 
   try {
-    let user = null;
-    if (userId) {
-      const [rows] = await pool.query("SELECT * FROM persons WHERE id = ? LIMIT 1", [userId]);
-      user = rows[0];
-    } else if (currentEmail) {
-      const [rows] = await pool.query("SELECT * FROM persons WHERE email = ? LIMIT 1", [String(currentEmail).trim()]);
-      user = rows[0];
-    }
-
+    const user = await findPersonForAuth({ userId: req.staffUser.id });
     if (!user) {
       return res.status(404).json({ error: { message: "User account not found." } });
     }
@@ -1297,46 +1843,42 @@ app.post("/api/auth/update-profile", async (req, res) => {
       }
     }
 
-    // If changing password, verify current password and new password length
+    // If changing password, enforce strength policy and verify current password
     let updatedPassword = user.password;
-    if (newPassword && String(newPassword).trim().length > 0) {
-      if (String(newPassword).trim().length < 4) {
-        return res.status(400).json({ error: { message: "New password must be at least 4 characters long." } });
+    let nextTokenVersion = Number(user.token_version || 1);
+    const isChangingPassword = newPassword !== undefined && newPassword !== null && newPassword !== "";
+    if (isChangingPassword) {
+      const strengthError = validatePasswordStrength(newPassword);
+      if (strengthError) {
+        return res.status(400).json({ error: { message: strengthError } });
       }
-      if (user.password && currentPassword !== undefined) {
-        if (user.password !== currentPassword) {
-          return res.status(400).json({ error: { message: "Current password does not match our records." } });
-        }
+      const verifyResult = await verifyCurrentPasswordForChange(user, currentPassword);
+      if (!verifyResult.ok) {
+        return res.status(400).json({ error: { message: verifyResult.message } });
       }
-      updatedPassword = String(newPassword).trim();
+      updatedPassword = await hashPassword(newPassword);
+      nextTokenVersion += 1;
     }
 
     const updatedName = newName !== undefined && String(newName).trim().length > 0 ? String(newName).trim() : user.name;
 
     await pool.query(
-      "UPDATE persons SET name = ?, email = ?, password = ? WHERE id = ?",
-      [updatedName, targetEmail, updatedPassword, user.id]
+      "UPDATE persons SET name = ?, email = ?, password = ?, token_version = ? WHERE id = ?",
+      [updatedName, targetEmail, updatedPassword, nextTokenVersion, user.id]
     );
+    clearAuthUserCache(user.id);
+    clearEligiblePersonsCache();
 
-    const updatedUser = {
-      id: user.id,
-      name: updatedName,
-      email: targetEmail,
-      role: user.role,
-      department: user.department,
-      user_metadata: {
-        role: user.role,
-        name: updatedName,
-      },
-      app_metadata: {
-        role: user.role,
-      },
-    };
+    const updatedUser = buildSessionUser({ ...user, name: updatedName, email: targetEmail });
+    const freshToken = isChangingPassword || targetEmail !== user.email || updatedName !== user.name
+      ? signStaffJwt({ ...user, name: updatedName, email: targetEmail, token_version: nextTokenVersion })
+      : null;
 
     return res.json({
       success: true,
       message: "Account settings updated successfully.",
       user: updatedUser,
+      ...(freshToken ? { access_token: freshToken } : {}),
     });
   } catch (err) {
     console.error("Update profile error:", err.message);
@@ -1344,11 +1886,11 @@ app.post("/api/auth/update-profile", async (req, res) => {
   }
 });
 
-// Admin Staff & Secretary Account Manager Routes
-app.get("/api/admin/accounts", async (req, res) => {
+// Admin Accounts Manager Routes (Admin only)
+app.get("/api/admin/accounts", requireAdmin, async (req, res) => {
   try {
     const [rows] = await pool.query(
-      "SELECT id, name, email, role, department, phone_number, approved, created_at FROM persons WHERE role IN ('admin', 'secretary', 'manager') OR (email IS NOT NULL AND email != '') ORDER BY role ASC, name ASC"
+      "SELECT id, name, email, role, department, phone_number, approved, created_at FROM persons WHERE role = 'admin' OR (email IS NOT NULL AND email != '' AND role = 'admin') ORDER BY name ASC"
     );
     return res.json({ accounts: rows || [] });
   } catch (err) {
@@ -1357,16 +1899,21 @@ app.get("/api/admin/accounts", async (req, res) => {
   }
 });
 
-app.post("/api/admin/accounts", async (req, res) => {
-  const { name, email, role = "secretary", department = "Admin", password = "", phone_number = "" } = req.body || {};
+app.post("/api/admin/accounts", requireAdmin, async (req, res) => {
+  const { name, email, role = "admin", department = "Admin", password = "", phone_number = "" } = req.body || {};
   if (!email || !String(email).trim()) {
     return res.status(400).json({ error: { message: "Email is required." } });
   }
   if (!name || !String(name).trim()) {
     return res.status(400).json({ error: { message: "Full name is required." } });
   }
-  if (!password || String(password).trim().length < 4) {
-    return res.status(400).json({ error: { message: "Password must be at least 4 characters long." } });
+  const staffRole = normalizeStaffRole(role);
+  if (!staffRole) {
+    return res.status(400).json({ error: { message: "Invalid account role. Only 'admin' role is permitted." } });
+  }
+  const strengthError = validatePasswordStrength(password);
+  if (strengthError) {
+    return res.status(400).json({ error: { message: strengthError } });
   }
 
   try {
@@ -1375,16 +1922,18 @@ app.post("/api/admin/accounts", async (req, res) => {
       return res.status(400).json({ error: { message: "An account with this email address already exists." } });
     }
 
+    const hashedPassword = await hashPassword(password);
     const newId = `ACC-${Date.now().toString(36).toUpperCase()}-${Math.floor(Math.random() * 1000)}`;
     await pool.query(
-      `INSERT INTO persons (id, name, email, password, role, department, phone_number, approved, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, 1, NOW())`,
-      [newId, String(name).trim(), String(email).trim(), password, role, department || "Admin", phone_number || null]
+      `INSERT INTO persons (id, name, email, password, role, department, phone_number, approved, token_version, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, 1, 1, NOW())`,
+      [newId, String(name).trim(), String(email).trim(), hashedPassword, staffRole, department || "Admin", phone_number || null]
     );
+    clearEligiblePersonsCache();
 
     return res.json({
       success: true,
-      account: { id: newId, name: String(name).trim(), email: String(email).trim(), role, department: department || "Admin", approved: 1 }
+      account: { id: newId, name: String(name).trim(), email: String(email).trim(), role: staffRole, department: department || "Admin", approved: 1 }
     });
   } catch (err) {
     console.error("Create account error:", err.message);
@@ -1392,7 +1941,7 @@ app.post("/api/admin/accounts", async (req, res) => {
   }
 });
 
-app.put("/api/admin/accounts/:id", async (req, res) => {
+app.put("/api/admin/accounts/:id", requireAdmin, async (req, res) => {
   const { id } = req.params;
   const { name, email, role, department, password, approved, phone_number } = req.body || {};
 
@@ -1400,6 +1949,26 @@ app.put("/api/admin/accounts/:id", async (req, res) => {
     const [existing] = await pool.query("SELECT * FROM persons WHERE id = ? LIMIT 1", [id]);
     if (!existing || existing.length === 0) {
       return res.status(404).json({ error: { message: "Account not found." } });
+    }
+    const targetUser = existing[0];
+
+    let normalizedRoleUpdate;
+    if (role !== undefined) {
+      normalizedRoleUpdate = normalizeStaffRole(role);
+      if (!normalizedRoleUpdate) {
+        return res.status(400).json({ error: { message: "Invalid account role. Only 'admin' role is permitted." } });
+      }
+    }
+
+    const demotingOrDisablingLastAdmin =
+      targetUser.role === "admin" &&
+      ((normalizedRoleUpdate !== undefined && normalizedRoleUpdate !== "admin") || approved === false || approved === 0);
+
+    if (demotingOrDisablingLastAdmin) {
+      const [adminCountRows] = await pool.query("SELECT COUNT(*) as count FROM persons WHERE role = 'admin' AND approved != 0 AND (archived = 0 OR archived IS NULL)");
+      if (Number(adminCountRows?.[0]?.count || 0) <= 1) {
+        return res.status(400).json({ error: { message: "Cannot demote or disable the only remaining active administrator account." } });
+      }
     }
 
     if (email) {
@@ -1411,18 +1980,40 @@ app.put("/api/admin/accounts/:id", async (req, res) => {
 
     const updates = [];
     const params = [];
+    let shouldRevokeSessions = false;
 
     if (name !== undefined) { updates.push("name = ?"); params.push(String(name).trim()); }
     if (email !== undefined) { updates.push("email = ?"); params.push(String(email).trim()); }
-    if (role !== undefined) { updates.push("role = ?"); params.push(role); }
+    if (normalizedRoleUpdate !== undefined) {
+      updates.push("role = ?");
+      params.push(normalizedRoleUpdate);
+      if (normalizedRoleUpdate !== targetUser.role) shouldRevokeSessions = true;
+    }
     if (department !== undefined) { updates.push("department = ?"); params.push(department); }
-    if (password && String(password).trim().length > 0) { updates.push("password = ?"); params.push(password); }
-    if (approved !== undefined) { updates.push("approved = ?"); params.push(approved ? 1 : 0); }
+    if (password !== undefined && password !== null && password !== "") {
+      const strengthError = validatePasswordStrength(password);
+      if (strengthError) {
+        return res.status(400).json({ error: { message: strengthError } });
+      }
+      updates.push("password = ?");
+      params.push(await hashPassword(password));
+      shouldRevokeSessions = true;
+    }
+    if (approved !== undefined) {
+      updates.push("approved = ?");
+      params.push(approved ? 1 : 0);
+      if (!approved) shouldRevokeSessions = true;
+    }
     if (phone_number !== undefined) { updates.push("phone_number = ?"); params.push(phone_number); }
+    if (shouldRevokeSessions) {
+      updates.push("token_version = COALESCE(token_version, 1) + 1");
+    }
 
     if (updates.length > 0) {
       params.push(id);
       await pool.query(`UPDATE persons SET ${updates.join(", ")} WHERE id = ?`, params);
+      clearAuthUserCache(id);
+      clearEligiblePersonsCache();
     }
 
     return res.json({ success: true, message: "Account updated successfully." });
@@ -1432,8 +2023,12 @@ app.put("/api/admin/accounts/:id", async (req, res) => {
   }
 });
 
-app.delete("/api/admin/accounts/:id", async (req, res) => {
+app.delete("/api/admin/accounts/:id", requireAdmin, async (req, res) => {
   const { id } = req.params;
+  if (String(req.staffUser.id) === String(id)) {
+    return res.status(400).json({ error: { message: "Cannot delete your own currently active administrator account." } });
+  }
+
   try {
     const [existing] = await pool.query("SELECT * FROM persons WHERE id = ? LIMIT 1", [id]);
     if (!existing || existing.length === 0) {
@@ -1449,6 +2044,8 @@ app.delete("/api/admin/accounts/:id", async (req, res) => {
     }
 
     await pool.query("DELETE FROM persons WHERE id = ?", [id]);
+    clearAuthUserCache(id);
+    clearEligiblePersonsCache();
     return res.json({ success: true, message: "Account deleted successfully." });
   } catch (err) {
     console.error("Delete account error:", err.message);
@@ -1459,7 +2056,7 @@ app.delete("/api/admin/accounts/:id", async (req, res) => {
 // ==========================================
 // DAHUA SYNC ROUTES (MySQL)
 // ==========================================
-app.post(["/api/users/import", "/api/dahua/push-users"], async (req, res) => {
+app.post(["/api/users/import", "/api/dahua/push-users"], requireAdminOrServiceToken, async (req, res) => {
   try {
     const rawUsers = Array.isArray(req.body?.users) ? req.body.users : [];
     if (!rawUsers.length) {
@@ -1493,6 +2090,7 @@ app.post(["/api/users/import", "/api/dahua/push-users"], async (req, res) => {
       insertedOrUpdatedCount += 1;
     }
 
+    clearEligiblePersonsCache();
     return res.json({
       received: rawUsers.length,
       count: insertedOrUpdatedCount,
@@ -1504,7 +2102,7 @@ app.post(["/api/users/import", "/api/dahua/push-users"], async (req, res) => {
   }
 });
 
-app.post("/api/dahua/sync-users", async (req, res) => {
+app.post("/api/dahua/sync-users", requireAdmin, async (req, res) => {
   try {
     const users = await getDahuaUsers();
     const payload = users.map((user) => ({
@@ -1619,7 +2217,7 @@ async function deleteDahuaUserOnDevice(personId) {
   }
 }
 
-app.delete("/api/dahua/person", async (req, res) => {
+app.delete("/api/dahua/person", requireAdmin, async (req, res) => {
   const { personId, hardDelete } = req.body || {};
   if (!personId) {
     return res.status(400).json({ error: "personId is required." });
@@ -1638,8 +2236,10 @@ app.delete("/api/dahua/person", async (req, res) => {
     if (hardDelete) {
       await pool.query("DELETE FROM persons WHERE id = ?", [personId]);
     } else {
-      await pool.query("UPDATE persons SET archived = 1 WHERE id = ?", [personId]);
+      await pool.query("UPDATE persons SET archived = 1, token_version = COALESCE(token_version, 1) + 1 WHERE id = ?", [personId]);
     }
+    clearAuthUserCache(personId);
+    clearEligiblePersonsCache();
 
     res.json({ ok: true });
   } catch (err) {
@@ -1647,14 +2247,8 @@ app.delete("/api/dahua/person", async (req, res) => {
   }
 });
 
-app.post(["/api/attendance/import", "/attendance/import", "/api/dahua/import", "/dahua/import"], async (req, res) => {
+app.post(["/api/attendance/import", "/attendance/import", "/api/dahua/import", "/dahua/import"], requireAdminOrServiceToken, async (req, res) => {
   try {
-    const importToken = process.env.ATTENDANCE_IMPORT_TOKEN || "";
-    const clientToken = req.headers["x-attendance-import-token"] || "";
-    if (importToken && clientToken !== importToken) {
-      return res.status(401).json({ error: "Unauthorized import request. Token mismatch." });
-    }
-
     const rawRecords = Array.isArray(req.body?.records) ? req.body.records : [];
     if (!rawRecords.length) {
       return res.json({ count: 0, received: 0, message: "No attendance records were provided in payload." });
@@ -1745,7 +2339,7 @@ app.post(["/api/attendance/import", "/attendance/import", "/api/dahua/import", "
   }
 });
 
-app.post("/api/dahua/sync-attendance", async (req, res) => {
+app.post("/api/dahua/sync-attendance", requireStaffAuth, async (req, res) => {
   try {
     const limit = Math.max(Number(req.body?.limit || 5000), 1000);
     const query = `/cgi-bin/recordFinder.cgi?action=find&name=AccessControlCardRec&count=${limit}`;
@@ -1859,7 +2453,7 @@ app.post("/api/dahua/sync-attendance", async (req, res) => {
 // ==========================================
 // DAHUA BIOMETRIC DEVICE MONITORING ROUTES
 // ==========================================
-app.get("/api/device/monitoring", async (req, res) => {
+app.get("/api/device/monitoring", requireAdmin, async (req, res) => {
   try {
     const [statusRows] = await pool.query("SELECT * FROM dahua_device_status WHERE id = 1 LIMIT 1");
     const statusData = statusRows?.[0] || {};
@@ -1911,7 +2505,7 @@ app.get("/api/device/monitoring", async (req, res) => {
   }
 });
 
-app.post("/api/device/test-connection", async (req, res) => {
+app.post("/api/device/test-connection", requireAdmin, async (req, res) => {
   const startTime = Date.now();
   try {
     let resultData = null;
@@ -1967,7 +2561,7 @@ app.post("/api/device/test-connection", async (req, res) => {
   }
 });
 
-app.get("/api/device/status", async (req, res) => {
+app.get("/api/device/status", requireAdmin, async (req, res) => {
   try {
     const raw = await requestDahuaWithDigest("/cgi-bin/magicBox.cgi?action=getSystemInfo");
     return res.json({
@@ -1988,7 +2582,7 @@ app.get("/api/device/status", async (req, res) => {
   }
 });
 
-app.post("/api/payroll/rebuild", async (req, res) => {
+app.post("/api/payroll/rebuild", requireAdmin, async (req, res) => {
   try {
     const reset = Boolean(req.body?.reset);
     if (reset) {
@@ -2014,7 +2608,7 @@ app.post("/api/payroll/rebuild", async (req, res) => {
   }
 });
 
-app.delete("/api/dahua/attendance", async (req, res) => {
+app.delete("/api/dahua/attendance", requireStaffAuth, async (req, res) => {
   const { personId, deviceTime, dbId } = req.body || {};
   if (!personId || !deviceTime) {
     return res.status(400).json({ error: "personId and deviceTime are required." });
@@ -2109,7 +2703,7 @@ app.delete("/api/dahua/attendance", async (req, res) => {
   }
 });
 
-app.get("/api/dahua/pending-deletions", async (req, res) => {
+app.get("/api/dahua/pending-deletions", requireAdminOrServiceToken, async (req, res) => {
   try {
     // Automatically purge any completed or old stale rows so the table stays clean
     await pool.query(
@@ -2123,7 +2717,7 @@ app.get("/api/dahua/pending-deletions", async (req, res) => {
   }
 });
 
-app.post("/api/dahua/complete-deletion", async (req, res) => {
+app.post("/api/dahua/complete-deletion", requireAdminOrServiceToken, async (req, res) => {
   try {
     const { id } = req.body || {};
     if (id) {
@@ -2142,7 +2736,7 @@ app.post("/api/dahua/complete-deletion", async (req, res) => {
 });
 
 // Route to manually clear/truncate the dahua_pending_deletions queue if desired
-app.delete("/api/dahua/pending-deletions/clear", async (req, res) => {
+app.delete("/api/dahua/pending-deletions/clear", requireAdminOrServiceToken, async (req, res) => {
   try {
     await pool.query("DELETE FROM dahua_pending_deletions");
     return res.json({ ok: true, message: "dahua_pending_deletions table cleared successfully." });
@@ -2155,7 +2749,7 @@ app.delete("/api/dahua/pending-deletions/clear", async (req, res) => {
 // ==========================================
 // PAYROLL REGENERATION API ROUTE
 // ==========================================
-app.post("/api/payroll/regenerate", async (req, res) => {
+app.post("/api/payroll/regenerate", requireAdmin, async (req, res) => {
   try {
     const result = await generatePayrollPeriodsFromAttendance();
     res.json({ message: "Payroll regenerated successfully", ...result });
@@ -2164,103 +2758,398 @@ app.post("/api/payroll/regenerate", async (req, res) => {
   }
 });
 
+/** Remove sensitive auth/session fields from persons responses before serializing JSON. */
+function stripPasswordFromResponse(table, value) {
+  if (table !== "persons" || !value) return value;
+  if (Array.isArray(value)) {
+    return value.map((item) => stripPasswordFromResponse(table, item));
+  }
+  if (typeof value === "object") {
+    const copy = { ...value };
+    delete copy.password;
+    delete copy.token_version;
+    return copy;
+  }
+  return value;
+}
+
+/** Ensure any password/token_version written to `persons` via /api/db/query is validated and bcrypt-hashed. */
+async function sanitizePersonWritePayload(table, itemObj) {
+  if (table !== "persons" || !itemObj) {
+    return null;
+  }
+  delete itemObj.token_version;
+  if (Object.prototype.hasOwnProperty.call(itemObj, "role") && itemObj.role !== undefined && itemObj.role !== null) {
+    const cleanRole = String(itemObj.role).trim().toLowerCase();
+    if (!["admin", "employee"].includes(cleanRole)) {
+      return "Invalid person role. Allowed roles: admin, employee.";
+    }
+    itemObj.role = cleanRole;
+  }
+  if (!Object.prototype.hasOwnProperty.call(itemObj, "password")) {
+    return null;
+  }
+  const raw = itemObj.password;
+  if (raw === undefined || raw === "") {
+    delete itemObj.password;
+    return null;
+  }
+  if (raw === null) {
+    return null;
+  }
+  if (typeof raw !== "string") {
+    return "Password must be a string.";
+  }
+  if (!isBcryptHash(raw)) {
+    const strengthError = validatePasswordStrength(raw);
+    if (strengthError) return strengthError;
+    itemObj.password = await hashPassword(raw);
+  }
+  return null;
+}
+
 // ==========================================
-// GENERIC DATABASE QUERY API ROUTE (MySQL)
+// GENERIC DATABASE QUERY API ROUTE (MySQL + RBAC)
 // ==========================================
+const TABLE_SCHEMA_COLUMNS = {
+  persons: new Set([
+    "id", "name", "department", "created_at", "descriptor", "daily_rate", "late_penalty",
+    "phone_number", "address", "sex", "approved", "archived", "registration_photo",
+    "sss", "pag_ibig", "philhealth", "cash_advance", "email", "password", "role",
+    "night_shift_diff", "token_version",
+  ]),
+  attendance: new Set([
+    "id", "person_id", "name", "department", "event", "point", "method", "device_time",
+    "attendance_work_date", "attendance_slot", "created_at", "status", "ot_status",
+    "archived", "photo", "notes",
+  ]),
+  department_rates: new Set([
+    "department", "daily_rate", "late_penalty", "updated_at", "sss", "pag_ibig",
+    "philhealth", "sss_employer", "pag_ibig_employer", "philhealth_employer",
+    "cash_advance", "holiday_rate", "ot_rate", "regular_holiday_rate", "special_holiday_rate",
+    "has_custom_workhours", "morning_start", "morning_end", "afternoon_start", "afternoon_end", "on_time_until",
+  ]),
+  settings: new Set([
+    "id", "morning_start", "morning_end", "afternoon_start", "afternoon_end",
+    "updated_at", "morning_grace_minutes", "afternoon_grace_minutes", "late_count_limit",
+    "late_penalty", "payroll_period_days", "late_base_fee", "late_per_minute_fee",
+    "late_tier_minor_fee", "late_tier_mid_fee", "late_tier_major_mode", "late_tier_major_fee",
+  ]),
+  holidays: new Set(["id", "department", "date", "type", "description", "month", "year", "created_at"]),
+  cash_advances: new Set(["id", "person_id", "amount", "note", "created_at"]),
+  payroll_periods: new Set([
+    "id", "person_id", "period", "days_present", "daily_rate", "late_penalty", "late_count",
+    "gross", "total_late_deduction", "total_deductions", "net", "waive_early_in",
+    "waive_overtime", "released", "created_at", "updated_at",
+  ]),
+  payroll_activity_logs: new Set(["id", "person_name", "released_by", "action", "timestamp", "payroll_period_id", "person_id"]),
+  payroll_released_history: new Set([
+    "id", "payroll_period_id", "person_id", "person_name", "department", "period",
+    "days_present", "daily_rate", "late_penalty", "late_count", "gross",
+    "total_late_deduction", "total_deductions", "net", "waive_early_in", "waive_overtime",
+    "detailed_attendance", "released", "action", "released_by", "released_at", "created_at", "updated_at",
+  ]),
+  expenses: new Set(["id", "person_id", "period", "item_name", "amount", "expense_date", "note", "created_at"]),
+};
+
+const NEVER_READ_PERSON_COLUMNS = new Set(["password", "token_version"]);
+const FACE_SCAN_ATTENDANCE_READ_COLUMNS = ["id", "person_id", "event", "device_time", "attendance_work_date", "attendance_slot", "status", "method"];
+const FACE_SCAN_ATTENDANCE_READ_SET = new Set(FACE_SCAN_ATTENDANCE_READ_COLUMNS);
+const FACE_SCAN_ALLOWED_METHODS = new Set(["field-site", "face-scan"]);
+const MAX_PARTNER_PUNCHES_PER_TOKEN = 20;
+const LIVE_FACE_SCAN_MAX_CLOCK_DRIFT_MS = 15 * 60 * 1000;
+const SAFE_FILTER_OPS = new Set(["eq", "neq", "gt", "gte", "lt", "lte", "like", "ilike", "is", "in"]);
+
+const faceTokenUsesMemory = new Map();
+
+function stripForgedVerificationTags(rawNotes) {
+  if (!rawNotes || typeof rawNotes !== "string") return "";
+  return rawNotes
+    .split("|")
+    .map((part) =>
+      part
+        .replace(/(?:^|\s)verified by:\s*[^|\r\n]*/gi, " ")
+        .replace(/\[offline-unverified[^\]]*\]/gi, " ")
+        .replace(/\[face-verified[^\]]*\]/gi, " ")
+        .replace(/\s+/g, " ")
+        .trim()
+    )
+    .filter(Boolean)
+    .join(" | ");
+}
+
+function parseAttendanceTimestampMs(rawValue) {
+  if (rawValue instanceof Date) return rawValue.getTime();
+  const str = String(rawValue || "").trim();
+  if (!str) return NaN;
+  // Treat bare MySQL wall-clock datetime strings as Asia/Manila (+08:00)
+  if (/^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}$/.test(str)) {
+    return Date.parse(`${str.replace(" ", "T")}+08:00`);
+  }
+  return Date.parse(str);
+}
+
+/** Claim single use per (jti, targetPersonId) up to MAX_PARTNER_PUNCHES_PER_TOKEN. */
+async function claimFaceTokenUse(tokenPayload, targetPersonId) {
+  const jti = String(tokenPayload?.jti || "").trim();
+  const verifierPid = String(tokenPayload?.pid || "").trim();
+  const targetPid = String(targetPersonId || "").trim();
+  if (!jti || !verifierPid || !targetPid) {
+    return { ok: false, status: 400, message: "Invalid verification token claims or target person_id." };
+  }
+
+  // Prune expired in-memory entries opportunistically
+  const now = Date.now();
+  for (const [k, entry] of faceTokenUsesMemory.entries()) {
+    if (entry.exp && now > entry.exp + 60 * 1000) {
+      faceTokenUsesMemory.delete(k);
+    }
+  }
+
+  const memEntry = faceTokenUsesMemory.get(jti) || { targets: new Set(), exp: Number(tokenPayload.exp || now + 5 * 60 * 1000) };
+  if (memEntry.targets.has(targetPid)) {
+    return { ok: false, status: 409, message: "Verification token already used for this employee. Please scan face again." };
+  }
+  if (memEntry.targets.size >= MAX_PARTNER_PUNCHES_PER_TOKEN) {
+    return { ok: false, status: 429, message: "Verification token reached maximum team punch limit. Please scan face again." };
+  }
+
+  try {
+    const [countRows] = await pool.query("SELECT COUNT(*) as total FROM face_token_uses WHERE jti = ?", [jti]);
+    if (Number(countRows?.[0]?.total || 0) >= MAX_PARTNER_PUNCHES_PER_TOKEN) {
+      return { ok: false, status: 429, message: "Verification token reached maximum team punch limit. Please scan face again." };
+    }
+    await pool.query(
+      "INSERT INTO face_token_uses (jti, verifier_pid, target_person_id) VALUES (?, ?, ?)",
+      [jti, verifierPid, targetPid]
+    );
+  } catch (dbErr) {
+    if (dbErr && (dbErr.code === "ER_DUP_ENTRY" || dbErr.errno === 1062)) {
+      return { ok: false, status: 409, message: "Verification token already used for this employee. Please scan face again." };
+    }
+    // If table doesn't exist yet (e.g. unit test mock pool without DDL), continue relying on in-memory replay map
+    if (dbErr && dbErr.code !== "ER_NO_SUCH_TABLE" && !String(dbErr.message || "").includes("face_token_uses")) {
+      throw dbErr;
+    }
+  }
+
+  memEntry.targets.add(targetPid);
+  faceTokenUsesMemory.set(jti, memEntry);
+  return { ok: true };
+}
+
+function validateColumnList(table, rawCols, { readableOnly = false, allowedSet = null } = {}) {
+  const schemaSet = TABLE_SCHEMA_COLUMNS[table];
+  const validSet = allowedSet || schemaSet;
+  const cols = rawCols.map((c) => String(c || "").trim()).filter(Boolean);
+  for (const col of cols) {
+    if (!schemaSet.has(col)) {
+      return { ok: false, status: 400, message: `Column '${col}' does not exist on table '${table}'.` };
+    }
+    if (table === "persons" && readableOnly && NEVER_READ_PERSON_COLUMNS.has(col)) {
+      return { ok: false, status: 403, message: `Column '${col}' cannot be queried.` };
+    }
+    if (allowedSet && !validSet.has(col)) {
+      return { ok: false, status: 403, message: `Access denied for column '${col}' on table '${table}'.` };
+    }
+  }
+  return { ok: true, cols };
+}
+
+function buildValidatedWhereClause(table, filters, params, allowedFilterSet = null) {
+  if (!Array.isArray(filters) || filters.length === 0) return "";
+  const schemaSet = TABLE_SCHEMA_COLUMNS[table];
+  const clauses = [];
+
+  for (const f of filters) {
+    if (!f || typeof f !== "object" || !f.column || !f.op) {
+      const err = new Error("Malformed filter entry.");
+      err.statusCode = 400;
+      throw err;
+    }
+    const colName = String(f.column).trim();
+    const op = String(f.op).trim();
+    if (!schemaSet.has(colName)) {
+      const err = new Error(`Invalid filter column '${colName}' on table '${table}'.`);
+      err.statusCode = 400;
+      throw err;
+    }
+    if (table === "persons" && NEVER_READ_PERSON_COLUMNS.has(colName)) {
+      const err = new Error(`Filtering on column '${colName}' is not permitted.`);
+      err.statusCode = 403;
+      throw err;
+    }
+    if (allowedFilterSet && !allowedFilterSet.has(colName)) {
+      const err = new Error(`Filtering on column '${colName}' is not permitted for your role.`);
+      err.statusCode = 403;
+      throw err;
+    }
+    if (!SAFE_FILTER_OPS.has(op)) {
+      const err = new Error(`Unsupported filter operator '${op}'.`);
+      err.statusCode = 400;
+      throw err;
+    }
+
+    const quotedCol = `\`${colName}\``;
+    if (op === "eq") {
+      clauses.push(`${quotedCol} = ?`);
+      params.push(f.value);
+    } else if (op === "neq") {
+      clauses.push(`${quotedCol} != ?`);
+      params.push(f.value);
+    } else if (op === "gt") {
+      clauses.push(`${quotedCol} > ?`);
+      params.push(f.value);
+    } else if (op === "gte") {
+      clauses.push(`${quotedCol} >= ?`);
+      params.push(f.value);
+    } else if (op === "lt") {
+      clauses.push(`${quotedCol} < ?`);
+      params.push(f.value);
+    } else if (op === "lte") {
+      clauses.push(`${quotedCol} <= ?`);
+      params.push(f.value);
+    } else if (op === "like" || op === "ilike") {
+      clauses.push(`${quotedCol} LIKE ?`);
+      params.push(f.value);
+    } else if (op === "is") {
+      if (f.value === null) clauses.push(`${quotedCol} IS NULL`);
+      else if (f.value === true) clauses.push(`${quotedCol} IS TRUE`);
+      else if (f.value === false) clauses.push(`${quotedCol} IS FALSE`);
+      else {
+        clauses.push(`${quotedCol} = ?`);
+        params.push(f.value);
+      }
+    } else if (op === "in") {
+      if (!Array.isArray(f.value)) {
+        const err = new Error(`Filter operator 'in' requires an array for '${colName}'.`);
+        err.statusCode = 400;
+        throw err;
+      }
+      if (f.value.length > 0) {
+        clauses.push(`${quotedCol} IN (${f.value.map(() => "?").join(", ")})`);
+        params.push(...f.value);
+      } else {
+        clauses.push("1=0");
+      }
+    }
+  }
+
+  return clauses.length > 0 ? ` WHERE ${clauses.join(" AND ")}` : "";
+}
+
 app.post("/api/db/query", async (req, res) => {
-  const { table, action, select, filters = [], orders = [], limit, offset, data, payload, single, maybeSingle, count } = req.body || {};
+  const { table, action, select, columns, filters = [], orders = [], limit, offset, data, payload, single, maybeSingle, count } = req.body || {};
+  const selectArg = select !== undefined ? select : columns;
   const payloadData = payload !== undefined ? payload : data;
 
-  const allowedTables = [
-    "persons", "attendance", "department_rates", "settings",
-    "holidays", "cash_advances", "payroll_periods",
-    "payroll_activity_logs", "payroll_released_history",
-    "expenses"
-  ];
-
+  const allowedTables = Object.keys(TABLE_SCHEMA_COLUMNS);
   if (!allowedTables.includes(table)) {
     return res.status(400).json({ error: { message: `Table '${table}' is not accessible.` } });
+  }
+  if (!["select", "insert", "update", "upsert", "delete"].includes(action)) {
+    return res.status(400).json({ error: { message: `Unknown action: ${action}` } });
+  }
+
+  // Authenticate caller: Staff JWT takes precedence; otherwise allow strictly scoped /scan faceToken on attendance select/insert
+  let principal = null;
+  const bearerToken = extractBearerToken(req);
+  if (bearerToken) {
+    const resolved = await resolveStaffSession(req).catch((e) => ({ ok: false, status: 500, code: "AUTH_ERROR", error: e.message }));
+    if (!resolved.ok) {
+      return res.status(resolved.status).json({ error: { message: resolved.error, code: resolved.code } });
+    }
+    principal = { kind: "staff", user: resolved.user, role: resolved.user.role };
+  } else {
+    const faceHeaderToken = String(req.headers["x-face-token"] || req.body?.face_token || "").trim();
+    const isScanAttendanceCandidate = table === "attendance" && (action === "select" || action === "insert");
+    if (!isScanAttendanceCandidate) {
+      return res.status(401).json({ error: { message: "Authentication required for this database operation.", code: "AUTH_REQUIRED" } });
+    }
+    if (action === "select") {
+      if (!faceHeaderToken) {
+        return res.status(401).json({ error: { message: "Face verification token or staff sign-in is required.", code: "AUTH_REQUIRED" } });
+      }
+      const verifiedFace = verifyFaceToken(faceHeaderToken);
+      if (!verifiedFace.valid) {
+        return res.status(401).json({ error: { message: `Invalid or expired face verification token: ${verifiedFace.error}`, code: "FACE_TOKEN_INVALID" } });
+      }
+      principal = { kind: "face", facePayload: verifiedFace.payload };
+    } else {
+      // action === "insert" on attendance without staff JWT: enforce per-item verification_token (or header fallback) inside INSERT block
+      principal = { kind: "face", faceHeaderToken: faceHeaderToken || null };
+    }
+  }
+
+  // Enforce role-based table & action authorization
+  if (principal.kind === "staff" && principal.role !== "admin") {
+    return res.status(403).json({ error: { message: "Administrator privileges required for database operations.", code: "FORBIDDEN" } });
   }
 
   try {
     if (table === "persons" && action !== "select") {
       clearEligiblePersonsCache();
+      clearAuthUserCache();
     }
+
     // 1. SELECT
     if (action === "select") {
-      let selectCols = "*";
-      if (select && typeof select === "string" && select.trim() !== "*") {
-        const cols = select.split(",").map(c => c.trim()).filter(Boolean);
-        selectCols = cols.map(c => `\`${c.replace(/`/g, "")}\``).join(", ");
+      let allowedSelectSet = null;
+      let allowedFilterSet = null;
+      let defaultSafeColumns = "*";
+
+      if (principal.kind === "face") {
+        allowedSelectSet = FACE_SCAN_ATTENDANCE_READ_SET;
+        allowedFilterSet = FACE_SCAN_ATTENDANCE_READ_SET;
+        defaultSafeColumns = FACE_SCAN_ATTENDANCE_READ_COLUMNS.map((c) => `\`${c}\``).join(", ");
+
+        const hasPersonIdFilter = Array.isArray(filters) && filters.some((f) => {
+          if (!f || f.column !== "person_id") return false;
+          if (f.op === "eq" && f.value !== undefined && f.value !== null && String(f.value).trim() !== "") return true;
+          if (f.op === "in" && Array.isArray(f.value) && f.value.length > 0 && f.value.length <= 25) return true;
+          return false;
+        });
+        if (!hasPersonIdFilter) {
+          return res.status(403).json({ error: { message: "Scanner reads require a scoped person_id filter.", code: "FORBIDDEN" } });
+        }
       }
 
-      let sql = `SELECT ${selectCols} FROM \`${table}\``;
+      let selectCols = defaultSafeColumns;
+      if (selectArg && typeof selectArg === "string" && selectArg.trim() !== "*") {
+        const rawCols = selectArg.split(",").map((c) => c.trim()).filter(Boolean);
+        const colCheck = validateColumnList(table, rawCols, { readableOnly: true, allowedSet: allowedSelectSet });
+        if (!colCheck.ok) {
+          return res.status(colCheck.status).json({ error: { message: colCheck.message } });
+        }
+        selectCols = colCheck.cols.map((c) => `\`${c}\``).join(", ");
+      }
+
       const params = [];
-
-      if (Array.isArray(filters) && filters.length > 0) {
-        const whereClauses = [];
-        for (const f of filters) {
-          if (!f || !f.column) continue;
-          const col = `\`${f.column.replace(/`/g, "")}\``;
-          if (f.op === "eq") {
-            whereClauses.push(`${col} = ?`);
-            params.push(f.value);
-          } else if (f.op === "neq") {
-            whereClauses.push(`${col} != ?`);
-            params.push(f.value);
-          } else if (f.op === "gt") {
-            whereClauses.push(`${col} > ?`);
-            params.push(f.value);
-          } else if (f.op === "gte") {
-            whereClauses.push(`${col} >= ?`);
-            params.push(f.value);
-          } else if (f.op === "lt") {
-            whereClauses.push(`${col} < ?`);
-            params.push(f.value);
-          } else if (f.op === "lte") {
-            whereClauses.push(`${col} <= ?`);
-            params.push(f.value);
-          } else if (f.op === "like" || f.op === "ilike") {
-            whereClauses.push(`${col} LIKE ?`);
-            params.push(f.value);
-          } else if (f.op === "is") {
-            if (f.value === null) whereClauses.push(`${col} IS NULL`);
-            else if (f.value === true) whereClauses.push(`${col} IS TRUE`);
-            else if (f.value === false) whereClauses.push(`${col} IS FALSE`);
-            else {
-              whereClauses.push(`${col} = ?`);
-              params.push(f.value);
-            }
-          } else if (f.op === "in") {
-            if (Array.isArray(f.value) && f.value.length > 0) {
-              whereClauses.push(`${col} IN (${f.value.map(() => "?").join(", ")})`);
-              params.push(...f.value);
-            } else {
-              whereClauses.push("1=0");
-            }
-          }
-        }
-        if (whereClauses.length > 0) {
-          sql += ` WHERE ${whereClauses.join(" AND ")}`;
-        }
-      }
+      const whereSql = buildValidatedWhereClause(table, filters, params, allowedFilterSet);
+      let sql = `SELECT ${selectCols} FROM \`${table}\`${whereSql}`;
 
       if (Array.isArray(orders) && orders.length > 0) {
-        const orderClauses = orders.map(o => `\`${o.column.replace(/`/g, "")}\` ${o.ascending === false ? "DESC" : "ASC"}`);
+        const orderCols = orders.map((o) => String(o?.column || "").trim());
+        const orderCheck = validateColumnList(table, orderCols, { readableOnly: true, allowedSet: allowedSelectSet });
+        if (!orderCheck.ok) {
+          return res.status(orderCheck.status).json({ error: { message: orderCheck.message } });
+        }
+        const orderClauses = orders.map((o) => `\`${String(o.column).trim()}\` ${o.ascending === false ? "DESC" : "ASC"}`);
         sql += ` ORDER BY ${orderClauses.join(", ")}`;
       }
 
-      if (typeof limit === "number") {
-        sql += ` LIMIT ${Number(limit)}`;
-        if (typeof offset === "number") {
-          sql += ` OFFSET ${Number(offset)}`;
+      if (typeof limit === "number" && Number.isFinite(limit) && limit >= 0) {
+        const safeLimit = Math.min(10000, Math.floor(limit));
+        sql += ` LIMIT ${safeLimit}`;
+        if (typeof offset === "number" && Number.isFinite(offset) && offset >= 0) {
+          sql += ` OFFSET ${Math.floor(offset)}`;
         }
       }
 
       const [rows] = await pool.query(sql, params);
 
-      const sanitizedRows = (rows || []).map(r => {
-        const copy = { ...r };
+      const sanitizedRows = (rows || []).map((r) => {
+        const copy = stripPasswordFromResponse(table, r);
         if (copy.descriptor && typeof copy.descriptor === "string") {
           try { copy.descriptor = JSON.parse(copy.descriptor); } catch (e) {}
         }
@@ -2272,7 +3161,7 @@ app.post("/api/db/query", async (req, res) => {
 
       let totalCount = null;
       if (count === "exact") {
-        const [cRows] = await pool.query(`SELECT COUNT(*) as total FROM \`${table}\``);
+        const [cRows] = await pool.query(`SELECT COUNT(*) as total FROM \`${table}\`${whereSql}`, params);
         totalCount = cRows[0]?.total || 0;
       }
 
@@ -2288,32 +3177,68 @@ app.post("/api/db/query", async (req, res) => {
       const items = Array.isArray(payloadData) ? payloadData : [payloadData];
       if (items.length === 0) return res.json({ data: [], error: null });
 
-      const crypto = require('crypto');
-      const inserted = [];
+      const preparedItems = [];
       for (const item of items) {
-        if (!item) continue;
+        if (!item || typeof item !== "object") continue;
         const itemObj = { ...item };
-        
-        // Auto-generate UUID if missing for tables using string UUIDs (like persons/users)
-        if (!itemObj.id && (table === "persons" || table === "users")) {
+
+        // Auto-generate UUID if missing for tables using string UUIDs (like persons)
+        if (!itemObj.id && table === "persons") {
           itemObj.id = crypto.randomUUID();
         }
 
-        // Face Verification Token validation for field attendance
-        if (table === "attendance" && itemObj.verification_token) {
-          const tokenRes = verifyFaceToken(itemObj.verification_token);
+        const passwordError = await sanitizePersonWritePayload(table, itemObj);
+        if (passwordError) {
+          return res.status(400).json({ error: { message: passwordError } });
+        }
+
+        const candidateToken = itemObj.verification_token || principal.faceHeaderToken || null;
+        if (principal.kind === "face") {
+          // Strict enforcement for unauthenticated /scan attendance submissions
+          if (!candidateToken) {
+            return res.status(401).json({ error: { message: "Verification token is required to record field attendance." } });
+          }
+          const tokenRes = verifyFaceToken(candidateToken);
+          if (!tokenRes.valid) {
+            return res.status(401).json({ error: { message: "Invalid or expired verification token: " + tokenRes.error } });
+          }
+          if (!itemObj.person_id) {
+            return res.status(400).json({ error: { message: "person_id is required." } });
+          }
+          const methodVal = String(itemObj.method || "field-site").trim().toLowerCase();
+          if (!FACE_SCAN_ALLOWED_METHODS.has(methodVal)) {
+            return res.status(403).json({ error: { message: `Attendance method '${itemObj.method}' is not permitted from scanner.` } });
+          }
+          itemObj.method = methodVal;
+          itemObj.ot_status = "pending";
+          itemObj.archived = 0;
+
+          if (itemObj.device_time) {
+            const tsMs = parseAttendanceTimestampMs(itemObj.device_time);
+            if (!Number.isFinite(tsMs) || Math.abs(Date.now() - tsMs) > LIVE_FACE_SCAN_MAX_CLOCK_DRIFT_MS) {
+              return res.status(400).json({ error: { message: "Attendance timestamp outside permitted clock drift window." } });
+            }
+          }
+
+          delete itemObj.verification_token;
+          const cleanUserNotes = stripForgedVerificationTags(itemObj.notes);
+          const signerTag = String(itemObj.person_id) === String(tokenRes.payload.pid)
+            ? `Verified by: ${tokenRes.payload.name} (ID ${tokenRes.payload.pid})`
+            : `Verified by: ${tokenRes.payload.name} (ID ${tokenRes.payload.pid}) | Team punch`;
+          itemObj.notes = cleanUserNotes ? `${signerTag} | ${cleanUserNotes}` : signerTag;
+          itemObj.__faceTokenPayload = tokenRes.payload;
+        } else if (table === "attendance" && candidateToken) {
+          // Staff session with attached face verification token
+          const tokenRes = verifyFaceToken(candidateToken);
           if (!tokenRes.valid) {
             return res.status(400).json({ error: { message: "Invalid or expired verification token: " + tokenRes.error } });
           }
           delete itemObj.verification_token;
           const verifiedTag = `Verified by: ${tokenRes.payload.name} (ID ${tokenRes.payload.pid})`;
-          if (itemObj.notes && itemObj.notes.trim()) {
-            if (!itemObj.notes.includes(verifiedTag)) {
-              itemObj.notes = `${verifiedTag} | ${itemObj.notes.trim()}`;
-            }
-          } else {
-            itemObj.notes = verifiedTag;
-          }
+          const cleanNotes = stripForgedVerificationTags(itemObj.notes);
+          itemObj.notes = cleanNotes ? `${verifiedTag} | ${cleanNotes}` : verifiedTag;
+        } else {
+          delete itemObj.verification_token;
         }
 
         if (itemObj.descriptor && typeof itemObj.descriptor === "object") {
@@ -2323,6 +3248,7 @@ app.post("/api/db/query", async (req, res) => {
           itemObj.detailed_attendance = JSON.stringify(itemObj.detailed_attendance);
         }
         for (const k in itemObj) {
+          if (k === "__faceTokenPayload") continue;
           if (itemObj[k] instanceof Date) {
             itemObj[k] = normalizeDahuaDeviceTime(itemObj[k]);
           }
@@ -2331,13 +3257,34 @@ app.post("/api/db/query", async (req, res) => {
           itemObj.device_time = normalizeDahuaDeviceTime(itemObj.device_time);
         }
 
+        const writeKeys = Object.keys(itemObj).filter((k) => k !== "__faceTokenPayload");
+        const keyCheck = validateColumnList(table, writeKeys);
+        if (!keyCheck.ok) {
+          return res.status(keyCheck.status).json({ error: { message: keyCheck.message } });
+        }
+
+        preparedItems.push({ rawItem: item, itemObj });
+      }
+
+      const inserted = [];
+      for (const { rawItem, itemObj } of preparedItems) {
+        const faceTokenPayload = itemObj.__faceTokenPayload || null;
+        delete itemObj.__faceTokenPayload;
+
+        if (faceTokenPayload) {
+          const claimRes = await claimFaceTokenUse(faceTokenPayload, itemObj.person_id);
+          if (!claimRes.ok) {
+            return res.status(claimRes.status).json({ error: { message: claimRes.message } });
+          }
+        }
+
         const keys = Object.keys(itemObj);
-        const cols = keys.map(k => `\`${k.replace(/`/g, "")}\``).join(", ");
+        const cols = keys.map((k) => `\`${k}\``).join(", ");
         const placeholders = keys.map(() => "?").join(", ");
-        const values = keys.map(k => itemObj[k]);
+        const values = keys.map((k) => itemObj[k]);
 
         let sql = `INSERT INTO \`${table}\` (${cols}) VALUES (${placeholders})`;
-        if (table === "attendance") {
+        if (table === "attendance" && principal.kind === "staff") {
           sql += ` ON DUPLICATE KEY UPDATE
             \`device_time\` = VALUES(\`device_time\`),
             \`event\` = VALUES(\`event\`),
@@ -2351,7 +3298,7 @@ app.post("/api/db/query", async (req, res) => {
         }
 
         const [result] = await pool.query(sql, values);
-        inserted.push({ ...item, id: result.insertId || item.id });
+        inserted.push(stripPasswordFromResponse(table, { ...rawItem, id: result.insertId || itemObj.id }));
       }
 
       return res.json({ data: single ? inserted[0] : inserted, error: null });
@@ -2359,8 +3306,20 @@ app.post("/api/db/query", async (req, res) => {
 
     // 3. UPDATE
     if (action === "update") {
+      if (!Array.isArray(filters) || filters.length === 0) {
+        return res.status(400).json({ error: { message: "Update requires at least one filter condition." } });
+      }
+      if (!payloadData || typeof payloadData !== "object") {
+        return res.status(400).json({ error: { message: "Update payload object is required." } });
+      }
+
       const itemObj = { ...payloadData };
       delete itemObj.id;
+
+      const passwordError = await sanitizePersonWritePayload(table, itemObj);
+      if (passwordError) {
+        return res.status(400).json({ error: { message: passwordError } });
+      }
 
       if (itemObj.descriptor && typeof itemObj.descriptor === "object") {
         itemObj.descriptor = JSON.stringify(itemObj.descriptor);
@@ -2372,33 +3331,24 @@ app.post("/api/db/query", async (req, res) => {
         itemObj.device_time = normalizeDahuaDeviceTime(itemObj.device_time);
       }
 
-      const keys = Object.keys(itemObj).filter(k => itemObj[k] !== undefined);
+      const keys = Object.keys(itemObj).filter((k) => itemObj[k] !== undefined);
       if (keys.length === 0) {
-        return res.json({ data: payloadData, error: null });
+        return res.json({ data: stripPasswordFromResponse(table, payloadData), error: null });
       }
 
-      const setClauses = keys.map(k => `\`${k.replace(/`/g, "")}\` = ?`).join(", ");
-      const params = keys.map(k => itemObj[k]);
-
-      let sql = `UPDATE \`${table}\` SET ${setClauses}`;
-
-      if (Array.isArray(filters) && filters.length > 0) {
-        const whereClauses = [];
-        for (const f of filters) {
-          if (!f || !f.column) continue;
-          const col = `\`${f.column.replace(/`/g, "")}\``;
-          if (f.op === "eq") {
-            whereClauses.push(`${col} = ?`);
-            params.push(f.value);
-          } else if (f.op === "in") {
-            whereClauses.push(`${col} IN (${f.value.map(() => "?").join(", ")})`);
-            params.push(...f.value);
-          }
-        }
-        if (whereClauses.length > 0) {
-          sql += ` WHERE ${whereClauses.join(" AND ")}`;
-        }
+      const keyCheck = validateColumnList(table, keys);
+      if (!keyCheck.ok) {
+        return res.status(keyCheck.status).json({ error: { message: keyCheck.message } });
       }
+
+      const setClauses = keys.map((k) => `\`${k}\` = ?`).join(", ");
+      const params = keys.map((k) => itemObj[k]);
+      const whereSql = buildValidatedWhereClause(table, filters, params);
+      if (!whereSql) {
+        return res.status(400).json({ error: { message: "Update requires at least one valid filter." } });
+      }
+
+      const sql = `UPDATE \`${table}\` SET ${setClauses}${whereSql}`;
 
       try {
         await pool.query(sql, params);
@@ -2406,14 +3356,11 @@ app.post("/api/db/query", async (req, res) => {
         if (table === "attendance" && (err.code === "ER_BAD_FIELD_ERROR" || String(err.message || "").includes("ot_status"))) {
           await pool.query("ALTER TABLE `attendance` ADD COLUMN `ot_status` VARCHAR(20) NOT NULL DEFAULT 'pending' AFTER `status`").catch(() => {});
           await pool.query(sql, params);
-          return res.json({ data: payloadData, error: null });
+          return res.json({ data: stripPasswordFromResponse(table, payloadData), error: null });
         }
         if (table === "attendance" && (err.code === "ER_DUP_ENTRY" || err.errno === 1062)) {
-          let idVal = null;
-          if (Array.isArray(filters)) {
-            const idFilter = filters.find(f => f && f.column === "id" && f.op === "eq");
-            if (idFilter) idVal = idFilter.value;
-          }
+          const idFilter = filters.find((f) => f && f.column === "id" && f.op === "eq");
+          const idVal = idFilter ? idFilter.value : null;
           if (idVal) {
             const [rows] = await pool.query("SELECT * FROM `attendance` WHERE `id` = ?", [idVal]);
             if (rows.length > 0) {
@@ -2427,8 +3374,7 @@ app.post("/api/db/query", async (req, res) => {
                 if (mins >= 0) {
                   if (mins < 3 * 60) {
                     slot = "afternoon_time_out";
-                  }
-                  else if (combined.event === "time-in") slot = "morning_time_in";
+                  } else if (combined.event === "time-in") slot = "morning_time_in";
                   else if (combined.event === "time-out") slot = "afternoon_time_out";
                 }
                 if (combined.person_id && workDate && slot) {
@@ -2437,7 +3383,7 @@ app.post("/api/db/query", async (req, res) => {
                     [combined.person_id, workDate, slot, idVal]
                   );
                   await pool.query(sql, params);
-                  return res.json({ data: payloadData, error: null });
+                  return res.json({ data: stripPasswordFromResponse(table, payloadData), error: null });
                 }
               }
             }
@@ -2445,15 +3391,22 @@ app.post("/api/db/query", async (req, res) => {
         }
         throw err;
       }
-      return res.json({ data: payloadData, error: null });
+      return res.json({ data: stripPasswordFromResponse(table, payloadData), error: null });
     }
 
     // 4. UPSERT
     if (action === "upsert") {
       const items = Array.isArray(payloadData) ? payloadData : [payloadData];
+      const preparedUpserts = [];
       for (const item of items) {
-        if (!item) continue;
+        if (!item || typeof item !== "object") continue;
         const itemObj = { ...item };
+
+        const passwordError = await sanitizePersonWritePayload(table, itemObj);
+        if (passwordError) {
+          return res.status(400).json({ error: { message: passwordError } });
+        }
+
         if (itemObj.descriptor && typeof itemObj.descriptor === "object") {
           itemObj.descriptor = JSON.stringify(itemObj.descriptor);
         }
@@ -2461,54 +3414,56 @@ app.post("/api/db/query", async (req, res) => {
           itemObj.detailed_attendance = JSON.stringify(itemObj.detailed_attendance);
         }
 
+        const upsertKeys = Object.keys(itemObj);
+        const keyCheck = validateColumnList(table, upsertKeys);
+        if (!keyCheck.ok) {
+          return res.status(keyCheck.status).json({ error: { message: keyCheck.message } });
+        }
+
+        preparedUpserts.push(itemObj);
+      }
+
+      for (const itemObj of preparedUpserts) {
         const keys = Object.keys(itemObj);
-        const cols = keys.map(k => `\`${k.replace(/`/g, "")}\``).join(", ");
+        const cols = keys.map((k) => `\`${k}\``).join(", ");
         const placeholders = keys.map(() => "?").join(", ");
-        const updateClauses = keys.map(k => {
-          const colName = k.replace(/`/g, "");
+        const updateClauses = keys.map((colName) => {
           if (table === "persons" && (colName === "department" || colName === "daily_rate" || colName === "late_penalty")) {
             return `\`${colName}\` = COALESCE(NULLIF(VALUES(\`${colName}\`), ''), \`${colName}\`)`;
           }
           return `\`${colName}\` = VALUES(\`${colName}\`)`;
         }).join(", ");
-        const values = keys.map(k => itemObj[k]);
+        const values = keys.map((k) => itemObj[k]);
 
         await pool.query(
           `INSERT INTO \`${table}\` (${cols}) VALUES (${placeholders}) ON DUPLICATE KEY UPDATE ${updateClauses}`,
           values
         );
       }
-      return res.json({ data: payloadData, error: null });
+      return res.json({ data: stripPasswordFromResponse(table, payloadData), error: null });
     }
 
     // 5. DELETE
     if (action === "delete") {
-      let sql = `DELETE FROM \`${table}\``;
+      if (!Array.isArray(filters) || filters.length === 0) {
+        return res.status(400).json({ error: { message: "Delete requires at least one filter condition." } });
+      }
       const params = [];
-      if (Array.isArray(filters) && filters.length > 0) {
-        const whereClauses = [];
-        for (const f of filters) {
-          if (!f || !f.column) continue;
-          const col = `\`${f.column.replace(/`/g, "")}\``;
-          if (f.op === "eq") {
-            whereClauses.push(`${col} = ?`);
-            params.push(f.value);
-          } else if (f.op === "in") {
-            whereClauses.push(`${col} IN (${f.value.map(() => "?").join(", ")})`);
-            params.push(...f.value);
-          }
-        }
-        if (whereClauses.length > 0) {
-          sql += ` WHERE ${whereClauses.join(" AND ")}`;
-        }
+      const whereSql = buildValidatedWhereClause(table, filters, params);
+      if (!whereSql) {
+        return res.status(400).json({ error: { message: "Delete requires at least one valid filter." } });
       }
 
+      const sql = `DELETE FROM \`${table}\`${whereSql}`;
       await pool.query(sql, params);
       return res.json({ data: null, error: null });
     }
 
     return res.status(400).json({ error: { message: `Unknown action: ${action}` } });
   } catch (err) {
+    if (err && err.statusCode) {
+      return res.status(err.statusCode).json({ error: { message: err.message } });
+    }
     console.error("DB Query error:", err.message);
     return res.status(500).json({ error: { message: err.message || "Database query failed" } });
   }
@@ -2631,25 +3586,33 @@ app.get("/health", (req, res) => res.json({ status: "ok" }));
 // ==========================================
 // FACE VERIFICATION & SECURITY TOKEN SERVICE
 // ==========================================
-const FACE_TOKEN_SECRET = process.env.FACE_TOKEN_SECRET || "dahua_face_secret_key_892348923489234";
 const FACE_VERIFY_THRESHOLD = Number(process.env.FACE_VERIFY_THRESHOLD || 0.38);
 const FACE_MARGIN_THRESHOLD = 0.012;
 
 function signFaceToken(payload) {
-  const body = Buffer.from(JSON.stringify(payload)).toString("base64url");
-  const sig = crypto.createHmac("sha256", FACE_TOKEN_SECRET).update(body).digest("base64url");
+  const secret = getFaceTokenSecret();
+  if (!secret) {
+    throw new Error("FACE_TOKEN_SECRET is required in production.");
+  }
+  const normalizedPayload = { typ: "face-scan", ...payload };
+  const body = Buffer.from(JSON.stringify(normalizedPayload)).toString("base64url");
+  const sig = crypto.createHmac("sha256", secret).update(body).digest("base64url");
   return `${body}.${sig}`;
 }
 
 function verifyFaceToken(token) {
+  const secret = getFaceTokenSecret();
+  if (!secret) {
+    return { valid: false, error: "Server face verification secret is not configured." };
+  }
   if (!token || typeof token !== "string" || !token.includes(".")) {
     return { valid: false, error: "Malformed token" };
   }
   const parts = token.split(".");
   if (parts.length !== 2) return { valid: false, error: "Invalid token format" };
   const [bodyB64, sig] = parts;
-  const expectedSig = crypto.createHmac("sha256", FACE_TOKEN_SECRET).update(bodyB64).digest("base64url");
-  
+  const expectedSig = crypto.createHmac("sha256", secret).update(bodyB64).digest("base64url");
+
   const sigBuf = Buffer.from(sig);
   const expBuf = Buffer.from(expectedSig);
   if (sigBuf.length !== expBuf.length || !crypto.timingSafeEqual(sigBuf, expBuf)) {
@@ -2658,9 +3621,11 @@ function verifyFaceToken(token) {
 
   try {
     const payload = JSON.parse(Buffer.from(bodyB64, "base64url").toString("utf-8"));
+    if (!payload || (payload.typ && payload.typ !== "face-scan") || !payload.pid || !payload.jti) {
+      return { valid: false, error: "Invalid face token claims" };
+    }
     const now = Date.now();
-    // Allow 10 minute window for clock skew between client and server
-    if (payload.exp && now > payload.exp + (10 * 60 * 1000)) {
+    if (!payload.exp || now > Number(payload.exp)) {
       return { valid: false, error: "Token expired" };
     }
     return { valid: true, payload };
@@ -2685,7 +3650,7 @@ async function getEligiblePersons() {
     return eligiblePersonsCache;
   }
   const [rows] = await pool.query(
-    "SELECT id, name, department, descriptor FROM persons WHERE archived = 0 AND descriptor IS NOT NULL"
+    "SELECT id, name, department, descriptor FROM persons WHERE (archived = 0 OR archived IS NULL) AND descriptor IS NOT NULL"
   );
   const persons = [];
   for (const r of rows) {
@@ -2736,6 +3701,27 @@ function calcEuclideanDistance(a, b) {
   return Math.sqrt(sum);
 }
 
+// GET /api/face/scan-context
+// Minimal non-PII bootstrap for the passwordless /scan attendance page (no emails, phones, salaries, or passwords).
+app.get("/api/face/scan-context", async (req, res) => {
+  try {
+    const [personRows] = await pool.query(
+      "SELECT id, name, department FROM persons WHERE archived = 0 OR archived IS NULL ORDER BY name ASC"
+    );
+    const [settingsRows] = await pool.query(
+      "SELECT id, morning_start, morning_end, afternoon_start, afternoon_end, morning_grace_minutes, afternoon_grace_minutes, late_count_limit, payroll_period_days FROM settings ORDER BY id ASC LIMIT 1"
+    );
+    return res.json({
+      success: true,
+      persons: personRows || [],
+      settings: settingsRows?.[0] || null,
+    });
+  } catch (err) {
+    console.error("[Scan Context Error]:", err.message);
+    return res.status(500).json({ success: false, error: err.message || "Failed to load scanner context." });
+  }
+});
+
 // GET /api/face/persons-offline
 // Returns all active Dahua persons with pre-normalized 128-d face descriptors for offline PWA caching
 app.get("/api/face/persons-offline", async (req, res) => {
@@ -2760,6 +3746,10 @@ app.post("/api/face/verify", async (req, res) => {
     const clientIp = req.ip || req.connection?.remoteAddress || "unknown";
     if (!checkVerifyRateLimit(clientIp)) {
       return res.status(429).json({ matched: false, error: "Too many verification attempts. Please wait a minute." });
+    }
+
+    if (!getFaceTokenSecret()) {
+      return res.status(503).json({ matched: false, error: "Server face verification secret is not configured." });
     }
 
     const { descriptor } = req.body || {};
@@ -2798,7 +3788,7 @@ app.post("/api/face/verify", async (req, res) => {
     // Direct high-confidence match if bestDist <= 0.32 (natural selfie variance from Dahua photo).
     // If bestDist is between 0.32 and FACE_VERIFY_THRESHOLD (0.38), require a distinct gap (>= FACE_MARGIN_THRESHOLD) from the second best candidate.
     const isMatched = bestPerson && (
-      (bestDist <= 0.32) ||``
+      (bestDist <= 0.32) ||
       (bestDist <= FACE_VERIFY_THRESHOLD && (secondBestDist - bestDist >= FACE_MARGIN_THRESHOLD))
     );
 
@@ -2806,6 +3796,7 @@ app.post("/api/face/verify", async (req, res) => {
       const iat = Date.now();
       const exp = iat + 5 * 60 * 1000;
       const tokenPayload = {
+        typ: "face-scan",
         pid: bestPerson.id,
         name: bestPerson.name,
         department: bestPerson.department,
@@ -2838,6 +3829,127 @@ app.post("/api/face/verify", async (req, res) => {
   }
 });
 
+// POST /api/face/offline-sync
+// Quarantine-tagged ingestion path for IndexedDB offline queue punches when the field user has no active staff JWT or unexpired faceToken.
+app.post("/api/face/offline-sync", async (req, res) => {
+  try {
+    const clientIp = req.ip || req.connection?.remoteAddress || "unknown";
+    if (!checkVerifyRateLimit(clientIp)) {
+      return res.status(429).json({ error: { message: "Too many offline sync requests. Please wait a minute." } });
+    }
+
+    let staffUser = null;
+    if (extractBearerToken(req)) {
+      const resolved = await resolveStaffSession(req);
+      if (!resolved.ok) {
+        return res.status(resolved.status).json({ error: { message: resolved.error, code: resolved.code } });
+      }
+      staffUser = resolved.user;
+    }
+
+    const rawItems = Array.isArray(req.body?.items)
+      ? req.body.items
+      : (req.body && typeof req.body === "object" && req.body.person_id ? [req.body] : []);
+    if (rawItems.length === 0) {
+      return res.json({ synced: 0, results: [] });
+    }
+    if (rawItems.length > 50) {
+      return res.status(400).json({ error: { message: "Offline sync batch exceeds maximum of 50 items per request." } });
+    }
+
+    const OFFLINE_UNVERIFIED_TAG = "[OFFLINE-UNVERIFIED - Pending Review]";
+    const results = [];
+    let syncedCount = 0;
+
+    for (const item of rawItems) {
+      const personId = String(item?.person_id || "").trim();
+      const event = String(item?.event || "").trim();
+      const photo = typeof item?.photo === "string" ? item.photo.trim() : "";
+
+      if (!personId || !["time-in", "time-out"].includes(event)) {
+        results.push({ id: item?.id || null, status: "rejected", reason: "invalid_person_or_event" });
+        continue;
+      }
+      if (!staffUser && (!photo || !photo.startsWith("data:image/"))) {
+        results.push({ id: item?.id || null, status: "rejected", reason: "photo_proof_required" });
+        continue;
+      }
+
+      const rawTs = parseAttendanceTimestampMs(item?.device_time);
+      const nowMs = Date.now();
+      const MAX_OFFLINE_AGE_MS = 60 * 24 * 60 * 60 * 1000;
+      if (!Number.isFinite(rawTs) || rawTs > nowMs + 15 * 60 * 1000 || rawTs < nowMs - MAX_OFFLINE_AGE_MS) {
+        results.push({ id: item?.id || null, status: "rejected", reason: "invalid_device_time" });
+        continue;
+      }
+
+      const [personRows] = await pool.query(
+        "SELECT id, name, department, archived FROM persons WHERE id = ? LIMIT 1",
+        [personId]
+      );
+      const personRow = personRows?.[0];
+      if (!personRow || personRow.archived === 1 || personRow.archived === true) {
+        results.push({ id: item?.id || null, status: "rejected", reason: "person_not_active" });
+        continue;
+      }
+
+      const formattedTime = normalizeDahuaDeviceTime(item.device_time);
+      const workDate = getWorkDateFromDeviceTime(formattedTime, event);
+      const [existingRows] = await pool.query(
+        "SELECT id, event, device_time FROM attendance WHERE person_id = ? AND (attendance_work_date = ? OR device_time LIKE ?)",
+        [personId, workDate, `${workDate}%`]
+      );
+      const isDup = (existingRows || []).some((r) => {
+        if (r.event !== event) return false;
+        const rTs = parseAttendanceTimestampMs(r.device_time);
+        return Number.isFinite(rTs) && Math.abs(rTs - rawTs) < 30 * 1000;
+      }) || (existingRows || []).some((r) => r.event === event);
+
+      if (isDup) {
+        results.push({ id: item?.id || null, status: "dropped_duplicate", reason: "server_existing_event" });
+        continue;
+      }
+
+      const cleanUserNotes = stripForgedVerificationTags(item?.notes);
+      const tag = staffUser
+        ? `Offline Synced by Staff: ${staffUser.name} (${staffUser.role})`
+        : OFFLINE_UNVERIFIED_TAG;
+      const finalNotes = cleanUserNotes ? `${tag} | ${cleanUserNotes}` : tag;
+
+      try {
+        await pool.query(
+          "INSERT INTO attendance (person_id, name, department, event, point, method, device_time, status, ot_status, archived, photo, notes) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', 0, ?, ?)",
+          [
+            personRow.id,
+            personRow.name,
+            personRow.department,
+            event,
+            item?.point || null,
+            "field-site",
+            formattedTime,
+            item?.status || null,
+            photo || null,
+            finalNotes,
+          ]
+        );
+        syncedCount += 1;
+        results.push({ id: item?.id || null, status: "synced", unverified: !staffUser });
+      } catch (insErr) {
+        if (insErr && (insErr.code === "ER_DUP_ENTRY" || insErr.errno === 1062)) {
+          results.push({ id: item?.id || null, status: "dropped_duplicate", reason: "server_slot_conflict" });
+        } else {
+          results.push({ id: item?.id || null, status: "error", reason: insErr.message });
+        }
+      }
+    }
+
+    return res.json({ success: true, synced: syncedCount, results });
+  } catch (err) {
+    console.error("[Offline Sync Error]:", err.message);
+    return res.status(500).json({ error: { message: err.message || "Offline sync failed." } });
+  }
+});
+
 // ==========================================
 // AUTOMATED STORAGE MAINTENANCE & PHOTO PRUNING
 // ==========================================
@@ -2863,8 +3975,8 @@ async function pruneOldAttendancePhotos(days = PHOTO_RETENTION_DAYS) {
   }
 }
 
-// Storage stats endpoint for dashboard monitoring
-app.get("/api/maintenance/storage-stats", async (req, res) => {
+// Storage stats endpoint for dashboard monitoring (Admin only)
+app.get("/api/maintenance/storage-stats", requireAdmin, async (req, res) => {
   try {
     const [[totalRecords]] = await pool.query("SELECT COUNT(*) AS total FROM attendance");
     const [[recordsWithPhoto]] = await pool.query("SELECT COUNT(*) AS with_photo FROM attendance WHERE photo IS NOT NULL");
@@ -2884,8 +3996,8 @@ app.get("/api/maintenance/storage-stats", async (req, res) => {
   }
 });
 
-// Maintenance endpoint: Prune attendance photos older than N days (default 60)
-app.post("/api/maintenance/prune-photos", async (req, res) => {
+// Maintenance endpoint: Prune attendance photos older than N days (Admin only)
+app.post("/api/maintenance/prune-photos", requireAdmin, async (req, res) => {
   try {
     const days = req.body?.days || req.query?.days || PHOTO_RETENTION_DAYS;
     const result = await pruneOldAttendancePhotos(days);
@@ -2902,8 +4014,8 @@ app.post("/api/maintenance/prune-photos", async (req, res) => {
   }
 });
 
-// Maintenance endpoint: Optimize MySQL tables to reclaim freed disk space
-app.post("/api/maintenance/optimize-tables", async (req, res) => {
+// Maintenance endpoint: Optimize MySQL tables to reclaim freed disk space (Admin only)
+app.post("/api/maintenance/optimize-tables", requireAdmin, async (req, res) => {
   try {
     const [attResult] = await pool.query("OPTIMIZE TABLE attendance");
     const [perResult] = await pool.query("OPTIMIZE TABLE persons");
@@ -2939,22 +4051,41 @@ app.use((req, res) => {
   res.sendFile(path.join(staticDir, "index.html"));
 });
 
-app.listen(PORT, () => {
-  console.log(`Server running at port ${PORT}`);
-  setTimeout(() => {
-    regeneratePayrollPeriodsIfNeeded();
-    // Storage optimization: prune photos older than retention policy on startup
-    pruneOldAttendancePhotos(PHOTO_RETENTION_DAYS);
-    clearHlsArtifacts();
-  }, 4000);
+if (process.env.SKIP_SERVER_LISTEN !== "1") {
+  app.listen(PORT, () => {
+    console.log(`Server running at port ${PORT}`);
+    setTimeout(() => {
+      regeneratePayrollPeriodsIfNeeded();
+      // Storage optimization: prune photos older than retention policy on startup
+      pruneOldAttendancePhotos(PHOTO_RETENTION_DAYS);
+      clearHlsArtifacts();
+    }, 4000);
 
-  // Periodic daily retention cleaner (every 24 hours)
-  setInterval(() => {
-    pruneOldAttendancePhotos(PHOTO_RETENTION_DAYS);
-  }, 24 * 60 * 60 * 1000);
+    // Periodic daily retention cleaner (every 24 hours)
+    setInterval(() => {
+      pruneOldAttendancePhotos(PHOTO_RETENTION_DAYS);
+    }, 24 * 60 * 60 * 1000);
 
-  // Periodic HLS artifact cleaner (every 30 minutes)
-  setInterval(() => {
-    clearHlsArtifacts();
-  }, 30 * 60 * 1000);
-});
+    // Periodic HLS artifact cleaner (every 30 minutes)
+    setInterval(() => {
+      clearHlsArtifacts();
+    }, 30 * 60 * 1000);
+  });
+} else {
+  module.exports = {
+    app,
+    isBcryptHash,
+    validatePasswordStrength,
+    hashPassword,
+    verifyUserPassword,
+    sanitizePersonWritePayload,
+    stripPasswordFromResponse,
+    signStaffJwt,
+    verifyStaffJwtToken,
+    signFaceToken,
+    verifyFaceToken,
+    clearAuthUserCache,
+    clearEligiblePersonsCache,
+    faceTokenUsesMemory,
+  };
+}

@@ -1,7 +1,7 @@
 // Role definitions and helpers for session role checks
 export const ADMIN_ROLE = "admin";
-export const SECRETARY_ROLE = "secretary";
-export const STAFF_ROLES = [ADMIN_ROLE, SECRETARY_ROLE];
+export const SECRETARY_ROLE = "secretary"; // Deprecated: Secretary role removed, admin-only architecture
+export const STAFF_ROLES = [ADMIN_ROLE];
 
 function _extractUserFromSession(sessionOrData) {
   if (!sessionOrData) return null;
@@ -36,7 +36,7 @@ export function getSessionRole(sessionOrData) {
 }
 
 export function getLoginRedirectPath(sessionOrData) {
-  return getSessionRole(sessionOrData) === SECRETARY_ROLE ? "/admin/attendance" : "/admin/dashboard";
+  return "/admin/dashboard";
 }
 
 export function hasAllowedRole(sessionOrData, allowedRoles = STAFF_ROLES) {

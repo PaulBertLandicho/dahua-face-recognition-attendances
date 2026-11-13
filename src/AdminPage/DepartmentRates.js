@@ -3,7 +3,7 @@
 import React, { useEffect, useState } from "react";
 import Swal from "sweetalert2";
 import { supabase } from "../mysqlClient";
-import { FiPlusCircle, FiHome, FiTrendingDown, FiBriefcase } from "react-icons/fi";
+import { FiPlusCircle, FiHome, FiTrendingDown, FiBriefcase, FiClock } from "react-icons/fi";
 import Icon from "../components/Icon";
 
 export default function DepartmentRates() {
@@ -130,6 +130,12 @@ export default function DepartmentRates() {
       ot_rate: 0,
       regular_holiday_rate: 100,
       special_holiday_rate: 30,
+      has_custom_workhours: trimmedDept.toLowerCase() === "utility" ? 1 : 0,
+      morning_start: trimmedDept.toLowerCase() === "utility" ? "07:00:00" : null,
+      morning_end: trimmedDept.toLowerCase() === "utility" ? "11:59:00" : null,
+      afternoon_start: trimmedDept.toLowerCase() === "utility" ? "13:00:00" : null,
+      afternoon_end: trimmedDept.toLowerCase() === "utility" ? "17:00:00" : null,
+      on_time_until: trimmedDept.toLowerCase() === "utility" ? "08:00:00" : null,
     });
 
     if (error) {
@@ -173,10 +179,12 @@ export default function DepartmentRates() {
         parseFloat(item.regular_holiday_rate) !== undefined && item.regular_holiday_rate !== ""
           ? parseFloat(item.regular_holiday_rate)
           : 100,
-      special_holiday_rate:
-        parseFloat(item.special_holiday_rate) !== undefined && item.special_holiday_rate !== ""
-          ? parseFloat(item.special_holiday_rate)
-          : 30,
+      has_custom_workhours: item.has_custom_workhours ? 1 : 0,
+      morning_start: item.has_custom_workhours && item.morning_start ? (String(item.morning_start).length === 5 ? `${item.morning_start}:00` : item.morning_start) : null,
+      morning_end: item.has_custom_workhours && item.morning_end ? (String(item.morning_end).length === 5 ? `${item.morning_end}:00` : item.morning_end) : (item.has_custom_workhours ? "11:59:00" : null),
+      afternoon_start: item.has_custom_workhours && item.afternoon_start ? (String(item.afternoon_start).length === 5 ? `${item.afternoon_start}:00` : item.afternoon_start) : (item.has_custom_workhours ? "13:00:00" : null),
+      afternoon_end: item.has_custom_workhours && item.afternoon_end ? (String(item.afternoon_end).length === 5 ? `${item.afternoon_end}:00` : item.afternoon_end) : null,
+      on_time_until: item.has_custom_workhours && item.on_time_until ? (String(item.on_time_until).length === 5 ? `${item.on_time_until}:00` : item.on_time_until) : null,
       updated_at: new Date(),
     };
 
@@ -587,6 +595,117 @@ export default function DepartmentRates() {
                     />
                   </div>
                 </div>
+              </div>
+
+              {/* Attendance Work Hours Section */}
+              <div className="mb-4">
+                <div className="flex items-center justify-between border-b border-gray-200 pb-1.5 mb-3">
+                  <h3 className="text-[1.05rem] font-semibold text-gray-600 m-0 flex items-center">
+                    <Icon
+                      as={FiClock}
+                      style={{ marginRight: 8 }}
+                      ariaLabel="Attendance Work Hours"
+                    />
+                    Work Hours
+                  </h3>
+                  <label className="flex items-center gap-1.5 cursor-pointer text-[0.72rem] font-semibold text-gray-600 select-none">
+                    <input
+                      type="checkbox"
+                      id={`has-custom-workhours-${deptKey}`}
+                      name={`has-custom-workhours-${deptKey}`}
+                      checked={Boolean(row.has_custom_workhours)}
+                      disabled={!editModes[idx]}
+                      onChange={(e) => {
+                        const isChecked = e.target.checked;
+                        handleChange(idx, "has_custom_workhours", isChecked ? 1 : 0);
+                        if (isChecked && !row.morning_start) {
+                          const isUtility = String(row.department || "").trim().toLowerCase() === "utility";
+                          handleChange(idx, "morning_start", isUtility ? "07:00" : "08:00");
+                          handleChange(idx, "on_time_until", isUtility ? "08:00" : "08:00");
+                          handleChange(idx, "afternoon_end", "17:00");
+                        }
+                      }}
+                      className="rounded text-[#237227] focus:ring-[#237227] cursor-pointer"
+                    />
+                    <span>Custom Hours</span>
+                  </label>
+                </div>
+
+                {row.has_custom_workhours ? (
+                  <div>
+                    <div className="grid grid-cols-3 gap-3">
+                      <div className="flex flex-col gap-1">
+                        <label
+                          htmlFor={`morning-start-${deptKey}`}
+                          className="text-[0.75rem] font-semibold text-gray-600 uppercase tracking-[0.5px]"
+                        >
+                          Time In
+                        </label>
+                        <input
+                          id={`morning-start-${deptKey}`}
+                          name={`morning-start-${deptKey}`}
+                          type="time"
+                          value={row.morning_start ? String(row.morning_start).slice(0, 5) : "07:00"}
+                          onChange={(e) =>
+                            handleChange(idx, "morning_start", e.target.value)
+                          }
+                          disabled={!editModes[idx]}
+                          className="py-1.5 px-2.5 text-[0.85rem] rounded-lg border border-gray-300 bg-white text-gray-800 outline-none transition-colors w-full box-border disabled:bg-gray-100 disabled:border-gray-300 disabled:text-gray-700 focus:outline-none focus:ring-0 focus:border-[#237227]"
+                        />
+                      </div>
+                      <div className="flex flex-col gap-1">
+                        <label
+                          htmlFor={`on-time-until-${deptKey}`}
+                          className="text-[0.75rem] font-semibold text-gray-600 uppercase tracking-[0.5px]"
+                        >
+                          On-Time Until
+                        </label>
+                        <input
+                          id={`on-time-until-${deptKey}`}
+                          name={`on-time-until-${deptKey}`}
+                          type="time"
+                          value={row.on_time_until ? String(row.on_time_until).slice(0, 5) : "08:00"}
+                          onChange={(e) =>
+                            handleChange(idx, "on_time_until", e.target.value)
+                          }
+                          disabled={!editModes[idx]}
+                          className="py-1.5 px-2.5 text-[0.85rem] rounded-lg border border-gray-300 bg-white text-gray-800 outline-none transition-colors w-full box-border disabled:bg-gray-100 disabled:border-gray-300 disabled:text-gray-700 focus:outline-none focus:ring-0 focus:border-[#237227]"
+                        />
+                      </div>
+                      <div className="flex flex-col gap-1">
+                        <label
+                          htmlFor={`afternoon-end-${deptKey}`}
+                          className="text-[0.75rem] font-semibold text-gray-600 uppercase tracking-[0.5px]"
+                        >
+                          Time Out
+                        </label>
+                        <input
+                          id={`afternoon-end-${deptKey}`}
+                          name={`afternoon-end-${deptKey}`}
+                          type="time"
+                          value={row.afternoon_end ? String(row.afternoon_end).slice(0, 5) : "17:00"}
+                          onChange={(e) =>
+                            handleChange(idx, "afternoon_end", e.target.value)
+                          }
+                          disabled={!editModes[idx]}
+                          className="py-1.5 px-2.5 text-[0.85rem] rounded-lg border border-gray-300 bg-white text-gray-800 outline-none transition-colors w-full box-border disabled:bg-gray-100 disabled:border-gray-300 disabled:text-gray-700 focus:outline-none focus:ring-0 focus:border-[#237227]"
+                        />
+                      </div>
+                    </div>
+                    <div className="mt-2.5 text-[0.72rem] text-emerald-800 bg-emerald-50 border border-emerald-200 rounded-lg px-2.5 py-1 flex items-center justify-between">
+                      <span>
+                        <strong>On-Time Badge:</strong> {row.morning_start ? String(row.morning_start).slice(0, 5) : "07:00"} – {row.on_time_until ? String(row.on_time_until).slice(0, 5) : "08:00"}
+                      </span>
+                      <span className="text-[0.68rem] text-emerald-700 font-medium">
+                        Time-Out: {row.afternoon_end ? String(row.afternoon_end).slice(0, 5) : "17:00"}
+                      </span>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="text-[0.75rem] text-gray-500 bg-gray-100/70 rounded-lg p-2.5 border border-dashed border-gray-200 text-center">
+                    Uses standard company hours (08:00 AM – 05:00 PM)
+                  </div>
+                )}
               </div>
 
               {/* Action Buttons (Bottom Right) */}

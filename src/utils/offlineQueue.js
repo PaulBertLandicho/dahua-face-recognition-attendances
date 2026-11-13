@@ -1,5 +1,6 @@
 // Minimal IndexedDB helper for offline attendance queue, persons, and settings
 import { toMinutes, determineAttendanceStatus } from "../AdminPage/attendanceUtils";
+import { getApiBase, getStoredAccessToken } from "./authSession";
 const DB_NAME = "multifactors_offline";
 const DB_VERSION = 1;
 const STORE_QUEUE = "queue";
@@ -142,12 +143,24 @@ export function clearQueue() {
 
 export function savePersons(persons) {
   return withStore(STORE_PERSONS, "readwrite", (store) => {
-    // clear then add
-    const clearReq = store.clear();
-    clearReq.onsuccess = () => {
-      for (const p of persons || []) {
-        try { store.put(p); } catch (e) {}
-      }
+    const existingReq = store.getAll();
+    existingReq.onsuccess = () => {
+      const existingById = new Map(
+        (existingReq.result || []).map((rec) => [String(rec.id), rec])
+      );
+      const clearReq = store.clear();
+      clearReq.onsuccess = () => {
+        for (const p of persons || []) {
+          try {
+            const prev = existingById.get(String(p.id));
+            const merged =
+              prev && prev.descriptor !== undefined && p.descriptor === undefined
+                ? { ...p, descriptor: prev.descriptor }
+                : p;
+            store.put(merged);
+          } catch (e) {}
+        }
+      };
     };
     return undefined;
   });
@@ -285,9 +298,86 @@ export async function enqueueAutoMorningOuts() {
   return results;
 }
 
+async function syncBatchViaOfflineQuarantine(items) {
+  const results = [];
+  const BATCH_SIZE = 50;
+  const endpoint = `${getApiBase()}/api/face/offline-sync`;
+  const staffToken = getStoredAccessToken();
+
+  for (let i = 0; i < items.length; i += BATCH_SIZE) {
+    const batch = items.slice(i, i + BATCH_SIZE);
+    try {
+      const headers = { "Content-Type": "application/json" };
+      if (staffToken) {
+        headers.Authorization = `Bearer ${staffToken}`;
+      }
+      const res = await fetch(endpoint, {
+        method: "POST",
+        headers,
+        credentials: "omit",
+        body: JSON.stringify({
+          items: batch.map((it) => ({
+            id: it.id,
+            person_id: it.person_id,
+            event: it.event,
+            point: it.point || null,
+            device_time: it.device_time,
+            status: it.status,
+            photo: it.photo || null,
+            notes: it.notes || null,
+          })),
+        }),
+      });
+
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !Array.isArray(data?.results)) {
+        const errMsg = data?.error?.message || `Offline sync failed (HTTP ${res.status})`;
+        for (const it of batch) {
+          results.push({ id: it.id, success: false, error: errMsg });
+        }
+        continue;
+      }
+
+      for (let idx = 0; idx < batch.length; idx++) {
+        const it = batch[idx];
+        const srv = data.results[idx] || {};
+        if (srv.status === "synced") {
+          await removeQueueItem(it.id);
+          results.push({ id: it.id, success: true, unverified: !!srv.unverified });
+        } else if (srv.status === "dropped_duplicate" || srv.status === "rejected") {
+          await removeQueueItem(it.id);
+          results.push({
+            id: it.id,
+            success: false,
+            dropped: true,
+            rejected: srv.status === "rejected",
+            reason: srv.reason || srv.status,
+          });
+        } else {
+          results.push({ id: it.id, success: false, error: srv.reason || "offline_sync_error" });
+        }
+      }
+    } catch (err) {
+      for (const it of batch) {
+        results.push({ id: it.id, success: false, error: err?.message || String(err) });
+      }
+    }
+  }
+
+  return results;
+}
+
 export async function syncQueue(supabase) {
-  if (!supabase) throw new Error("Supabase client required for sync");
   const items = await getAllQueue();
+  if (!items || items.length === 0) return [];
+
+  // Unauthenticated /scan devices have expired offline tokens; route through
+  // server quarantine endpoint so punches are server-validated and pending review.
+  if (!getStoredAccessToken()) {
+    return syncBatchViaOfflineQuarantine(items);
+  }
+
+  if (!supabase) throw new Error("Supabase client required for sync");
   const results = [];
 
   // Try to read cached settings for windowed duplicate checks

@@ -563,7 +563,7 @@ export default function AttendanceTable() {
       (person.name &&
         person.name.toLowerCase().includes(search.toLowerCase())) ||
       (r.person_id && r.person_id.toLowerCase().includes(search.toLowerCase()));
-    const matchesStatus = !statusFilter || getAttendanceStatus(r, settings) === statusFilter;
+    const matchesStatus = !statusFilter || getAttendanceStatus({ ...r, department: r.department || person.department }, settings) === statusFilter;
     const matchesDept =
       !departmentFilter || (person.department || "") === departmentFilter;
     const recordDate = r.device_time ? attendanceDateKey(r.device_time) : null;
@@ -649,7 +649,7 @@ export default function AttendanceTable() {
         "Employee Name": person.name || "",
         Department: person.department || "",
         "Attendance Event": row.event || "",
-        "Attendance Status": getAttendanceStatus(row, settings) || row.status || "",
+        "Attendance Status": getAttendanceStatus({ ...row, department: row.department || person.department }, settings) || row.status || "",
         "Attendance Method": row.method || "",
       };
     });
@@ -946,7 +946,7 @@ export default function AttendanceTable() {
                         let value = row[col.key];
                         if (col.key === "name") value = person.name || "";
                         if (col.key === "department") value = person.department || "";
-                        if (col.key === "status") value = getAttendanceStatus(row, settings);
+                        if (col.key === "status") value = getAttendanceStatus({ ...row, department: row.department || person.department }, settings);
                         if (col.key === "device_time" && row[col.key]) value = formatDateTime(row[col.key]);
                         if (col.key === "shift") {
                           if (!settings) value = "N/A";

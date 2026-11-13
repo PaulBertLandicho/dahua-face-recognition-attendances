@@ -1,4 +1,4 @@
-const CACHE_NAME = 'mf-attendance-v6';
+const CACHE_NAME = 'mf-attendance-v7';
 const OFFLINE_URL = '/offline.html';
 
 const ASSETS_TO_CACHE = [
@@ -53,6 +53,20 @@ self.addEventListener('fetch', (event) => {
   const req = event.request;
   const url = new URL(req.url);
 
+  // Never intercept non-GET, cross-origin, API, backend, or live stream requests.
+  // Passing them straight to the network preserves real HTTP errors and avoids SW Response TypeErrors.
+  if (
+    req.method !== 'GET' ||
+    url.origin !== self.location.origin ||
+    url.pathname.startsWith('/api/') ||
+    url.pathname === '/api' ||
+    url.pathname.startsWith('/backend/') ||
+    url.pathname.startsWith('/hls/') ||
+    url.pathname.startsWith('/health')
+  ) {
+    return;
+  }
+
   // 1. Navigation requests: Network-first, fallback to cached /index.html (loads SPA offline)
   if (req.mode === 'navigate') {
     event.respondWith(
@@ -66,7 +80,7 @@ self.addEventListener('fetch', (event) => {
         })
         .catch(() => {
           return caches.match('/index.html').then((indexRes) => {
-            return indexRes || caches.match('/') || caches.match(OFFLINE_URL);
+            return indexRes || caches.match('/') || caches.match(OFFLINE_URL) || Response.error();
           });
         })
     );
@@ -96,15 +110,15 @@ self.addEventListener('fetch', (event) => {
             caches.open(CACHE_NAME).then((cache) => cache.put(req, copy)).catch(() => {});
             return res;
           })
-          .catch(() => null);
+          .catch(() => Response.error());
       })
     );
     return;
   }
 
-  // 3. Default fallback: network, then cache
+  // 3. Default fallback: network, then cache (never resolve undefined)
   event.respondWith(
-    fetch(req).catch(() => caches.match(req))
+    fetch(req).catch(() => caches.match(req).then((cached) => cached || Response.error()))
   );
 });
 

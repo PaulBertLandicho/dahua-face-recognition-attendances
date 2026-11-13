@@ -84,4 +84,52 @@ describe('Dahua API helpers', () => {
     await expect(syncDahuaUsers()).rejects.toThrow('Dahua device is unreachable from cPanel.');
     expect(global.fetch).toHaveBeenCalledTimes(1);
   });
+
+  test('attaches Bearer JWT header with credentials omit when sb-session has an access_token', async () => {
+    localStorage.setItem(
+      'sb-session',
+      JSON.stringify({ access_token: 'jwt-header-test', user: { id: 'ADM-1', role: 'admin' } })
+    );
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: jest.fn().mockResolvedValue('{"accounts":[]}'),
+    });
+
+    const { getAdminAccounts } = await import('./dahuaApi');
+    await getAdminAccounts();
+
+    expect(global.fetch).toHaveBeenCalledWith(
+      '/api/admin/accounts',
+      expect.objectContaining({
+        method: 'GET',
+        credentials: 'omit',
+        headers: expect.objectContaining({
+          Authorization: 'Bearer jwt-header-test',
+        }),
+      }),
+    );
+    localStorage.removeItem('sb-session');
+  });
+
+  test('clears sb-session and dispatches sb-auth-expired when a Bearer-authenticated request returns 401', async () => {
+    localStorage.setItem(
+      'sb-session',
+      JSON.stringify({ access_token: 'expired-jwt', user: { id: 'ADM-1', role: 'admin' } })
+    );
+    const expiredListener = jest.fn();
+    window.addEventListener('sb-auth-expired', expiredListener);
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: false,
+      status: 401,
+      text: jest.fn().mockResolvedValue('{"error":{"message":"Session expired"}}'),
+    });
+
+    const { getAdminAccounts } = await import('./dahuaApi');
+    await expect(getAdminAccounts()).rejects.toThrow('Session expired');
+    expect(localStorage.getItem('sb-session')).toBeNull();
+    expect(expiredListener).toHaveBeenCalledTimes(1);
+    window.removeEventListener('sb-auth-expired', expiredListener);
+  });
 });
+

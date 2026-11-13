@@ -30,6 +30,8 @@ export default function PayslipModal({
   onToggleWaiveEarlyIn,
   onToggleWaiveOvertime,
   onOtApprovalChange,
+  settings: propSettings = {},
+  departmentRates = [],
 }) {
   // useState declarations (only once)
   const [internalAllAttendance, setInternalAllAttendance] = useState(
@@ -304,38 +306,11 @@ export default function PayslipModal({
     // compute total OT hours for the period to include in PDF (decimal hours)
     let totalOtMinutesForPdf = 0;
     try {
-      const sched = payroll && payroll.settings ? payroll.settings : {};
-      const schedMorningStart = parseTimeToMinutes(sched.morning_start || "08:00") || 480;
-      const schedAfternoonEnd = sched.afternoon_end || "17:00";
-      const schedAfternoonGrace = Number.isFinite(Number(sched.afternoon_grace_minutes))
-        ? Number(sched.afternoon_grace_minutes)
-        : 0;
       (detailedAttendance || []).forEach((rec) => {
         try {
           if (getRowOtStatus(rec) !== "approved") return;
-          const mIn = parseTimeToMinutes(rec.morningIn || rec.attendanceIn);
-          const aOut = parseTimeToMinutes(rec.afternoonOut || rec.morningOut || rec.attendanceOut);
-          const aEnd = parseTimeToMinutes(schedAfternoonEnd);
-
-          // Early-in computation: 03:00 AM - 07:30 AM only added to OT
-          if (
-            typeof mIn === "number" &&
-            mIn >= 3 * 60 &&
-            mIn <= 7 * 60 + 30 &&
-            mIn < schedMorningStart
-          ) {
-            totalOtMinutesForPdf += schedMorningStart - mIn;
-          }
-
-          if (
-            typeof aOut === "number" &&
-            typeof aEnd === "number"
-          ) {
-            const effectiveAOut = aOut < 3 * 60 ? aOut + 24 * 60 : aOut;
-            if (effectiveAOut > aEnd && effectiveAOut - aEnd > schedAfternoonGrace) {
-              totalOtMinutesForPdf += effectiveAOut - aEnd;
-            }
-          }
+          const { otMinutes } = computeRowOt(rec);
+          totalOtMinutesForPdf += otMinutes;
         } catch (e) {}
       });
     } catch (e) {}
@@ -494,12 +469,118 @@ export default function PayslipModal({
     return "";
   }
 
-  // Settings for shift time-in/time-out
-  const settings = payroll && payroll.settings ? payroll.settings : {};
-  const morningStart = settings.morning_start || "08:00";
-  const morningEnd = settings.morning_end || "12:00";
-  const afternoonStart = settings.afternoon_start || "13:00";
-  const afternoonEnd = settings.afternoon_end || "17:00";
+  // Settings for shift time-in/time-out with department custom workhours support
+  const effectiveSettings =
+    propSettings && Object.keys(propSettings).length > 0
+      ? propSettings
+      : payroll && payroll.settings
+      ? payroll.settings
+      : {};
+
+  const personDept = String(person?.department || "").trim().toLowerCase();
+  const isUtilityPerson = personDept === "utility";
+  const personDeptRate = (departmentRates || []).find(
+    (d) => String(d.department || "").trim().toLowerCase() === personDept
+  );
+
+  const morningStart = personDeptRate?.has_custom_workhours && personDeptRate.morning_start
+    ? personDeptRate.morning_start
+    : isUtilityPerson
+    ? "07:00"
+    : effectiveSettings.morning_start || "08:00";
+
+  const onTimeUntil = personDeptRate?.has_custom_workhours && personDeptRate.on_time_until
+    ? personDeptRate.on_time_until
+    : isUtilityPerson
+    ? "08:00"
+    : null;
+
+  const morningEnd = personDeptRate?.has_custom_workhours && personDeptRate.morning_end
+    ? personDeptRate.morning_end
+    : effectiveSettings.morning_end || "12:00";
+
+  const afternoonStart = personDeptRate?.has_custom_workhours && personDeptRate.afternoon_start
+    ? personDeptRate.afternoon_start
+    : effectiveSettings.afternoon_start || "13:00";
+
+  const afternoonEnd = personDeptRate?.has_custom_workhours && personDeptRate.afternoon_end
+    ? personDeptRate.afternoon_end
+    : effectiveSettings.afternoon_end || "17:00";
+
+  const afternoonGrace = Number.isFinite(Number(effectiveSettings.afternoon_grace_minutes))
+    ? Number(effectiveSettings.afternoon_grace_minutes)
+    : 30;
+
+  const schedMorningStartMin = parseTimeToMinutes(morningStart) || (isUtilityPerson ? 420 : 480);
+  const schedOnTimeUntilMin = onTimeUntil ? parseTimeToMinutes(onTimeUntil) : (isUtilityPerson ? 480 : null);
+  const schedAfternoonEndMin = parseTimeToMinutes(afternoonEnd) || 1020;
+  const schedAfternoonGrace = afternoonGrace;
+
+  // Single unified helper: computes row overtime and manage button eligibility
+  // Rules:
+  // 1. Manage button renders IF AND ONLY IF time out is 5:30 PM (17:30) or above
+  // 2. 7:00-8:00 is on-time window with NO early-in OT computed
+  const computeRowOt = (rec) => {
+    let otMinutes = 0;
+    let earlyInHoursForRow = 0;
+    let isEarlyOutForRow = false;
+    let canManageOtForRow = false;
+
+    const morningInMin = parseTimeToMinutes(rec.attendanceIn || rec.morningIn);
+    const afternoonOutMin = parseTimeToMinutes(rec.attendanceOut || rec.afternoonOut || rec.morningOut);
+
+    // 1. Afternoon Out & Overtime
+    if (typeof afternoonOutMin === "number" && typeof schedAfternoonEndMin === "number") {
+      const effectiveAfternoonOutMin = afternoonOutMin < 3 * 60 ? afternoonOutMin + 24 * 60 : afternoonOutMin;
+
+      // Manage button renders if time out is 5:30 PM (17:30) or above
+      if (effectiveAfternoonOutMin >= 17 * 60 + 30) {
+        canManageOtForRow = true;
+      }
+
+      if (effectiveAfternoonOutMin > schedAfternoonEndMin) {
+        const mins = effectiveAfternoonOutMin - schedAfternoonEndMin;
+        // Overtime applies when 5:30 PM or above (past grace)
+        if (effectiveAfternoonOutMin >= 17 * 60 + 30 && mins > schedAfternoonGrace) {
+          otMinutes += mins;
+        }
+      } else if (effectiveAfternoonOutMin < schedAfternoonEndMin) {
+        isEarlyOutForRow = true;
+      }
+    }
+
+    // 2. Morning Early-In OT
+    // 7:00-8:00 is on-time window with NO early-in OT computed
+    if (typeof morningInMin === "number" && morningInMin >= 3 * 60) {
+      if (schedOnTimeUntilMin !== null) {
+        // Department with custom on-time window (e.g. UTILITY 07:00 - 08:00)
+        if (morningInMin >= schedMorningStartMin && morningInMin <= schedOnTimeUntilMin) {
+          // On-time window: NO early-in OT
+        } else if (morningInMin < schedMorningStartMin - 30) {
+          // Punch before 6:30 AM (outside normal arrival buffer)
+          const earlyMins = schedMorningStartMin - morningInMin;
+          otMinutes += earlyMins;
+          earlyInHoursForRow = earlyMins / 60;
+        }
+      } else {
+        // Standard global: 03:00 AM - 07:30 AM before 08:00 AM
+        if (morningInMin <= 7 * 60 + 30 && morningInMin < schedMorningStartMin) {
+          const earlyMins = schedMorningStartMin - morningInMin;
+          otMinutes += earlyMins;
+          earlyInHoursForRow = earlyMins / 60;
+        }
+      }
+    }
+
+    return {
+      otMinutes,
+      recOtHours: otMinutes / 60,
+      earlyInHoursForRow,
+      isEarlyOutForRow,
+      canManageOtForRow,
+    };
+  };
+
 
   // Helper to check if it's not yet time for time-in/time-out
   function isNotYetTime(session, dateStr, type) {
@@ -830,37 +911,18 @@ export default function PayslipModal({
   let dynamicNsdMinutes = 0;
 
   if (detailedAttendance && detailedAttendance.length) {
-    const schedMorningStart = (settings && settings.morning_start) || "08:00";
-    const schedAfternoonEnd = (settings && settings.afternoon_end) || "17:00";
-    const schedAfternoonGrace = Number.isFinite(Number(settings && settings.afternoon_grace_minutes))
-      ? Number(settings.afternoon_grace_minutes)
-      : 0;
-    const schedMorningStartMin = parseTimeToMinutes(schedMorningStart) || 480;
-    const schedAfternoonEndMin = parseTimeToMinutes(schedAfternoonEnd);
-
     detailedAttendance.forEach((rec) => {
       if (getRowOtStatus(rec) !== "approved") return;
-      const mIn = parseTimeToMinutes(rec.attendanceIn || rec.morningIn);
+      const { otMinutes } = computeRowOt(rec);
+      dynamicOtMinutes += otMinutes;
+
       const aOut = parseTimeToMinutes(rec.attendanceOut || rec.afternoonOut || rec.morningOut);
-      // Early-in computation: 03:00 AM - 07:00 AM only added to OT
-      if (
-        typeof mIn === "number" &&
-        mIn >= 3 * 60 &&
-        mIn <= 7 * 60 + 30 &&
-        mIn < schedMorningStartMin
-      ) {
-        dynamicOtMinutes += schedMorningStartMin - mIn;
-      }
-      if (typeof aOut === "number" && typeof schedAfternoonEndMin === "number") {
+      if (typeof aOut === "number") {
         const effectiveAOut = aOut < 3 * 60 ? aOut + 24 * 60 : aOut;
-        if (effectiveAOut > schedAfternoonEndMin) {
+        if (effectiveAOut >= 17 * 60 + 30 && effectiveAOut > schedAfternoonEndMin) {
           const mins = effectiveAOut - schedAfternoonEndMin;
-          if (mins > schedAfternoonGrace) {
-            dynamicOtMinutes += mins;
-            // Night shift differential (work past 22:00 = 10:00 PM)
-            if (hasNsdEnabled && effectiveAOut > 22 * 60) {
-              dynamicNsdMinutes += Math.min(effectiveAOut - 22 * 60, mins);
-            }
+          if (mins > schedAfternoonGrace && hasNsdEnabled && effectiveAOut > 22 * 60) {
+            dynamicNsdMinutes += Math.min(effectiveAOut - 22 * 60, mins);
           }
         }
       }
@@ -1051,71 +1113,13 @@ export default function PayslipModal({
                       attendanceOutDisplay = "Not time-out";
                     }
 
-                    // Compute per-row overtime (minutes) by comparing afternoon out time to scheduled afternoon end time.
-                    // Also compute Early In (3:00 AM - 7:00 AM) and Early Out (< 17:00).
-                    let otMinutes = 0;
-                    let earlyInHoursForRow = 0;
-                    let isEarlyOutForRow = false;
-                    let canManageOtForRow = false;
-                    try {
-                      const scheduledMorningStart =
-                        (settings && settings.morning_start) || "08:00";
-                      const scheduledAfternoonEnd =
-                        (settings && settings.afternoon_end) || "17:00";
-                      const schedAfternoonGrace = Number.isFinite(
-                        Number(settings && settings.afternoon_grace_minutes),
-                      )
-                        ? Number(settings.afternoon_grace_minutes)
-                        : 0;
-                      const schedMorningStartMin =
-                        parseTimeToMinutes(scheduledMorningStart) || 480;
-                      const morningInMin = parseTimeToMinutes(
-                        rec.attendanceIn || rec.morningIn,
-                      );
-                      const afternoonOutMin = parseTimeToMinutes(
-                        rec.attendanceOut || rec.afternoonOut || rec.morningOut,
-                      );
-                      const schedAfternoonEndMin = parseTimeToMinutes(
-                        scheduledAfternoonEnd,
-                      );
-
-                      // Early In (03:00 AM to 07:00 AM only) - computed and added to Afternoon OT
-                      if (
-                        typeof morningInMin === "number" &&
-                        morningInMin >= 3 * 60 &&
-                        morningInMin <= 7 * 60 + 30 &&
-                        morningInMin < schedMorningStartMin
-                      ) {
-                        const earlyMins = schedMorningStartMin - morningInMin;
-                        otMinutes += earlyMins;
-                        earlyInHoursForRow = earlyMins / 60;
-                        if (earlyMins > 0) {
-                          canManageOtForRow = true;
-                        }
-                      }
-
-                      if (
-                        typeof afternoonOutMin === "number" &&
-                        typeof schedAfternoonEndMin === "number"
-                      ) {
-                        const effectiveAfternoonOutMin = afternoonOutMin < 3 * 60 ? afternoonOutMin + 24 * 60 : afternoonOutMin;
-                        if (effectiveAfternoonOutMin >= 17 * 60 + 30) {
-                          canManageOtForRow = true;
-                        }
-                        if (effectiveAfternoonOutMin > schedAfternoonEndMin) {
-                          const mins = effectiveAfternoonOutMin - schedAfternoonEndMin;
-                          if (mins > schedAfternoonGrace) {
-                            otMinutes += mins;
-                          }
-                        } else if (effectiveAfternoonOutMin < schedAfternoonEndMin) {
-                          isEarlyOutForRow = true;
-                        }
-                      }
-                    } catch (e) {
-                      otMinutes = 0;
-                    }
-
-                    const recOtHours = otMinutes / 60;
+                    // Compute per-row overtime using unified computeRowOt helper
+                    const {
+                      recOtHours,
+                      earlyInHoursForRow,
+                      isEarlyOutForRow,
+                      canManageOtForRow,
+                    } = computeRowOt(rec);
                     const rowOtStatus = getRowOtStatus(rec);
 
 
@@ -1365,39 +1369,7 @@ export default function PayslipModal({
                     if (hasM && hasA) frac = 1.0;
                     else if (hasM || hasA) frac = 0.5;
 
-                    let otM = 0;
-                    try {
-                      const scheduledMorningStart = (settings && settings.morning_start) || "08:00";
-                      const scheduledAfternoonEnd = (settings && settings.afternoon_end) || "17:00";
-                      const schedAfternoonGrace = Number.isFinite(
-                        Number(settings && settings.afternoon_grace_minutes),
-                      )
-                        ? Number(settings.afternoon_grace_minutes)
-                        : 0;
-                      const schedMorningStartMin = parseTimeToMinutes(scheduledMorningStart) || 480;
-                      const morningInMin = parseTimeToMinutes(rec.attendanceIn || rec.morningIn);
-                      const afternoonOutMin = parseTimeToMinutes(rec.attendanceOut || rec.afternoonOut || rec.morningOut);
-                      const schedAfternoonEndMin = parseTimeToMinutes(scheduledAfternoonEnd);
-
-                      // Early-in computation: 03:00 AM - 07:30 AM only added to OT
-                      if (
-                        typeof morningInMin === "number" &&
-                        morningInMin >= 3 * 60 &&
-                        morningInMin <= 7 * 60 + 30 &&
-                        morningInMin < schedMorningStartMin
-                      ) {
-                        otM += schedMorningStartMin - morningInMin;
-                      }
-
-                      if (typeof afternoonOutMin === "number" && typeof schedAfternoonEndMin === "number") {
-                        const effectiveAfternoonOutMin = afternoonOutMin < 3 * 60 ? afternoonOutMin + 24 * 60 : afternoonOutMin;
-                        if (effectiveAfternoonOutMin > schedAfternoonEndMin) {
-                          const mins = effectiveAfternoonOutMin - schedAfternoonEndMin;
-                          if (mins > schedAfternoonGrace) otM += mins;
-                        }
-                      }
-                    } catch (e) {}
-
+                    const { otMinutes: otM } = computeRowOt(rec);
                     const otHrs = getRowOtStatus(rec) === "approved" ? otM / 60 : 0;
                     const baseSalary = Math.round(baseDailyRate * frac * 100) / 100;
                     const otPay = Math.round(otHrs * hourlyRateForDaily * 100) / 100;

@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { useNavigate, Link } from "react-router-dom";
+import { useNavigate } from "react-router-dom";
 import { supabase } from "../mysqlClient";
 import {
   FaEye,
@@ -7,7 +7,6 @@ import {
   FaEnvelope,
   FaLock,
   FaSignInAlt,
-  FaArrowLeft,
 } from "react-icons/fa";
 
 export default function AdminLogin() {
@@ -37,19 +36,7 @@ export default function AdminLogin() {
         return;
       }
 
-      // We need to fetch the session to determine the user's role
-      const { data: { session } } = await supabase.auth.getSession();
-      if (session) {
-        const user = session.user;
-        const role = user?.user_metadata?.role || user?.app_metadata?.role || user?.role;
-        if (role === "secretary") {
-          navigate("/admin/attendance");
-        } else {
-          navigate("/admin/dashboard");
-        }
-      } else {
-        navigate("/admin/dashboard");
-      }
+      navigate("/admin/dashboard");
     } catch (err) {
       setError(err.message || "Login failed");
       setLoading(false);
@@ -59,12 +46,6 @@ export default function AdminLogin() {
   return (
     <div className="min-h-screen flex flex-col items-center justify-start p-0 bg-gray-50">
       <div className="max-w-[420px] w-[90%] bg-white rounded-2xl px-8 py-10 shadow-[0_10px_25px_rgba(0,0,0,0.05)] border border-gray-100 mt-[10vh] mb-[100px]">
-        <Link
-          to="/"
-          className="inline-flex items-center gap-1.5 text-sm text-gray-500 hover:text-[#237227] no-underline mb-4 transition-colors"
-        >
-          <FaArrowLeft /> Return to Portal
-        </Link>
         <div className="text-center mb-6 flex items-center justify-center flex-col gap-3">
           <div className="flex justify-center mb-1" aria-hidden>
             <img

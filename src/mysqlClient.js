@@ -4,6 +4,9 @@ export {
   supabase,
   SUPABASE_CONFIGURED,
   subscribeToTable,
+  setActiveFaceToken,
+  getActiveFaceToken,
 } from "./supabaseClient";
 
 export { supabase as default } from "./supabaseClient";
+

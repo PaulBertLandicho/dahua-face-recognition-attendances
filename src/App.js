@@ -11,6 +11,12 @@ import {
 import { useEffect, useRef, useState } from "react";
 import { useLoading } from "./LoadingContext";
 import { supabase } from "./mysqlClient";
+import {
+  AUTH_EXPIRED_EVENT,
+  getStoredSession,
+  saveStoredSession,
+  clearStoredSession,
+} from "./utils/authSession";
 
 import AdminLogin from "./AdminPage/AdminLogin";
 import DefaultLanding from "./CameraAttendance/DefaultLanding";
@@ -49,27 +55,48 @@ function App() {
   const modalTimerRef = useRef(null);
   const [showStaffLogin, setShowStaffLogin] = useState(false);
   const [session, setSession] = useState(() => {
-    // Try to get session from localStorage if available
-    const stored = localStorage.getItem("sb-session");
-    return stored ? JSON.parse(stored) : null;
+    const stored = getStoredSession();
+    return stored && typeof stored.access_token === "string" && stored.access_token.trim()
+      ? stored
+      : null;
   });
 
-  // Check for active session on mount and listen for changes
+  // Validate active JWT session against backend on mount and listen for auth changes/expiry
   useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      setSession(session);
-      if (session) localStorage.setItem("sb-session", JSON.stringify(session));
-      else localStorage.removeItem("sb-session");
+    let mounted = true;
+    const verifyFn =
+      typeof supabase.auth.getVerifiedSession === "function"
+        ? () => supabase.auth.getVerifiedSession()
+        : () => supabase.auth.getSession();
+
+    verifyFn().then(({ data: { session: verifiedSession } }) => {
+      if (!mounted) return;
+      const valid = verifiedSession?.access_token ? verifiedSession : null;
+      setSession(valid);
+      if (valid) saveStoredSession(valid);
+      else clearStoredSession();
     });
+
     const { data: listener } = supabase.auth.onAuthStateChange(
-      (_event, session) => {
-        setSession(session);
-        if (session)
-          localStorage.setItem("sb-session", JSON.stringify(session));
-        else localStorage.removeItem("sb-session");
+      (_event, nextSession) => {
+        const valid = nextSession?.access_token ? nextSession : null;
+        setSession(valid);
+        if (valid) saveStoredSession(valid);
+        else clearStoredSession();
       },
     );
-    return () => listener?.subscription.unsubscribe();
+
+    const handleAuthExpired = () => {
+      clearStoredSession();
+      setSession(null);
+    };
+    window.addEventListener(AUTH_EXPIRED_EVENT, handleAuthExpired);
+
+    return () => {
+      mounted = false;
+      listener?.subscription.unsubscribe();
+      window.removeEventListener(AUTH_EXPIRED_EVENT, handleAuthExpired);
+    };
   }, []);
 
   // detect mobile device (including mobile in landscape mode)

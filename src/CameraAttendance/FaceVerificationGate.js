@@ -2,7 +2,9 @@ import React, { useState, useEffect, useRef, useCallback } from "react";
 import * as faceapi from "face-api.js";
 import { ensureFaceModelsLoaded, buildDescriptors } from "../utils/buildFaceDescriptors";
 import { averageDescriptors, normalizeDescriptor, toFloat32Array } from "../utils/faceUtils";
+import { formatGpsCoords, isValidGpsCoords } from "../utils/gpsLocation";
 import offlineQueue from "../utils/offlineQueue";
+import { getApiBase, setActiveFaceToken } from "../utils/authSession";
 import { Link } from "react-router-dom";
 import {
   FiRefreshCw,
@@ -38,21 +40,25 @@ function calcEuclideanDistance(a, b) {
   return Math.sqrt(sum);
 }
 
-const formatCompactLocation = (loc) => {
-  if (!loc) return "Detecting GPS...";
-  if (typeof loc === "string" && loc.includes(",")) {
-    const parts = loc.split(",").map((s) => s.trim());
-    if (parts.length === 2 && !isNaN(parts[0]) && !isNaN(parts[1])) {
-      return `${Number(parts[0]).toFixed(4)}, ${Number(parts[1]).toFixed(4)}`;
-    }
+const formatCompactLocation = (loc, status) => {
+  if (isValidGpsCoords(loc)) {
+    const [lat, lng] = loc.split(",").map((s) => s.trim());
+    return formatGpsCoords(lat, lng, 4) || loc;
   }
+  if (status === "denied") return "Allow GPS access";
+  if (status === "error") return "Retrying GPS...";
+  if (!loc) return "Auto-detecting GPS...";
   return loc;
 };
+
+export const NO_FACE_TIMEOUT_MS = 5 * 1000; // 5 seconds
+const NO_FACE_CHECK_INTERVAL_MS = 250;
 
 export default function FaceVerificationGate({
   onVerified,
   locationPoint,
   locationStatus,
+  locationMessage,
   formattedTime,
   formattedDate,
 }) {
@@ -62,6 +68,7 @@ export default function FaceVerificationGate({
   const [modelsLoaded, setModelsLoaded] = useState(false);
   const [cameraActive, setCameraActive] = useState(false);
   const [cameraError, setCameraError] = useState("");
+  const [noFaceTimedOut, setNoFaceTimedOut] = useState(false);
   const [verificationStage, setVerificationStage] = useState("init"); // "init" | "ready" | "verifying" | "success" | "retry" | "locked"
   const [statusMessage, setStatusMessage] = useState("Initializing face recognition...");
   const [failCount, setFailCount] = useState(0);
@@ -76,6 +83,14 @@ export default function FaceVerificationGate({
   const verifyCooldownRef = useRef(0);
   const buildingDescriptorsRef = useRef(false);
   const missedFramesRef = useRef(0);
+  const lastFaceDetectedAtRef = useRef(Date.now());
+  const hasAutoStartedRef = useRef(false);
+  const isMountedRef = useRef(true);
+  const cameraSessionIdRef = useRef(0);
+  const modelsLoadedRef = useRef(modelsLoaded);
+  modelsLoadedRef.current = modelsLoaded;
+  const verificationStageRef = useRef(verificationStage);
+  verificationStageRef.current = verificationStage;
 
   // 1. Online / Offline Listener
   useEffect(() => {
@@ -105,7 +120,7 @@ export default function FaceVerificationGate({
 
         // Cache active Dahua employees with face descriptors in IndexedDB for offline recognition
         if (typeof navigator !== "undefined" && navigator.onLine) {
-          fetch("/api/face/persons-offline")
+          fetch(`${getApiBase()}/api/face/persons-offline`)
             .then((r) => r.json())
             .then((d) => {
               if (d && d.success && Array.isArray(d.persons) && d.persons.length > 0) {
@@ -141,11 +156,47 @@ export default function FaceVerificationGate({
     };
   }, []);
 
+  const stopCamera = useCallback(() => {
+    cameraSessionIdRef.current += 1;
+    if (animFrameRef.current) {
+      cancelAnimationFrame(animFrameRef.current);
+      animFrameRef.current = null;
+    }
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach((t) => t.stop());
+      streamRef.current = null;
+    }
+    const video = videoRef.current;
+    if (video) {
+      video.onloadedmetadata = null;
+      video.oncanplay = null;
+      video.srcObject = null;
+    }
+  }, []);
+
+  const redirectToReadyForVerification = useCallback(() => {
+    stopCamera();
+    isVerifyingRef.current = false;
+    descriptorBufferRef.current = [];
+    missedFramesRef.current = 0;
+    verifyCooldownRef.current = 0;
+    setFaceDetected(false);
+    setFailCount(0);
+    setCameraError("");
+    setCameraActive(false);
+    setNoFaceTimedOut(true);
+    setVerificationStage("ready");
+    setStatusMessage("Position your face within the frame");
+  }, [stopCamera]);
+
   // 3. Start Front Camera (Works both Online & Offline)
   const startCamera = useCallback(async () => {
-    if (!modelsLoaded || verificationStage === "locked") return;
+    if (!modelsLoadedRef.current || verificationStageRef.current === "locked") return;
+    const sessionId = ++cameraSessionIdRef.current;
+
     try {
       setCameraError("");
+      setNoFaceTimedOut(false);
       setStatusMessage("Starting front camera...");
       if (streamRef.current) {
         streamRef.current.getTracks().forEach((t) => t.stop());
@@ -178,6 +229,11 @@ export default function FaceVerificationGate({
         }
       }
 
+      if (!isMountedRef.current || cameraSessionIdRef.current !== sessionId) {
+        stream.getTracks().forEach((t) => t.stop());
+        return;
+      }
+
       streamRef.current = stream;
       const video = videoRef.current;
       if (video) {
@@ -187,12 +243,23 @@ export default function FaceVerificationGate({
         video.setAttribute("playsinline", "true");
         video.setAttribute("muted", "true");
 
+        let activated = false;
         const activate = () => {
+          if (activated || !isMountedRef.current || cameraSessionIdRef.current !== sessionId) {
+            return;
+          }
+          activated = true;
+          video.onloadedmetadata = null;
+          video.oncanplay = null;
+          lastFaceDetectedAtRef.current = Date.now();
           setCameraActive(true);
           setStatusMessage("Position your face within the frame");
         };
 
         const tryPlay = async () => {
+          if (activated || !isMountedRef.current || cameraSessionIdRef.current !== sessionId) {
+            return;
+          }
           try {
             await video.play();
             activate();
@@ -211,6 +278,9 @@ export default function FaceVerificationGate({
         await tryPlay();
       }
     } catch (err) {
+      if (!isMountedRef.current || cameraSessionIdRef.current !== sessionId) {
+        return;
+      }
       console.warn("Front camera start failed:", err);
       let msg = err.message || String(err);
       if (err.name === "NotAllowedError" || err.name === "PermissionDeniedError") {
@@ -223,21 +293,35 @@ export default function FaceVerificationGate({
       setCameraError(msg);
       setCameraActive(false);
     }
-  }, [modelsLoaded, verificationStage]);
+  }, []);
+
+  const handleManualStartCamera = useCallback(() => {
+    setNoFaceTimedOut(false);
+    setCameraError("");
+    setFailCount(0);
+    setFaceDetected(false);
+    setVerificationStage("ready");
+    descriptorBufferRef.current = [];
+    missedFramesRef.current = 0;
+    verifyCooldownRef.current = 0;
+    isVerifyingRef.current = false;
+    lastFaceDetectedAtRef.current = Date.now();
+    startCamera();
+  }, [startCamera]);
 
   useEffect(() => {
-    if (modelsLoaded && verificationStage !== "locked") {
+    isMountedRef.current = true;
+    return () => {
+      isMountedRef.current = false;
+      stopCamera();
+    };
+  }, [stopCamera]);
+
+  useEffect(() => {
+    if (modelsLoaded && !hasAutoStartedRef.current && verificationStage !== "locked") {
+      hasAutoStartedRef.current = true;
       startCamera();
     }
-    return () => {
-      if (streamRef.current) {
-        streamRef.current.getTracks().forEach((t) => t.stop());
-        streamRef.current = null;
-      }
-      if (animFrameRef.current) {
-        cancelAnimationFrame(animFrameRef.current);
-      }
-    };
   }, [modelsLoaded, verificationStage, startCamera]);
 
   // 4. Verification call (Online Server or Client-Side Offline Matcher)
@@ -253,7 +337,7 @@ export default function FaceVerificationGate({
       // 1. Try server verification if device is online
       if (navigator.onLine) {
         try {
-          const response = await fetch("/api/face/verify", {
+          const response = await fetch(`${getApiBase()}/api/face/verify`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ descriptor: Array.from(desc) }),
@@ -321,6 +405,7 @@ export default function FaceVerificationGate({
       }
 
       if (data && data.matched && data.person && data.token) {
+        setActiveFaceToken(!data.isOffline ? data.token : null);
         setVerifiedName(data.person.name);
         setVerificationStage("success");
         setFailCount(0);
@@ -328,10 +413,7 @@ export default function FaceVerificationGate({
         playVoice(`Verified, welcome ${data.person.name}`);
 
         // Stop camera cleanly before unmounting
-        if (streamRef.current) {
-          streamRef.current.getTracks().forEach((t) => t.stop());
-          streamRef.current = null;
-        }
+        stopCamera();
 
         setTimeout(() => {
           if (typeof onVerified === "function") {
@@ -354,10 +436,14 @@ export default function FaceVerificationGate({
         verifyCooldownRef.current = Date.now() + 1000; // 1.0s fast cooldown before next auto-attempt
 
         if (nextFail >= 6) {
+          setActiveFaceToken(null);
+          stopCamera();
+          setCameraActive(false);
           setVerificationStage("locked");
           setStatusMessage("Verification failed. Please try again or check person records.");
           playVoice("Verification failed. Please try again, or check if your face is enrolled in person records.");
         } else {
+          lastFaceDetectedAtRef.current = Date.now();
           setVerificationStage("retry");
           setStatusMessage(`Face not matched. Attempt ${nextFail} of 6. Align face clearly.`);
           isVerifyingRef.current = false;
@@ -368,6 +454,7 @@ export default function FaceVerificationGate({
       setStatusMessage("Connection error during verification. Retrying...");
       descriptorBufferRef.current = [];
       verifyCooldownRef.current = Date.now() + 1200;
+      lastFaceDetectedAtRef.current = Date.now();
       setVerificationStage("retry");
       isVerifyingRef.current = false;
     }
@@ -409,6 +496,7 @@ export default function FaceVerificationGate({
           const isReasonableSize = box && box.width >= 70 && box.height >= 70;
 
           if (isReasonableSize) {
+            lastFaceDetectedAtRef.current = Date.now();
             missedFramesRef.current = 0;
             setFaceDetected(true);
 
@@ -472,6 +560,27 @@ export default function FaceVerificationGate({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cameraActive, modelsLoaded, verificationStage]);
 
+  // 6. Redirect to Ready for Verification page if no face is detected for 5 seconds
+  useEffect(() => {
+    if (
+      !cameraActive ||
+      !modelsLoaded ||
+      verificationStage === "verifying" ||
+      verificationStage === "locked" ||
+      verificationStage === "success"
+    ) {
+      return;
+    }
+
+    const intervalId = setInterval(() => {
+      if (isVerifyingRef.current) return;
+      if (Date.now() - lastFaceDetectedAtRef.current >= NO_FACE_TIMEOUT_MS) {
+        redirectToReadyForVerification();
+      }
+    }, NO_FACE_CHECK_INTERVAL_MS);
+
+    return () => clearInterval(intervalId);
+  }, [cameraActive, modelsLoaded, verificationStage, redirectToReadyForVerification]);
 
   // Locked State UI (after 5 failures)
   if (verificationStage === "locked") {
@@ -491,13 +600,16 @@ export default function FaceVerificationGate({
           <button
             type="button"
             onClick={() => {
+              hasAutoStartedRef.current = false;
               setFailCount(0);
+              setNoFaceTimedOut(false);
               setVerificationStage("ready");
               setFaceDetected(false);
               setStatusMessage("Position your face within the frame");
               isVerifyingRef.current = false;
               descriptorBufferRef.current = [];
               missedFramesRef.current = 0;
+              lastFaceDetectedAtRef.current = Date.now();
             }}
             className="inline-flex items-center gap-2 px-6 py-3 rounded-xl bg-[#237227] hover:bg-[#1c5c20] text-white text-sm font-bold shadow-lg transition-all active:scale-95 cursor-pointer"
           >
@@ -565,12 +677,26 @@ export default function FaceVerificationGate({
               )}
             </div>
             <div
-              className="flex items-center gap-1 text-[10px] text-emerald-300 font-mono mt-0.5"
-              title={locationPoint}
+              className={`flex items-center gap-1 text-[10px] font-mono mt-0.5 ${
+                locationStatus === "ok" || isValidGpsCoords(locationPoint)
+                  ? "text-emerald-300"
+                  : locationStatus === "denied"
+                  ? "text-red-300"
+                  : "text-amber-300"
+              }`}
+              title={locationPoint || locationMessage || "Auto-detecting GPS"}
             >
-              <FiMapPin className="text-[10px] text-emerald-400 shrink-0" />
+              <FiMapPin
+                className={`text-[10px] shrink-0 ${
+                  locationStatus === "ok" || isValidGpsCoords(locationPoint)
+                    ? "text-emerald-400"
+                    : locationStatus === "denied"
+                    ? "text-red-400"
+                    : "text-amber-400 animate-pulse"
+                }`}
+              />
               <span className="truncate max-w-[105px] xs:max-w-[125px] sm:max-w-[150px] text-right">
-                {formatCompactLocation(locationPoint)}
+                {formatCompactLocation(locationPoint, locationStatus)}
               </span>
             </div>
           </div>
@@ -720,7 +846,7 @@ export default function FaceVerificationGate({
               <p className="text-xs text-gray-300 mb-5 leading-relaxed">{cameraError}</p>
               <button
                 type="button"
-                onClick={startCamera}
+                onClick={handleManualStartCamera}
                 className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-[#237227] hover:bg-[#1c5c20] text-white text-xs font-bold shadow-lg transition-all active:scale-95 cursor-pointer"
               >
                 <FiCamera className="w-4 h-4" /> Enable Camera
@@ -739,11 +865,13 @@ export default function FaceVerificationGate({
               </div>
               <p className="text-sm font-bold text-white mb-1.5">Ready for Verification</p>
               <p className="text-xs text-gray-400 mb-5">
-                Tap below to activate your front camera and verify your identity.
+                {noFaceTimedOut
+                  ? `No face detected for ${Math.round(NO_FACE_TIMEOUT_MS / 1000)} seconds. Tap below to activate your front camera and verify your identity.`
+                  : "Tap below to activate your front camera and verify your identity."}
               </p>
               <button
                 type="button"
-                onClick={startCamera}
+                onClick={handleManualStartCamera}
                 className="inline-flex items-center gap-2 px-6 py-3 rounded-xl bg-[#237227] hover:bg-[#1c5c20] text-white text-sm font-bold shadow-xl transition-all active:scale-95 cursor-pointer"
               >
                 <FiCamera className="w-4 h-4" /> Tap to Start Camera

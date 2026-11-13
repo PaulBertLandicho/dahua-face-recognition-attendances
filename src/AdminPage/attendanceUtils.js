@@ -125,6 +125,7 @@ export function determineAttendanceStatus(
   const afternoonGrace = Number.isFinite(Number(settings?.afternoon_grace_minutes))
     ? Number(settings.afternoon_grace_minutes)
     : 0;
+  const onTimeUntil = settings?.on_time_until ? toMinutes(settings.on_time_until) : null;
 
   // Overnight checkout past midnight (< 03:00 AM) is always afternoon out overtime
   if (nowMinutes < 3 * 60) {
@@ -140,7 +141,18 @@ export function determineAttendanceStatus(
     }
     return "on-time";
   } else {
-    // Morning punch (early-in is 03:00 AM to 07:00 AM only)
+    // Department-specific on-time window (e.g. UTILITY: 7:00 AM - 8:00 AM)
+    if (onTimeUntil !== null) {
+      if (nowMinutes < morningStart) {
+        return "early-in";
+      } else if (nowMinutes <= onTimeUntil + morningGrace) {
+        return "on-time";
+      } else {
+        return "late";
+      }
+    }
+
+    // Standard global morning punch (early-in is 03:00 AM to 07:30 AM before morningStart)
     if (nowMinutes >= 3 * 60 && nowMinutes <= 7 * 60 + 30 && nowMinutes < morningStart) {
       return "early-in";
     } else if (nowMinutes <= morningStart + morningGrace) {
@@ -151,11 +163,31 @@ export function determineAttendanceStatus(
   }
 }
 
-export function getAttendanceStatus(record, settings = {}) {
+export function getAttendanceStatus(record, settings = {}, departmentRates = []) {
   const deviceDate = new Date(record?.device_time);
   const isValidDate = !Number.isNaN(deviceDate.getTime());
 
   if (!isValidDate) return record?.status || "present";
+
+  // Check if department has custom workhours
+  const deptNorm = String(record?.department || "").trim().toLowerCase();
+  let deptRate = null;
+  if (Array.isArray(departmentRates) && departmentRates.length > 0) {
+    deptRate = departmentRates.find((d) => String(d.department || "").trim().toLowerCase() === deptNorm);
+  }
+  const isUtility = deptNorm === "utility";
+
+  const effectiveMorningStart = deptRate?.has_custom_workhours && deptRate.morning_start
+    ? String(deptRate.morning_start).slice(0, 5)
+    : (isUtility ? "07:00" : (settings?.morning_start || "08:00"));
+
+  const effectiveOnTimeUntil = deptRate?.has_custom_workhours && deptRate.on_time_until
+    ? String(deptRate.on_time_until).slice(0, 5)
+    : (isUtility ? "08:00" : (settings?.on_time_until || null));
+
+  const effectiveAfternoonEnd = deptRate?.has_custom_workhours && deptRate.afternoon_end
+    ? String(deptRate.afternoon_end).slice(0, 5)
+    : (isUtility ? "17:00" : (settings?.afternoon_end || "17:00"));
 
   // When settings are loaded, dynamically evaluate status against current work hours & grace period
   if (settings && Object.keys(settings).length > 0) {
@@ -164,12 +196,13 @@ export function getAttendanceStatus(record, settings = {}) {
         deviceDate.toTimeString().slice(0, 5),
         record?.event || "time-in",
         {
-          morning_start: settings.morning_start || "08:00",
+          morning_start: effectiveMorningStart,
           morning_end: settings.morning_end || "11:59",
           afternoon_start: settings.afternoon_start || "13:00",
-          afternoon_end: settings.afternoon_end || "17:00",
+          afternoon_end: effectiveAfternoonEnd,
           morning_grace_minutes: settings.morning_grace_minutes ?? 0,
           afternoon_grace_minutes: settings.afternoon_grace_minutes ?? 0,
+          on_time_until: effectiveOnTimeUntil,
         },
       );
     } catch (error) {
@@ -489,12 +522,27 @@ export async function recordAttendanceForPerson({
     return { inserted: true, blocked: false, event, status };
   } catch (e) {
     const errorMessage = String(e?.message || e || "");
-    if (/verification token/i.test(errorMessage)) {
+    if (
+      /verification token|already been used|maximum number of partner punches|face verification expired|not permitted from scanner|clock drift/i.test(
+        errorMessage
+      )
+    ) {
+      const lower = errorMessage.toLowerCase();
+      let friendlyMsg = "Face verification expired or invalid. Please scan face again.";
+      if (lower.includes("already been used")) {
+        friendlyMsg = "This verification scan has already been used for this employee. Please scan face again.";
+      } else if (lower.includes("clock drift")) {
+        friendlyMsg = "Device clock differs too much from server time. Please sync your device clock and retry.";
+      } else if (lower.includes("maximum number of partner punches")) {
+        friendlyMsg = "Too many team punches on one scan. Please re-verify face and try again.";
+      } else if (lower.includes("not permitted from scanner")) {
+        friendlyMsg = errorMessage;
+      }
       return {
         inserted: false,
         blocked: true,
         event,
-        message: "Face verification expired or invalid. Please scan face again.",
+        message: friendlyMsg,
       };
     }
     if (/duplicate attendance|duplicate scan|duplicate|unique|constraint/i.test(errorMessage)) {
