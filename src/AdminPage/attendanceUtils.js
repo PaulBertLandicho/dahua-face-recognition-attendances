@@ -489,6 +489,25 @@ export async function recordAttendanceForPerson({
     console.warn("Duplicate check failed, proceeding to insert:", err);
   }
 
+  const rawToken = String(scanPayload?.verification_token || "").trim();
+  if (rawToken.startsWith("offline_token_") && offlineQueue) {
+    const queuedResult = await enqueueOfflineAttendanceFallback({
+      offlineQueue,
+      person,
+      event,
+      scanPayload,
+      method,
+      deviceTime,
+      status,
+    });
+    if (queuedResult) {
+      if (queuedResult.inserted && typeof navigator !== "undefined" && navigator.onLine && typeof offlineQueue.syncQueue === "function") {
+        await offlineQueue.syncQueue(supabase).catch(() => {});
+      }
+      return queuedResult;
+    }
+  }
+
   try {
     const insertPayload = {
       person_id: person.id,
@@ -557,34 +576,17 @@ export async function recordAttendanceForPerson({
     // If insert failed (likely network), enqueue to offline queue if available
     console.warn("recordAttendanceForPerson: insert failed, enqueueing offline", e);
     try {
-      if (offlineQueue) {
-        const noteText = scanPayload?.notes || scanPayload?.note || null;
-        const qres = await offlineQueue.enqueueAttendance({
-          person_id: person.id,
-          name: person.name,
-          department: person.department,
-          event,
-          point: scanPayload?.point || null,
-          method: method || "face-scan",
-          device_time: deviceTime,
-          status,
-          photo: scanPayload?.photoDataUrl || null,
-          notes: noteText,
-          verification_token: scanPayload?.verification_token || null,
-        });
-        // enqueueAttendance may return an object like { queued: false, reason }
-        if (qres && typeof qres === 'object' && qres.queued === false) {
-          // Did not queue due to duplicate window or recent duplicate
-          const reason = qres.reason || 'enqueue_blocked';
-          let msg = 'Attendance not queued.';
-          if (reason === 'recent duplicate') msg = 'Duplicate scan detected recently; not queued.';
-          else if (reason === 'duplicate_morning_time_in') msg = 'Morning time-in already recorded or queued.';
-          else if (reason === 'duplicate_afternoon_time_in') msg = 'Afternoon time-in already recorded or queued.';
-          else if (reason === 'duplicate_morning_time_out') msg = 'Morning time-out already recorded or queued.';
-          else if (reason === 'duplicate_afternoon_time_out') msg = 'Afternoon time-out already recorded or queued.';
-          return { inserted: false, blocked: true, event, message: msg };
-        }
-        return { inserted: true, queued: true, event, status };
+      const queuedResult = await enqueueOfflineAttendanceFallback({
+        offlineQueue,
+        person,
+        event,
+        scanPayload,
+        method,
+        deviceTime,
+        status,
+      });
+      if (queuedResult) {
+        return queuedResult;
       }
     } catch (ee) {
       console.warn("Failed to enqueue offline attendance", ee);
@@ -592,6 +594,43 @@ export async function recordAttendanceForPerson({
     // Nothing else we can do — rethrow for upstream handling
     throw e;
   }
+}
+
+async function enqueueOfflineAttendanceFallback({
+  offlineQueue,
+  person,
+  event,
+  scanPayload,
+  method,
+  deviceTime,
+  status,
+}) {
+  if (!offlineQueue) return null;
+  const noteText = scanPayload?.notes || scanPayload?.note || null;
+  const qres = await offlineQueue.enqueueAttendance({
+    person_id: person.id,
+    name: person.name,
+    department: person.department,
+    event,
+    point: scanPayload?.point || null,
+    method: method || "face-scan",
+    device_time: deviceTime,
+    status,
+    photo: scanPayload?.photoDataUrl || null,
+    notes: noteText,
+    verification_token: scanPayload?.verification_token || null,
+  });
+  if (qres && typeof qres === "object" && qres.queued === false) {
+    const reason = qres.reason || "enqueue_blocked";
+    let msg = "Attendance not queued.";
+    if (reason === "recent duplicate") msg = "Duplicate scan detected recently; not queued.";
+    else if (reason === "duplicate_morning_time_in") msg = "Morning time-in already recorded or queued.";
+    else if (reason === "duplicate_afternoon_time_in") msg = "Afternoon time-in already recorded or queued.";
+    else if (reason === "duplicate_morning_time_out") msg = "Morning time-out already recorded or queued.";
+    else if (reason === "duplicate_afternoon_time_out") msg = "Afternoon time-out already recorded or queued.";
+    return { inserted: false, blocked: true, event, message: msg };
+  }
+  return { inserted: true, queued: true, event, status };
 }
 
 // Automatically generate `time-out` (Morning Out) entries at the configured

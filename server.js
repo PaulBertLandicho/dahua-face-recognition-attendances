@@ -18,6 +18,8 @@ try {
 }
 
 const app = express();
+// Respect X-Forwarded-For behind cPanel / LiteSpeed / Passenger reverse proxy
+app.set("trust proxy", 1);
 
 // High-efficiency Gzip/Brotli response compression to minimize cPanel bandwidth
 let compression = null;
@@ -136,10 +138,11 @@ pool.query(`
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
   )
 `).then(async () => {
-  await pool.query(`
-    INSERT IGNORE INTO dahua_device_status (id, device_name, model, ip_address, port, connection_status)
-    VALUES (1, 'Multifactors Biometric Station', 'DHI-ASA3213GL-MW', '${DAHUA_DEVICE_IP}', ${DAHUA_DEVICE_PORT}, 'Unknown')
-  `);
+  await pool.query(
+    `INSERT IGNORE INTO dahua_device_status (id, device_name, model, ip_address, port, connection_status)
+     VALUES (1, 'Multifactors Biometric Station', 'DHI-ASA3213GL-MW', ?, ?, 'Unknown')`,
+    [DAHUA_DEVICE_IP, DAHUA_DEVICE_PORT]
+  );
 }).catch((err) => console.warn("dahua_device_status table init warning:", err.message));
 
 // Initialize Expenses table for payroll deductions
@@ -1035,9 +1038,10 @@ async function getSettingsRow() {
 }
 
 async function generatePayrollPeriodsFromAttendance(attendanceRows = []) {
+  const payrollAttendanceCols = "id, person_id, device_time, attendance_work_date, event, status, ot_status";
   if (!Array.isArray(attendanceRows) || !attendanceRows.length) {
     const [allAttendance] = await pool.query(
-      "SELECT * FROM attendance WHERE archived = 0 ORDER BY device_time ASC"
+      `SELECT ${payrollAttendanceCols} FROM attendance WHERE archived = 0 ORDER BY device_time ASC`
     );
     attendanceRows = allAttendance;
   }
@@ -1045,12 +1049,12 @@ async function generatePayrollPeriodsFromAttendance(attendanceRows = []) {
   if (!attendanceRows.length) return { created: 0, updated: 0 };
 
   const settings = await getSettingsRow();
-  const periodDays = Number(settings?.payroll_period_days || 15);
+  const periodDays = Math.max(1, Number(settings?.payroll_period_days || 15) || 15);
   const uniquePersonIds = [...new Set(attendanceRows.map((row) => row.person_id).filter(Boolean))];
   if (!uniquePersonIds.length) return { created: 0, updated: 0 };
 
   const [personsRows] = await pool.query(
-    "SELECT * FROM persons WHERE id IN (?) ORDER BY name ASC",
+    "SELECT id, name, department, daily_rate, late_penalty, cash_advance FROM persons WHERE id IN (?) ORDER BY name ASC",
     [uniquePersonIds]
   );
   const personById = new Map(personsRows.map((person) => [person.id, person]));
@@ -1063,7 +1067,7 @@ async function generatePayrollPeriodsFromAttendance(attendanceRows = []) {
     if (!person) continue;
 
     const [rows] = await pool.query(
-      "SELECT * FROM attendance WHERE person_id = ? AND archived = 0 ORDER BY device_time ASC",
+      `SELECT ${payrollAttendanceCols} FROM attendance WHERE person_id = ? AND archived = 0 ORDER BY device_time ASC`,
       [personId]
     );
     if (!rows.length) continue;
@@ -1076,6 +1080,7 @@ async function generatePayrollPeriodsFromAttendance(attendanceRows = []) {
 
     const earliestDate = new Date(rows[0].device_time);
     const latestDate = new Date(rows[rows.length - 1].device_time);
+    if (Number.isNaN(earliestDate.getTime()) || Number.isNaN(latestDate.getTime())) continue;
     let cursor = new Date(earliestDate);
     cursor.setHours(0, 0, 0, 0);
 
@@ -1689,8 +1694,18 @@ async function requireAdminOrServiceToken(req, res, next) {
   return requireAdmin(req, res, next);
 }
 
+function pruneRateLimitMap(map, now) {
+  if (map.size <= 500) return;
+  for (const [k, v] of map.entries()) {
+    if (!v || now > v.resetTime) {
+      map.delete(k);
+    }
+  }
+}
+
 function checkAuthRateLimit(ip, email = "") {
   const now = Date.now();
+  pruneRateLimitMap(authRateLimits, now);
   const key = `${ip || "unknown"}:${String(email || "").trim().toLowerCase()}`;
   const entry = authRateLimits.get(key) || { count: 0, resetTime: now + 5 * 60 * 1000 };
   if (now > entry.resetTime) {
@@ -2944,6 +2959,25 @@ async function claimFaceTokenUse(tokenPayload, targetPersonId) {
   return { ok: true };
 }
 
+/** Release a claimed face token use when the corresponding attendance INSERT fails. */
+async function releaseFaceTokenUse(tokenPayload, targetPersonId) {
+  const jti = String(tokenPayload?.jti || "").trim();
+  const targetPid = String(targetPersonId || "").trim();
+  if (!jti || !targetPid) return;
+
+  const memEntry = faceTokenUsesMemory.get(jti);
+  if (memEntry) {
+    memEntry.targets.delete(targetPid);
+    if (memEntry.targets.size === 0) {
+      faceTokenUsesMemory.delete(jti);
+    }
+  }
+  await pool.query(
+    "DELETE FROM face_token_uses WHERE jti = ? AND target_person_id = ?",
+    [jti, targetPid]
+  ).catch(() => {});
+}
+
 function validateColumnList(table, rawCols, { readableOnly = false, allowedSet = null } = {}) {
   const schemaSet = TABLE_SCHEMA_COLUMNS[table];
   const validSet = allowedSet || schemaSet;
@@ -3303,7 +3337,15 @@ app.post("/api/db/query", async (req, res) => {
             \`department\` = COALESCE(VALUES(\`department\`), \`department\`)`;
         }
 
-        const [result] = await pool.query(sql, values);
+        let result;
+        try {
+          [result] = await pool.query(sql, values);
+        } catch (insertErr) {
+          if (faceTokenPayload) {
+            await releaseFaceTokenUse(faceTokenPayload, itemObj.person_id);
+          }
+          throw insertErr;
+        }
         inserted.push(stripPasswordFromResponse(table, { ...rawItem, id: result.insertId || itemObj.id }));
       }
 
@@ -3530,52 +3572,77 @@ try {
   console.warn("Skipping ffmpeg on startup:", e.message);
 }
 
-// Background auto sync for attendance if configured
+function isPrivateLanTarget(rawTarget) {
+  const val = String(rawTarget || "").trim();
+  if (!val) return false;
+  let host = val;
+  try {
+    if (/^https?:\/\//i.test(val)) {
+      host = new URL(val).hostname;
+    }
+  } catch (e) {}
+  return /^(localhost|127\.0\.0\.1|10\.|192\.168\.|172\.(1[6-9]|2\d|3[0-1])\.)/i.test(host);
+}
+
+// Background auto sync for attendance if configured (skip unreachable private LAN targets in production)
 if (AUTO_SYNC_ATTENDANCE_MINUTES > 0) {
-  setInterval(async () => {
-    try {
-      const query = `/cgi-bin/recordFinder.cgi?action=find&name=AccessControlCardRec&count=1000`;
-      const records = parseDahuaRows(await requestDahuaWithDigest(query));
+  const autoSyncTarget = USE_LOCAL_CONNECTOR ? DAHUA_CONNECTOR_URL : DAHUA_DEVICE_IP;
+  const skipPrivateAutoSyncInProd =
+    isProductionEnv() &&
+    String(process.env.ALLOW_PRIVATE_AUTO_SYNC || "").toLowerCase() !== "true" &&
+    isPrivateLanTarget(autoSyncTarget);
 
-      const settingsRow = await pool.query("SELECT * FROM settings ORDER BY id LIMIT 1");
-      const settings = settingsRow[0]?.[0] || null;
-      const deduplicated = dedupeDahuaAttendanceByPersonDay(
-        records.map((record) => ({
-          person_id: firstValue(record, ["UserID", "userID", "CardNo"]),
-          name: firstValue(record, ["CardName", "Name", "name"]) || null,
-          event: mapDahuaAttendanceEvent(record),
-          point: firstValue(record, ["AttendancePoint", "Point", "point"]),
-          method: mapDahuaAttendanceMethod(firstValue(record, ["Method", "method"])),
-          device_time: normalizeDahuaDeviceTime(firstValue(record, ["CreateTime", "Time", "time"])),
-        })),
-        settings
-      );
+  if (skipPrivateAutoSyncInProd) {
+    console.log(`[Dahua Auto-Sync] Skipped server-side polling in production for private LAN target (${autoSyncTarget}); local sync agent pushes records instead.`);
+  } else {
+    setInterval(async () => {
+      try {
+        const query = `/cgi-bin/recordFinder.cgi?action=find&name=AccessControlCardRec&count=1000`;
+        const rawText = USE_LOCAL_CONNECTOR
+          ? await requestDahuaGetViaConnector(query)
+          : await requestDahuaWithDigest(query);
+        const records = parseDahuaRows(rawText);
 
-      for (const record of deduplicated) {
-        const pId = record.person_id;
-        const dTime = record.device_time;
-        if (!pId || !dTime) continue;
-        const dateDay = dTime.slice(0, 10);
-        const workDate = getWorkDateFromDeviceTime(dTime, record.event);
-        await pool.query(
-          "DELETE FROM attendance WHERE person_id = ? AND ((event = ? AND (attendance_work_date = ? OR (attendance_work_date IS NULL AND device_time LIKE ?)) AND device_time != ?) OR (device_time = ? AND event != ?)) AND (method IS NULL OR method != 'admin-entry')",
-          [pId, record.event, workDate, `${dateDay}%`, dTime, dTime, record.event]
-        ).catch(() => {});
-        await pool.query(
-          "INSERT IGNORE INTO attendance (person_id, name, event, point, method, device_time, status) VALUES (?, ?, ?, ?, ?, ?, ?)",
-          [
-            pId,
-            record.name,
-            record.event,
-            record.point,
-            record.method,
-            dTime,
-            record.status || null,
-          ]
+        const settingsRow = await pool.query("SELECT * FROM settings ORDER BY id LIMIT 1");
+        const settings = settingsRow[0]?.[0] || null;
+        const deduplicated = dedupeDahuaAttendanceByPersonDay(
+          records.map((record) => ({
+            person_id: firstValue(record, ["UserID", "userID", "CardNo"]),
+            name: firstValue(record, ["CardName", "Name", "name"]) || null,
+            event: mapDahuaAttendanceEvent(record),
+            point: firstValue(record, ["AttendancePoint", "Point", "point"]),
+            method: mapDahuaAttendanceMethod(firstValue(record, ["Method", "method"])),
+            device_time: normalizeDahuaDeviceTime(firstValue(record, ["CreateTime", "Time", "time"])),
+          })),
+          settings
         );
-      }
-    } catch (e) {}
-  }, AUTO_SYNC_ATTENDANCE_MINUTES * 60 * 1000);
+
+        for (const record of deduplicated) {
+          const pId = record.person_id;
+          const dTime = record.device_time;
+          if (!pId || !dTime) continue;
+          const dateDay = dTime.slice(0, 10);
+          const workDate = getWorkDateFromDeviceTime(dTime, record.event);
+          await pool.query(
+            "DELETE FROM attendance WHERE person_id = ? AND ((event = ? AND (attendance_work_date = ? OR (attendance_work_date IS NULL AND device_time LIKE ?)) AND device_time != ?) OR (device_time = ? AND event != ?)) AND (method IS NULL OR method != 'admin-entry')",
+            [pId, record.event, workDate, `${dateDay}%`, dTime, dTime, record.event]
+          ).catch(() => {});
+          await pool.query(
+            "INSERT IGNORE INTO attendance (person_id, name, event, point, method, device_time, status) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            [
+              pId,
+              record.name,
+              record.event,
+              record.point,
+              record.method,
+              dTime,
+              record.status || null,
+            ]
+          );
+        }
+      } catch (e) {}
+    }, AUTO_SYNC_ATTENDANCE_MINUTES * 60 * 1000);
+  }
 }
 
 app.use("/hls", express.static(hlsDir, {
@@ -3687,6 +3754,7 @@ async function getEligiblePersons() {
 const verifyRateLimits = new Map();
 function checkVerifyRateLimit(ip) {
   const now = Date.now();
+  pruneRateLimitMap(verifyRateLimits, now);
   const entry = verifyRateLimits.get(ip) || { count: 0, resetTime: now + 60000 };
   if (now > entry.resetTime) {
     entry.count = 1;
@@ -4045,7 +4113,7 @@ app.use(express.static(staticDir, {
   maxAge: "30d",
   etag: true,
   setHeaders: (res, filePath) => {
-    if (filePath.endsWith("index.html") || filePath.endsWith(".html")) {
+    if (filePath.endsWith("index.html") || filePath.endsWith(".html") || filePath.endsWith("service-worker.js")) {
       res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
     } else if (filePath.includes("static")) {
       res.setHeader("Cache-Control", "public, max-age=2592000, immutable");
@@ -4054,16 +4122,23 @@ app.use(express.static(staticDir, {
 }));
 
 app.use((req, res) => {
-  res.sendFile(path.join(staticDir, "index.html"));
+  if (req.path === "/api" || req.path.startsWith("/api/") || req.path === "/health" || req.path.startsWith("/health/")) {
+    return res.status(404).json({ error: { message: `Endpoint not found: ${req.method} ${req.path}` } });
+  }
+  const indexPath = path.join(staticDir, "index.html");
+  if (!fs.existsSync(indexPath)) {
+    return res.status(404).json({ error: { message: "Frontend static files are not present in backend directory." } });
+  }
+  return res.sendFile(indexPath);
 });
 
 if (process.env.SKIP_SERVER_LISTEN !== "1") {
   app.listen(PORT, () => {
     console.log(`Server running at port ${PORT}`);
-    setTimeout(() => {
-      regeneratePayrollPeriodsIfNeeded();
-      // Storage optimization: prune photos older than retention policy on startup
-      pruneOldAttendancePhotos(PHOTO_RETENTION_DAYS);
+    setTimeout(async () => {
+      // Storage optimization: prune old photos before running lightweight payroll sync
+      await pruneOldAttendancePhotos(PHOTO_RETENTION_DAYS);
+      await regeneratePayrollPeriodsIfNeeded();
       clearHlsArtifacts();
     }, 4000);
 

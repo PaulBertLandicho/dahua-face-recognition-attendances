@@ -71,10 +71,20 @@ Options -MultiViews
   # Ensure proxies handle compressed content correctly
   Header append Vary: Accept-Encoding
 
-  # Cache immutable hashed assets in /static/ and /models/
-  <FilesMatch "\.(js|css|woff|woff2|ttf|eot)$">
+  # Cache immutable hashed assets in /static/ and /models/ (exclude service-worker.js)
+  <FilesMatch "^(?!service-worker\.js$).*\.(js|css|woff|woff2|ttf|eot)$">
     Header set Cache-Control "public, max-age=31536000, immutable"
   </FilesMatch>
+
+  # Never cache Service Worker or HTML files permanently
+  <Files "service-worker.js">
+    <IfModule mod_expires.c>
+      ExpiresActive Off
+    </IfModule>
+    Header set Cache-Control "no-cache, no-store, must-revalidate"
+    Header set Pragma "no-cache"
+    Header set Expires "0"
+  </Files>
 
   # Cache image assets
   <FilesMatch "\.(jpg|jpeg|png|gif|ico|webp|svg)$">
@@ -98,8 +108,10 @@ Options -MultiViews
 
   RewriteRule ^index\.html$ - [L]
 
-  # Exclude API endpoints and backend routes from SPA index.html rewrite
+  # Exclude API, health, HLS, and backend routes from SPA index.html rewrite
   RewriteCond %{REQUEST_URI} !^/api [NC]
+  RewriteCond %{REQUEST_URI} !^/health [NC]
+  RewriteCond %{REQUEST_URI} !^/hls [NC]
   RewriteCond %{REQUEST_URI} !^/backend [NC]
 
   RewriteCond %{REQUEST_FILENAME} !-f

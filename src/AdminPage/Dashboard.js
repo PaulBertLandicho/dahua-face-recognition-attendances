@@ -134,13 +134,23 @@ export default function Dashboard() {
       try {
         const cutoff = new Date();
         cutoff.setMonth(cutoff.getMonth() - 6);
+        const now = new Date();
+        const pad = (n) => String(n).padStart(2, "0");
+        // Include 1 day buffer before local midnight so timezone offsets never clip today's punches,
+        // without pulling 6 months of attendance photo blobs.
+        const todayPhotoStart = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1);
+        const todayPhotoCutoff = `${todayPhotoStart.getFullYear()}-${pad(todayPhotoStart.getMonth() + 1)}-${pad(todayPhotoStart.getDate())} 00:00:00`;
 
-        const [attRes, personsRes, settingsRes, releasedRes] = await Promise.all([
+        const [attRes, todayPhotosRes, personsRes, settingsRes, releasedRes] = await Promise.all([
           supabase
             .from("attendance")
-            .select("device_time,person_id,name,department,event,status,method,point")
+            .select("id,device_time,person_id,name,department,event,status,method,point")
             .gte("device_time", cutoff.toISOString()),
-          supabase.from("persons").select("id,name,department", { count: 'exact' }),
+          supabase
+            .from("attendance")
+            .select("id,photo")
+            .gte("device_time", todayPhotoCutoff),
+          supabase.from("persons").select("id,name,department,registration_photo", { count: 'exact' }),
           supabase.from("settings").select("*").eq("id", 1).maybeSingle(),
           supabase
             .from("payroll_released_history")
@@ -149,7 +159,16 @@ export default function Dashboard() {
         ]);
 
         if (!mounted) return;
-        setAttendance(attRes.data || []);
+        const todayPhotoById = new Map(
+          (todayPhotosRes?.data || [])
+            .filter((row) => row && row.id != null && row.photo)
+            .map((row) => [String(row.id), row.photo])
+        );
+        const attendanceRows = (attRes.data || []).map((row) => {
+          const todayPhoto = row && row.id != null ? todayPhotoById.get(String(row.id)) : null;
+          return todayPhoto && !row.photo ? { ...row, photo: todayPhoto } : row;
+        });
+        setAttendance(attendanceRows);
         setPersons(personsRes.data || []);
         try { console.debug && console.debug("personsRes", personsRes); } catch (e) {}
         setTotalEmployees((personsRes && personsRes.data && personsRes.data.length) || 0);
@@ -207,7 +226,7 @@ export default function Dashboard() {
 
   const totalAttendance = attendance.length;
 
-  const personMap = useMemo(() => Object.fromEntries((persons || []).map((p) => [p.id, p])), [persons]);
+  const personMap = useMemo(() => Object.fromEntries((persons || []).map((p) => [String(p.id), p])), [persons]);
 
   const filteredReleasedHistory = useMemo(() => {
     const q = (historySearch || "").trim().toLowerCase();
@@ -226,7 +245,7 @@ export default function Dashboard() {
     const start = new Date(now.getFullYear(), now.getMonth(), now.getDate());
     const end = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999);
     return (attendance || [])
-      .map((a) => ({ person_id: a.person_id, device_time: a.device_time, photo: a.photo || null, name: a.name || null, department: a.department || null, event: a.event || null, status: a.status || null, method: a.method || null, point: a.point || null, person: personMap[a.person_id] || null }))
+      .map((a) => ({ person_id: a.person_id, device_time: a.device_time, photo: a.photo || null, name: a.name || null, department: a.department || null, event: a.event || null, status: a.status || null, method: a.method || null, point: a.point || null, person: a.person_id != null ? (personMap[String(a.person_id)] || null) : null }))
       .filter((a) => {
         try {
           const d = new Date(a.device_time);
@@ -968,7 +987,7 @@ export default function Dashboard() {
                 </tr>
               ) : (
                 paginatedTodayEntries.map((r, i) => {
-                  const person = r.person || personMap[r.person_id] || (persons || []).find((p) => String(p.name) === String(r.person_id)) || null;
+                  const person = r.person || (r.person_id != null ? personMap[String(r.person_id)] : null) || (persons || []).find((p) => String(p.id) === String(r.person_id) || String(p.name) === String(r.person_id)) || null;
                   const name = (person && person.name) || r.name || `Person #${r.person_id}`;
                   let timeLabel = "";
                   try { timeLabel = new Date(r.device_time).toLocaleString("en-US", { month: "long", day: "numeric", year: "numeric" }) + " - " + new Date(r.device_time).toLocaleTimeString("en-US"); } catch (e) {}

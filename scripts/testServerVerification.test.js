@@ -1208,4 +1208,89 @@ describe("Server-Side Verification, Fail-Closed Secrets, RBAC & Face/Offline Syn
     assert.ok(!bobOfflineRow.notes.includes("Spoofed"));
     assert.ok(!bobOfflineRow.notes.includes("Fake"));
   });
+
+  it("returns JSON 404 on unknown /api/* routes, releases face token claim on failed insert, and rebuilds payroll cleanly", async () => {
+    const faceVec = makeVectorAtDistanceFromE0(0.0);
+    seedPerson({ id: "A1", name: "Admin", email: "admin@test.local", role: "admin" });
+    seedPerson({ id: "E1", name: "Alice", email: "alice@test.local", role: "employee", descriptor: faceVec });
+
+    const adminToken = await loginAndGetToken("admin@test.local");
+
+    // 1. Unknown /api/* route returns clean JSON 404 rather than HTML sendFile ENOENT
+    const missingApiRes = await requestJson("GET", "/api/does-not-exist");
+    assert.equal(missingApiRes.status, 404);
+    assert.match(missingApiRes.body.error.message, /endpoint not found/i);
+
+    // 2. Failed attendance insert (e.g. duplicate morning_time_in slot) releases the face token claim
+    const nowStr = formatLocalTimestamp(new Date());
+    const workDate = nowStr.slice(0, 10);
+    db.attendance.push({
+      id: 901,
+      person_id: "E1",
+      name: "Alice",
+      event: "time-in",
+      method: "face",
+      device_time: nowStr,
+      attendance_work_date: workDate,
+      attendance_slot: "morning_time_in",
+      archived: 0,
+    });
+
+    const verifyRes = await requestJson("POST", "/api/face/verify", {
+      body: { descriptor: faceVec },
+    });
+    assert.equal(verifyRes.status, 200);
+    assert.equal(verifyRes.body.matched, true);
+    const faceToken = verifyRes.body.token;
+
+    // First attempt collides with existing morning_time_in slot -> 500 ER_DUP_ENTRY
+    const collided = await requestJson("POST", "/api/db/query", {
+      headers: { "X-Face-Token": faceToken },
+      body: {
+        action: "insert",
+        table: "attendance",
+        payload: {
+          person_id: "E1",
+          name: "Alice",
+          event: "time-in",
+          method: "face-scan",
+          device_time: nowStr,
+          attendance_work_date: workDate,
+          attendance_slot: "morning_time_in",
+          verification_token: faceToken,
+        },
+      },
+    });
+    assert.equal(collided.status, 500);
+    assert.equal(db.face_token_uses.length, 0, "Failed insert must release face_token_uses row");
+
+    // Retry for afternoon_time_out using the SAME token succeeds instead of returning 409
+    const retryValid = await requestJson("POST", "/api/db/query", {
+      headers: { "X-Face-Token": faceToken },
+      body: {
+        action: "insert",
+        table: "attendance",
+        payload: {
+          person_id: "E1",
+          name: "Alice",
+          event: "time-out",
+          method: "face-scan",
+          device_time: nowStr,
+          attendance_work_date: workDate,
+          attendance_slot: "afternoon_time_out",
+          verification_token: faceToken,
+        },
+      },
+    });
+    assert.equal(retryValid.status, 200);
+    assert.equal(db.face_token_uses.length, 1);
+
+    // 3. Payroll rebuild succeeds with column-projected attendance/persons queries
+    const rebuildRes = await requestJson("POST", "/api/payroll/rebuild", {
+      headers: { Authorization: `Bearer ${adminToken}` },
+      body: {},
+    });
+    assert.equal(rebuildRes.status, 200);
+    assert.equal(rebuildRes.body.ok, true);
+  });
 });
