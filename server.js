@@ -3717,6 +3717,13 @@ function clearEligiblePersonsCache() {
   eligiblePersonsCacheTime = 0;
 }
 
+function isSystemAdminAccount(person) {
+  if (!person) return false;
+  const id = String(person.id || "").trim().toUpperCase();
+  const name = String(person.name || "").trim().toLowerCase();
+  return id === "ADMIN-001" || name === "multifactors admin";
+}
+
 async function getEligiblePersons() {
   const now = Date.now();
   if (eligiblePersonsCache && (now - eligiblePersonsCacheTime < CACHE_TTL_MS)) {
@@ -3727,6 +3734,7 @@ async function getEligiblePersons() {
   );
   const persons = [];
   for (const r of rows) {
+    if (isSystemAdminAccount(r)) continue;
     try {
       let desc = r.descriptor;
       if (typeof desc === "string") desc = JSON.parse(desc);
@@ -3782,12 +3790,13 @@ app.get("/api/face/scan-context", async (req, res) => {
     const [personRows] = await pool.query(
       "SELECT id, name, department FROM persons WHERE archived = 0 OR archived IS NULL ORDER BY name ASC"
     );
+    const visiblePersons = (personRows || []).filter((p) => !isSystemAdminAccount(p));
     const [settingsRows] = await pool.query(
       "SELECT id, morning_start, morning_end, afternoon_start, afternoon_end, morning_grace_minutes, afternoon_grace_minutes, late_count_limit, payroll_period_days FROM settings ORDER BY id ASC LIMIT 1"
     );
     return res.json({
       success: true,
-      persons: personRows || [],
+      persons: visiblePersons,
       settings: settingsRows?.[0] || null,
     });
   } catch (err) {

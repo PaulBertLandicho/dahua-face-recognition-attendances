@@ -962,6 +962,8 @@ describe("Server-Side Verification, Fail-Closed Secrets, RBAC & Face/Offline Syn
     seedPerson({ id: "E1", name: "Alice Scanner", email: "alice@test.local", role: "employee", descriptor: vecE1 });
     seedPerson({ id: "E2", name: "Bob Partner", email: "bob@test.local", role: "employee", descriptor: vecPartner });
     seedPerson({ id: "E3", name: "Archived Person", email: "arch@test.local", role: "employee", archived: 1, descriptor: makeVectorAtDistanceFromE0(1.5, 3) });
+    seedPerson({ id: "ADMIN-001", name: "Multifactors Admin", email: "admin@test.local", role: "admin", department: "Admin" });
+    seedPerson({ id: "E4", name: "mjay", email: "mjay@test.local", role: "employee", department: "HR ADMIN" });
 
     // Seed extra partner persons up to 22 for testing MAX_PARTNER_PUNCHES_PER_TOKEN (= 20)
     for (let i = 1; i <= 21; i++) {
@@ -974,6 +976,8 @@ describe("Server-Side Verification, Fail-Closed Secrets, RBAC & Face/Offline Syn
     assert.equal(ctxRes.body.success, true);
     assert.ok(ctxRes.body.settings);
     assert.ok(!ctxRes.body.persons.some((p) => p.id === "E3"), "Archived person must not be in scan-context");
+    assert.ok(!ctxRes.body.persons.some((p) => p.id === "ADMIN-001" || p.name === "Multifactors Admin"), "Multifactors Admin must not be in scan-context");
+    assert.ok(ctxRes.body.persons.some((p) => p.id === "E4" && p.name === "mjay"), "Regular HR ADMIN employee must remain in scan-context");
     const aliceCtx = ctxRes.body.persons.find((p) => p.id === "E1");
     assert.ok(aliceCtx);
     assert.equal(aliceCtx.email, undefined);

@@ -39,6 +39,13 @@ const playVoice = (text) => {
   } catch (e) {}
 };
 
+export function isHiddenMobileAdmin(person) {
+  if (!person) return false;
+  const id = String(person.id || "").trim().toUpperCase();
+  const name = String(person.name || "").trim().toLowerCase();
+  return id === "ADMIN-001" || name === "multifactors admin";
+}
+
 export default function UserAttendanceScanner({ onSwitchToLogin, isMobile: propIsMobile }) {
   const [isMobile, setIsMobile] = useState(() =>
     typeof propIsMobile === "boolean"
@@ -197,8 +204,9 @@ export default function UserAttendanceScanner({ onSwitchToLogin, isMobile: propI
               const ctxData = await res.json();
               if (ctxData?.success) {
                 if (Array.isArray(ctxData.persons) && ctxData.persons.length > 0) {
-                  persons = ctxData.persons;
-                  offlineQueue.savePersons(ctxData.persons).catch(() => {});
+                  const visiblePersons = ctxData.persons.filter((p) => !isHiddenMobileAdmin(p));
+                  persons = visiblePersons;
+                  offlineQueue.savePersons(visiblePersons).catch(() => {});
                 }
                 if (ctxData.settings) {
                   settings = ctxData.settings;
@@ -213,8 +221,10 @@ export default function UserAttendanceScanner({ onSwitchToLogin, isMobile: propI
 
         // If offline or network request returned empty, fall back to IndexedDB cache
         if (!persons || persons.length === 0) {
-          const cachedPersons = await offlineQueue.getPersons();
-          if (cachedPersons && cachedPersons.length > 0) {
+          const cachedPersons = (await offlineQueue.getPersons() || []).filter(
+            (p) => !isHiddenMobileAdmin(p)
+          );
+          if (cachedPersons.length > 0) {
             persons = cachedPersons;
           }
         }
@@ -571,11 +581,14 @@ export default function UserAttendanceScanner({ onSwitchToLogin, isMobile: propI
     }
   };
 
-  // Filtered employees by search
-  const filteredEmployees = employees.filter((emp) =>
-    (emp.name || "").toLowerCase().includes(searchQuery.toLowerCase()) ||
-    (emp.department || "").toLowerCase().includes(searchQuery.toLowerCase())
-  );
+  // Filtered employees by search (always exclude Multifactors Admin in mobile scanner)
+  const filteredEmployees = employees.filter((emp) => {
+    if (isHiddenMobileAdmin(emp)) return false;
+    return (
+      (emp.name || "").toLowerCase().includes(searchQuery.toLowerCase()) ||
+      (emp.department || "").toLowerCase().includes(searchQuery.toLowerCase())
+    );
+  });
 
   // Selected employee objects
   const selectedEmployees = employees.filter((e) => selectedIds.includes(e.id));
