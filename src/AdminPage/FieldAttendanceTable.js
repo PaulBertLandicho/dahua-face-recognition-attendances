@@ -3,7 +3,11 @@ import { useLoading } from "../LoadingContext";
 import { supabase } from "../mysqlClient";
 import * as XLSX from "xlsx";
 import Swal from "sweetalert2";
-import { formatAttendanceDateTime } from "../utils/attendanceTime";
+import {
+  formatAttendanceDateTime,
+  attendanceDateKey,
+  attendanceTimestamp,
+} from "../utils/attendanceTime";
 import { getStoredSession } from "../utils/authSession";
 import {
   FiSearch,
@@ -23,6 +27,9 @@ import {
   FiUserCheck,
   FiRotateCw,
   FiFileText,
+  FiChevronDown,
+  FiChevronRight,
+  FiCalendar,
 } from "react-icons/fi";
 
 const OFFLINE_UNVERIFIED_TAG = "[OFFLINE-UNVERIFIED - Pending Review]";
@@ -38,6 +45,79 @@ function formatOfflineReviewedNote(notes, reviewerName = "Staff") {
     .filter((part) => part && !/^\[offline-unverified/i.test(part));
   const reviewedTag = `[OFFLINE-REVIEWED by ${reviewerName}]`;
   return remaining.length > 0 ? `${reviewedTag} | ${remaining.join(" | ")}` : reviewedTag;
+}
+
+function getLocalTodayKey() {
+  const now = new Date();
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+}
+
+function shiftDateKey(dateKey, deltaDays) {
+  const parts = String(dateKey || "").split("-").map(Number);
+  if (parts.length !== 3 || parts.some(Number.isNaN)) return "";
+  const dt = new Date(Date.UTC(parts[0], parts[1] - 1, parts[2] + deltaDays));
+  return dt.toISOString().slice(0, 10);
+}
+
+function matchesDateFilter(deviceTime, selectedDate, datePreset) {
+  const rowKey = deviceTime ? attendanceDateKey(deviceTime) : "";
+  if (selectedDate) {
+    return rowKey === selectedDate;
+  }
+  if (!datePreset || datePreset === "all") return true;
+  if (!rowKey) return false;
+  const todayKey = getLocalTodayKey();
+  if (datePreset === "today") return rowKey === todayKey;
+  if (datePreset === "3d") return rowKey >= shiftDateKey(todayKey, -2);
+  if (datePreset === "7d") return rowKey >= shiftDateKey(todayKey, -6);
+  return true;
+}
+
+function formatDayGroupHeading(dateKey) {
+  if (!dateKey || dateKey === "unknown") {
+    return {
+      label: "Unknown Date",
+      badge: null,
+      monthShort: "---",
+      dayNum: "?",
+      weekday: "Unknown Date",
+      year: "",
+    };
+  }
+  const todayKey = getLocalTodayKey();
+  const yesterdayKey = shiftDateKey(todayKey, -1);
+  const parts = dateKey.split("-").map(Number);
+  let label = dateKey;
+  let monthShort = "---";
+  let dayNum = "";
+  let weekday = dateKey;
+  let year = "";
+  if (parts.length === 3 && !parts.some(Number.isNaN)) {
+    const dt = new Date(Date.UTC(parts[0], parts[1] - 1, parts[2]));
+    label = new Intl.DateTimeFormat("en-US", {
+      weekday: "long",
+      month: "long",
+      day: "numeric",
+      year: "numeric",
+      timeZone: "UTC",
+    }).format(dt);
+    monthShort = new Intl.DateTimeFormat("en-US", {
+      month: "short",
+      timeZone: "UTC",
+    })
+      .format(dt)
+      .toUpperCase();
+    dayNum = String(parts[2]).padStart(2, "0");
+    weekday = new Intl.DateTimeFormat("en-US", {
+      weekday: "long",
+      timeZone: "UTC",
+    }).format(dt);
+    year = String(parts[0]);
+  }
+  let badge = null;
+  if (dateKey === todayKey) badge = "Today";
+  else if (dateKey === yesterdayKey) badge = "Yesterday";
+  return { label, badge, monthShort, dayNum, weekday, year };
 }
 
 // Formatter matching GPS Camera timestamp overlay (e.g. 10.30.2026 06:09 PM)
@@ -268,7 +348,7 @@ function FieldAttendanceCard({ card, index, openPhotoModal, persons, onMarkRevie
             <img
               src={photoSrc}
               alt="Store proof"
-              className="w-full h-full object-cover transition-transform duration-300 group-hover:scale-105"
+              className="w-full h-full object-cover"
             />
           ) : (
             <div className="w-full h-full flex flex-col items-center justify-center text-gray-500">
@@ -538,11 +618,9 @@ function PhotoOverlayModal({ photoModal, onClose, onUpdatePhoto }) {
   const [saving, setSaving] = useState(false);
   const [skipTransition, setSkipTransition] = useState(false);
   const [currentSrc, setCurrentSrc] = useState(photoModal.src);
-  const [naturalSize, setNaturalSize] = useState({ width: 0, height: 0 });
   const [viewportSize, setViewportSize] = useState({ width: 0, height: 0 });
   const [imgError, setImgError] = useState(false);
   const imageViewportRef = useRef(null);
-  const imgRef = useRef(null);
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;
   const resolvedLocation = useSiteLocation(photoModal.record?.point);
@@ -552,18 +630,7 @@ function PhotoOverlayModal({ photoModal, onClose, onUpdatePhoto }) {
     setRotation(0);
     setZoom(1);
     setImgError(false);
-    setNaturalSize({ width: 0, height: 0 });
   }, [photoModal.src]);
-
-  useEffect(() => {
-    const img = imgRef.current;
-    if (img && img.complete && img.naturalWidth > 0) {
-      setNaturalSize({
-        width: img.naturalWidth,
-        height: img.naturalHeight,
-      });
-    }
-  }, [currentSrc]);
 
   // Measure available fullscreen viewport area so small images scale up cleanly
   useEffect(() => {
@@ -646,23 +713,20 @@ function PhotoOverlayModal({ photoModal, onClose, onUpdatePhoto }) {
 
   const normalizedRotation = ((rotation % 360) + 360) % 360;
   const isRotated90 = normalizedRotation % 180 !== 0;
-  const effW = isRotated90 ? naturalSize.height : naturalSize.width;
-  const effH = isRotated90 ? naturalSize.width : naturalSize.height;
+
+  // Consistent 3:4 portrait proof frame size (same as standard 240x320 field proof)
+  const PROOF_ASPECT_W = 3;
+  const PROOF_ASPECT_H = 4;
 
   let frameW = null;
   let frameH = null;
-  if (
-    viewportSize.width > 0 &&
-    viewportSize.height > 0 &&
-    effW > 0 &&
-    effH > 0
-  ) {
+  if (viewportSize.width > 0 && viewportSize.height > 0) {
     const fitScale = Math.min(
-      viewportSize.width / effW,
-      viewportSize.height / effH
+      viewportSize.width / PROOF_ASPECT_W,
+      viewportSize.height / PROOF_ASPECT_H
     );
-    const baseW = Math.max(1, Math.round(effW * fitScale));
-    const baseH = Math.max(1, Math.round(effH * fitScale));
+    const baseW = Math.max(1, Math.round(PROOF_ASPECT_W * fitScale));
+    const baseH = Math.max(1, Math.round(PROOF_ASPECT_H * fitScale));
     frameW = Math.max(1, Math.round(baseW * zoom));
     frameH = Math.max(1, Math.round(baseH * zoom));
   }
@@ -696,12 +760,6 @@ function PhotoOverlayModal({ photoModal, onClose, onUpdatePhoto }) {
 
       // Freeze transform transition so the image stays rock-steady without spinning back
       setSkipTransition(true);
-      if (preImg.naturalWidth && preImg.naturalHeight) {
-        setNaturalSize({
-          width: preImg.naturalWidth,
-          height: preImg.naturalHeight,
-        });
-      }
       setCurrentSrc(rotatedBase64);
       setRotation(0);
 
@@ -862,20 +920,10 @@ function PhotoOverlayModal({ photoModal, onClose, onUpdatePhoto }) {
               }
               className="relative m-auto shrink-0 overflow-hidden bg-black shadow-2xl"
             >
-              {/* The Captured Store Photo scaled to fill the fullscreen viewport */}
+              {/* The Captured Store Photo filling the consistent 3:4 fullscreen proof frame */}
               <img
-                ref={imgRef}
                 src={currentSrc}
                 alt="Store proof with overlay"
-                onLoad={(e) => {
-                  const { naturalWidth, naturalHeight } = e.currentTarget;
-                  if (naturalWidth && naturalHeight) {
-                    setNaturalSize({
-                      width: naturalWidth,
-                      height: naturalHeight,
-                    });
-                  }
-                }}
                 onError={() => setImgError(true)}
                 onDoubleClick={() => setZoom((z) => (z > 1 ? 1 : 2))}
                 draggable={false}
@@ -905,8 +953,8 @@ function PhotoOverlayModal({ photoModal, onClose, onUpdatePhoto }) {
                 }
                 className={
                   imgW && imgH
-                    ? "block select-none"
-                    : "w-full h-full object-contain block select-none"
+                    ? "block object-cover select-none"
+                    : "w-full h-full object-cover block select-none"
                 }
               />
 
@@ -1042,10 +1090,13 @@ export default function FieldAttendanceTable() {
   const [eventFilter, setEventFilter] = useState("");
   const [departmentFilter, setDepartmentFilter] = useState("");
   const [selectedDate, setSelectedDate] = useState("");
+  const [datePreset, setDatePreset] = useState("all"); // 'all' | 'today' | '3d' | '7d'
   const [sortOrder, setSortOrder] = useState("desc");
   const [viewMode, setViewMode] = useState("cards"); // 'cards' (default) or 'table'
+  const [expandedDates, setExpandedDates] = useState({});
   const [currentPage, setCurrentPage] = useState(1);
-  const itemsPerPage = 12; // 12 cards fits in a 4-column responsive grid
+  const itemsPerPage = 10; // Table view rows per page
+  const daysPerPage = 10; // Cards view day sections per page (2 columns x 5 rows)
   const [refreshing, setRefreshing] = useState(false);
   const [photoModal, setPhotoModal] = useState({
     visible: false,
@@ -1130,7 +1181,7 @@ export default function FieldAttendanceTable() {
 
   useEffect(() => {
     setCurrentPage(1);
-  }, [search, eventFilter, departmentFilter, selectedDate, sortOrder, viewMode]);
+  }, [search, eventFilter, departmentFilter, selectedDate, datePreset, sortOrder, viewMode]);
 
   // Filtered records
   const filteredRecords = useMemo(() => {
@@ -1151,19 +1202,16 @@ export default function FieldAttendanceTable() {
 
       if (eventFilter && row.event !== eventFilter) return false;
       if (departmentFilter && (row.department || person.department) !== departmentFilter) return false;
-      if (selectedDate && row.device_time) {
-        const rowDate = new Date(row.device_time).toISOString().slice(0, 10);
-        if (rowDate !== selectedDate) return false;
-      }
+      if (!matchesDateFilter(row.device_time, selectedDate, datePreset)) return false;
 
       return true;
     });
-  }, [records, persons, search, eventFilter, departmentFilter, selectedDate]);
+  }, [records, persons, search, eventFilter, departmentFilter, selectedDate, datePreset]);
 
   const sortedRecords = useMemo(() => {
     return [...filteredRecords].sort((a, b) => {
-      const timeA = a.device_time ? new Date(a.device_time).getTime() : 0;
-      const timeB = b.device_time ? new Date(b.device_time).getTime() : 0;
+      const timeA = a.device_time ? attendanceTimestamp(a.device_time) : 0;
+      const timeB = b.device_time ? attendanceTimestamp(b.device_time) : 0;
       return sortOrder === "asc" ? timeA - timeB : timeB - timeA;
     });
   }, [filteredRecords, sortOrder]);
@@ -1175,7 +1223,7 @@ export default function FieldAttendanceTable() {
 
     for (const row of records) {
       if (!row.photo) continue;
-      const rowTime = row.device_time ? new Date(row.device_time).getTime() : 0;
+      const rowTime = row.device_time ? attendanceTimestamp(row.device_time) : 0;
 
       // Match punch group by:
       // 1. Same store photo proof + same event + within 5 minutes
@@ -1183,7 +1231,7 @@ export default function FieldAttendanceTable() {
       const matched = groups.find((grp) => {
         if (grp.photo !== row.photo) return false;
         if (grp.event !== row.event) return false;
-        const grpTime = grp.device_time ? new Date(grp.device_time).getTime() : 0;
+        const grpTime = grp.device_time ? attendanceTimestamp(grp.device_time) : 0;
         return Math.abs(grpTime - rowTime) <= 300000; // 5 minute window
       });
 
@@ -1247,38 +1295,135 @@ export default function FieldAttendanceTable() {
         if (!matchesDept) return false;
       }
 
-      // 4. Date filter
-      if (selectedDate && card.device_time) {
-        const rowDate = new Date(card.device_time).toISOString().slice(0, 10);
-        if (rowDate !== selectedDate) return false;
-      }
+      // 4. Date filter (manual date picker or quick date preset)
+      if (!matchesDateFilter(card.device_time, selectedDate, datePreset)) return false;
 
       return true;
     });
-  }, [allCardGroups, persons, search, eventFilter, departmentFilter, selectedDate]);
+  }, [allCardGroups, persons, search, eventFilter, departmentFilter, selectedDate, datePreset]);
 
   // Sort punch cards
   const sortedCardGroups = useMemo(() => {
     return [...filteredCardGroups].sort((a, b) => {
-      const timeA = a.device_time ? new Date(a.device_time).getTime() : 0;
-      const timeB = b.device_time ? new Date(b.device_time).getTime() : 0;
+      const timeA = a.device_time ? attendanceTimestamp(a.device_time) : 0;
+      const timeB = b.device_time ? attendanceTimestamp(b.device_time) : 0;
       return sortOrder === "asc" ? timeA - timeB : timeB - timeA;
     });
   }, [filteredCardGroups, sortOrder]);
 
-  // Pagination (Cards view paginates punch cards, Table view paginates individual rows)
-  const totalItems = viewMode === "cards" ? sortedCardGroups.length : sortedRecords.length;
-  const totalPages = Math.max(1, Math.ceil(totalItems / itemsPerPage));
+  // Group sorted cards into collapsible day sections so only 1 day (~2-4 photos) is open initially
+  const cardsByDate = useMemo(() => {
+    const dayMap = new Map();
+    const order = [];
 
-  const currentCards = useMemo(() => {
-    const start = (currentPage - 1) * itemsPerPage;
-    return sortedCardGroups.slice(start, start + itemsPerPage);
-  }, [sortedCardGroups, currentPage, itemsPerPage]);
+    sortedCardGroups.forEach((card, globalIndex) => {
+      const dateKey = (card.device_time && attendanceDateKey(card.device_time)) || "unknown";
+      if (!dayMap.has(dateKey)) {
+        const heading = formatDayGroupHeading(dateKey);
+        dayMap.set(dateKey, {
+          dateKey,
+          label: heading.label,
+          badge: heading.badge,
+          monthShort: heading.monthShort,
+          dayNum: heading.dayNum,
+          weekday: heading.weekday,
+          year: heading.year,
+          cards: [],
+          timeInCount: 0,
+          timeOutCount: 0,
+          memberMap: new Map(),
+        });
+        order.push(dateKey);
+      }
+
+      const section = dayMap.get(dateKey);
+      section.cards.push({ card, globalIndex });
+      if (card.event === "time-in") section.timeInCount += 1;
+      else section.timeOutCount += 1;
+
+      for (const m of card.members || []) {
+        const pid = String(m.person_id);
+        if (!section.memberMap.has(pid)) {
+          const p = persons.find((x) => String(x.id) === pid) || {};
+          section.memberMap.set(pid, {
+            id: pid,
+            name: m.name || p.name || `Employee #${pid}`,
+            registration_photo: p.registration_photo || null,
+          });
+        }
+      }
+    });
+
+    return order.map((key) => {
+      const s = dayMap.get(key);
+      return {
+        dateKey: s.dateKey,
+        label: s.label,
+        badge: s.badge,
+        monthShort: s.monthShort,
+        dayNum: s.dayNum,
+        weekday: s.weekday,
+        year: s.year,
+        cards: s.cards,
+        timeInCount: s.timeInCount,
+        timeOutCount: s.timeOutCount,
+        uniqueMembers: Array.from(s.memberMap.values()),
+      };
+    });
+  }, [sortedCardGroups, persons]);
+
+  // Pagination (Cards view paginates day sections; Table view paginates individual rows)
+  const pageSize = viewMode === "cards" ? daysPerPage : itemsPerPage;
+  const totalItems = viewMode === "cards" ? cardsByDate.length : sortedRecords.length;
+  const totalPages = Math.max(1, Math.ceil(totalItems / pageSize));
+  const startIndex = (currentPage - 1) * pageSize;
+
+  const paginatedDaySections = useMemo(() => {
+    return cardsByDate.slice(startIndex, startIndex + daysPerPage);
+  }, [cardsByDate, startIndex, daysPerPage]);
 
   const currentRecords = useMemo(() => {
-    const start = (currentPage - 1) * itemsPerPage;
-    return sortedRecords.slice(start, start + itemsPerPage);
-  }, [sortedRecords, currentPage, itemsPerPage]);
+    return sortedRecords.slice(startIndex, startIndex + itemsPerPage);
+  }, [sortedRecords, startIndex, itemsPerPage]);
+
+  const pageDateKeysSignature = useMemo(
+    () => paginatedDaySections.map((g) => g.dateKey).join("|"),
+    [paginatedDaySections]
+  );
+
+  // Keep all date sections collapsed by default until the user clicks a day or Expand All
+  useEffect(() => {
+    if (!pageDateKeysSignature) {
+      setExpandedDates({});
+      return;
+    }
+    const keys = pageDateKeysSignature.split("|").filter(Boolean);
+    const next = {};
+    keys.forEach((key) => {
+      next[key] = false;
+    });
+    setExpandedDates(next);
+  }, [pageDateKeysSignature]);
+
+  const toggleDateSection = (dateKey) => {
+    setExpandedDates((prev) => ({
+      ...prev,
+      [dateKey]: !prev[dateKey],
+    }));
+  };
+
+  const allDatesExpanded =
+    paginatedDaySections.length > 0 &&
+    paginatedDaySections.every((g) => Boolean(expandedDates[g.dateKey]));
+
+  const handleToggleAllDates = () => {
+    const nextValue = !allDatesExpanded;
+    const next = {};
+    paginatedDaySections.forEach((g) => {
+      next[g.dateKey] = nextValue;
+    });
+    setExpandedDates(next);
+  };
 
   // Export to Excel
   const handleExportExcel = () => {
@@ -1548,7 +1693,10 @@ export default function FieldAttendanceTable() {
             <input
               type="date"
               value={selectedDate}
-              onChange={(e) => setSelectedDate(e.target.value)}
+              onChange={(e) => {
+                setSelectedDate(e.target.value);
+                if (e.target.value) setDatePreset("all");
+              }}
               className="py-2 px-3 text-[0.85rem] rounded-md border border-[#dce3dd] bg-white text-[#2c382d] cursor-pointer outline-none focus:border-[#237227]"
             />
             {selectedDate && (
@@ -1634,10 +1782,72 @@ export default function FieldAttendanceTable() {
         </div>
       </div>
 
-      {/* Main Content Area: Cards View or Table View */}
+      {/* Quick Date Range Pills & Day Accordion Controls */}
+      <div className="flex flex-wrap items-center justify-between gap-3 mb-5">
+        <div className="flex flex-wrap items-center gap-1.5">
+          {[
+            { key: "today", label: "Today" },
+            { key: "3d", label: "Last 3 Days" },
+            { key: "7d", label: "Last 7 Days" },
+            { key: "all", label: "All Dates" },
+          ].map((preset) => {
+            const isActive = !selectedDate && datePreset === preset.key;
+            return (
+              <button
+                key={preset.key}
+                type="button"
+                onClick={() => {
+                  setSelectedDate("");
+                  setDatePreset(preset.key);
+                }}
+                className={`px-3 py-1.5 rounded-full text-xs font-bold transition-colors cursor-pointer ${
+                  isActive
+                    ? "bg-[#237227] text-white border border-[#237227] shadow-sm"
+                    : "bg-white text-gray-600 border border-[#dce3dd] hover:bg-[#f4f8f4] hover:text-[#237227]"
+                }`}
+              >
+                {preset.label}
+              </button>
+            );
+          })}
+          {selectedDate && (
+            <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-bold bg-[#e8f5e9] text-[#237227] border border-[#a5d6a7]">
+              <FiCalendar className="text-xs" />
+              <span>Date: {selectedDate}</span>
+            </span>
+          )}
+        </div>
+
+        {viewMode === "cards" && cardsByDate.length > 1 && (
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-gray-500 font-medium">
+              {cardsByDate.length} {cardsByDate.length === 1 ? "day" : "days"}
+            </span>
+            <button
+              type="button"
+              onClick={handleToggleAllDates}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold bg-white text-[#237227] border border-[#dce3dd] hover:bg-[#f4f8f4] hover:border-[#237227]/40 transition-colors cursor-pointer"
+            >
+              {allDatesExpanded ? (
+                <>
+                  <FiChevronRight className="text-sm" />
+                  <span>Collapse All Days</span>
+                </>
+              ) : (
+                <>
+                  <FiChevronDown className="text-sm" />
+                  <span>Expand All Days</span>
+                </>
+              )}
+            </button>
+          </div>
+        )}
+      </div>
+
+      {/* Main Content Area: Cards View (Collapsible Day Sections) or Table View */}
       {viewMode === "cards" ? (
         <div>
-          {currentCards.length === 0 ? (
+          {cardsByDate.length === 0 ? (
             <div className="bg-white rounded-2xl border border-gray-200/90 p-16 text-center text-gray-500 shadow-sm">
               <FiCamera className="mx-auto text-4xl text-gray-300 mb-3" />
               <p className="font-bold text-base mb-1 text-gray-800">
@@ -1648,18 +1858,132 @@ export default function FieldAttendanceTable() {
               </p>
             </div>
           ) : (
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
-              {currentCards.map((card, idx) => {
-                const globalIndex = (currentPage - 1) * itemsPerPage + idx;
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 items-start">
+              {paginatedDaySections.map((section) => {
+                const isExpanded = Boolean(expandedDates[section.dateKey]);
                 return (
-                  <FieldAttendanceCard
-                    key={card.id || `card-${idx}`}
-                    card={card}
-                    index={globalIndex}
-                    openPhotoModal={openPhotoModal}
-                    persons={persons}
-                    onMarkReviewed={handleMarkReviewed}
-                  />
+                  <div
+                    key={section.dateKey}
+                    className="bg-white/60 rounded-2xl border border-[#e3eae4] overflow-hidden shadow-[0_1px_4px_rgba(0,0,0,0.03)]"
+                  >
+                    {/* Collapsible Day Header */}
+                    <button
+                      type="button"
+                      onClick={() => toggleDateSection(section.dateKey)}
+                      aria-expanded={isExpanded}
+                      title={section.label}
+                      className="w-full flex flex-wrap items-center justify-between gap-3 px-4 py-3 bg-white hover:bg-[#f8fbf8] transition-colors cursor-pointer border-none text-left"
+                    >
+                      <div className="flex items-center gap-3 min-w-0">
+                        <span className="w-7 h-7 rounded-lg bg-[#f0f7f0] text-[#237227] flex items-center justify-center shrink-0">
+                          {isExpanded ? (
+                            <FiChevronDown className="text-base" />
+                          ) : (
+                            <FiChevronRight className="text-base" />
+                          )}
+                        </span>
+
+                        {/* Calendar Date Badge Tile */}
+                        <div className="w-11 rounded-lg overflow-hidden border border-[#dce6dd] shadow-sm bg-white shrink-0 text-center leading-none">
+                          <div className="bg-[#237227] text-white text-[9px] font-extrabold tracking-wider py-0.5 uppercase">
+                            {section.monthShort}
+                          </div>
+                          <div className="text-[#2c382d] text-base font-extrabold py-1 font-mono">
+                            {section.dayNum || "--"}
+                          </div>
+                        </div>
+
+                        <div className="min-w-0 flex flex-col">
+                          <div className="flex items-center gap-2">
+                            <span className="font-bold text-[#2c382d] text-sm sm:text-base truncate">
+                              {section.weekday}
+                            </span>
+                            {section.badge && (
+                              <span
+                                className={`px-2 py-0.5 rounded-full text-[10px] font-extrabold uppercase tracking-wider shrink-0 ${
+                                  section.badge === "Today"
+                                    ? "bg-emerald-100 text-emerald-800 border border-emerald-200"
+                                    : "bg-blue-100 text-blue-800 border border-blue-200"
+                                }`}
+                              >
+                                {section.badge}
+                              </span>
+                            )}
+                          </div>
+                          {section.year && (
+                            <span className="text-[11px] text-gray-400 font-medium">
+                              {section.monthShort} {section.dayNum}, {section.year}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+
+                      <div className="flex items-center gap-2.5 flex-wrap">
+                        {/* Employee Avatars Preview */}
+                        {section.uniqueMembers.length > 0 && (
+                          <div className="hidden sm:flex items-center -space-x-2 mr-1">
+                            {section.uniqueMembers.slice(0, 5).map((m) =>
+                              m.registration_photo ? (
+                                <img
+                                  key={m.id}
+                                  src={m.registration_photo}
+                                  alt={m.name}
+                                  title={m.name}
+                                  className="w-7 h-7 rounded-full object-cover ring-2 ring-white shadow-sm"
+                                />
+                              ) : (
+                                <span
+                                  key={m.id}
+                                  title={m.name}
+                                  className="inline-flex items-center justify-center w-7 h-7 rounded-full bg-[#e8f5e9] text-[#237227] font-bold text-[10px] ring-2 ring-white shadow-sm"
+                                >
+                                  {m.name.charAt(0)}
+                                </span>
+                              )
+                            )}
+                            {section.uniqueMembers.length > 5 && (
+                              <span className="inline-flex items-center justify-center w-7 h-7 rounded-full bg-gray-200 text-gray-700 font-bold text-[10px] ring-2 ring-white shadow-sm">
+                                +{section.uniqueMembers.length - 5}
+                              </span>
+                            )}
+                          </div>
+                        )}
+
+                        {section.timeInCount > 0 && (
+                          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                            {section.timeInCount} Time In
+                          </span>
+                        )}
+                        {section.timeOutCount > 0 && (
+                          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-blue-50 text-blue-700 border border-blue-200">
+                            {section.timeOutCount} Time Out
+                          </span>
+                        )}
+                        <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-gray-100 text-gray-700 border border-gray-200">
+                          {section.cards.length}{" "}
+                          {section.cards.length === 1 ? "card" : "cards"}
+                        </span>
+                      </div>
+                    </button>
+
+                    {/* Expanded Unchanged FieldAttendanceCard Grid (2 cards per row + vertical scroll bar) */}
+                    {isExpanded && (
+                      <div className="p-4 border-t border-[#edf2ee] bg-[#fafcfa] max-h-[560px] overflow-y-auto">
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                          {section.cards.map(({ card, globalIndex }, idx) => (
+                            <FieldAttendanceCard
+                              key={card.id || `${section.dateKey}-${idx}`}
+                              card={card}
+                              index={globalIndex}
+                              openPhotoModal={openPhotoModal}
+                              persons={persons}
+                              onMarkReviewed={handleMarkReviewed}
+                            />
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
                 );
               })}
             </div>
@@ -1881,30 +2205,77 @@ export default function FieldAttendanceTable() {
         </div>
       )}
 
-      {/* Pagination Footer (only rendered if multiple pages exist) */}
-      {totalPages > 1 && (
-        <div className="mt-6 p-4 bg-white rounded-xl border border-gray-200/90 shadow-sm flex items-center justify-end">
-          <div className="flex items-center gap-1.5">
-            <button
-              onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
-              disabled={currentPage === 1}
-              className="py-1.5 px-3 rounded-md bg-white border border-[#dce3dd] text-xs font-semibold text-gray-700 disabled:opacity-40 disabled:cursor-not-allowed hover:bg-gray-50 cursor-pointer"
-            >
-              Prev
-            </button>
-            <span className="px-2 text-xs font-semibold text-gray-600">
-              {currentPage} / {totalPages}
-            </span>
-            <button
-              onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
-              disabled={currentPage === totalPages}
-              className="py-1.5 px-3 rounded-md bg-white border border-[#dce3dd] text-xs font-semibold text-gray-700 disabled:opacity-40 disabled:cursor-not-allowed hover:bg-gray-50 cursor-pointer"
-            >
-              Next
-            </button>
-          </div>
+      {/* Pagination Footer */}
+      <div className="mt-5 flex flex-wrap justify-between items-center gap-3 py-4 px-5 bg-white border border-[#edf2ee] rounded-xl shadow-[0_1px_4px_rgba(0,0,0,0.04)]">
+        <div className="text-[#677368] text-[0.875rem]">
+          {viewMode === "cards" ? (
+            <>
+              Showing <strong>{totalItems === 0 ? 0 : startIndex + 1}</strong> to{" "}
+              <strong>{Math.min(startIndex + pageSize, totalItems)}</strong> of{" "}
+              <strong>{totalItems}</strong> {totalItems === 1 ? "day" : "days"}{" "}
+              <span className="text-gray-400">
+                ({sortedCardGroups.length}{" "}
+                {sortedCardGroups.length === 1 ? "card" : "cards"})
+              </span>
+            </>
+          ) : (
+            <>
+              Showing <strong>{totalItems === 0 ? 0 : startIndex + 1}</strong> to{" "}
+              <strong>{Math.min(startIndex + pageSize, totalItems)}</strong> of{" "}
+              <strong>{totalItems}</strong> records
+            </>
+          )}
         </div>
-      )}
+        <div className="flex gap-1.5 items-center">
+          <button
+            type="button"
+            className="flex items-center justify-center min-w-[32px] h-8 px-1.5 rounded-lg border border-[#dce3dd] bg-white text-[#677368] text-[0.85rem] font-semibold cursor-pointer outline-none focus:outline-none disabled:opacity-40 disabled:cursor-not-allowed"
+            onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+            disabled={currentPage === 1}
+          >
+            &lt;
+          </button>
+
+          {Array.from({ length: totalPages }, (_, i) => i + 1)
+            .filter((p) => p === 1 || p === totalPages || Math.abs(currentPage - p) <= 1)
+            .map((p, idx, arr) => {
+              const isActive = p === currentPage;
+              const renderButton = (
+                <button
+                  key={p}
+                  type="button"
+                  className={`flex items-center justify-center min-w-[32px] h-8 px-1.5 rounded-lg border text-[0.85rem] font-semibold cursor-pointer outline-none focus:outline-none ${
+                    isActive
+                      ? "!bg-[#237227] !text-white !border-[#237227]"
+                      : "border-[#dce3dd] bg-white text-[#677368]"
+                  }`}
+                  onClick={() => setCurrentPage(p)}
+                >
+                  {p}
+                </button>
+              );
+
+              if (idx > 0 && arr[idx] - arr[idx - 1] > 1) {
+                return (
+                  <div key={`group-${p}`} className="flex items-center gap-1.5">
+                    <span className="text-[#677368] px-0.5">...</span>
+                    {renderButton}
+                  </div>
+                );
+              }
+              return renderButton;
+            })}
+
+          <button
+            type="button"
+            className="flex items-center justify-center min-w-[32px] h-8 px-1.5 rounded-lg border border-[#dce3dd] bg-white text-[#677368] text-[0.85rem] font-semibold cursor-pointer outline-none focus:outline-none disabled:opacity-40 disabled:cursor-not-allowed"
+            onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+            disabled={currentPage === totalPages}
+          >
+            &gt;
+          </button>
+        </div>
+      </div>
 
       {/* High-Resolution Photo Lightbox Modal with Details Overlay */}
       {photoModal.visible && (

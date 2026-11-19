@@ -2,6 +2,7 @@ import {
   parseResponseJson,
   deleteDahuaAttendance,
   syncDahuaAttendance,
+  enrollDahuaPerson,
 } from './dahuaApi';
 
 describe('Dahua API helpers', () => {
@@ -130,6 +131,36 @@ describe('Dahua API helpers', () => {
     expect(localStorage.getItem('sb-session')).toBeNull();
     expect(expiredListener).toHaveBeenCalledTimes(1);
     window.removeEventListener('sb-auth-expired', expiredListener);
+  });
+
+  test('enrollDahuaPerson posts person payload to /api/dahua/enroll-person', async () => {
+    delete process.env.REACT_APP_BACKEND_URL;
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: jest.fn().mockResolvedValue('{"ok":true,"enrolled":true}'),
+    });
+
+    const result = await enrollDahuaPerson({
+      id: '101',
+      name: 'Juan Dela Cruz',
+      department: 'SALES',
+      registration_photo: 'data:image/jpeg;base64,/9j/4AAQ',
+    });
+
+    expect(result).toEqual({ ok: true, enrolled: true });
+    expect(global.fetch).toHaveBeenCalledWith(
+      '/api/dahua/enroll-person',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({
+          id: '101',
+          name: 'Juan Dela Cruz',
+          department: 'SALES',
+          registration_photo: 'data:image/jpeg;base64,/9j/4AAQ',
+        }),
+      }),
+    );
   });
 });
 

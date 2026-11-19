@@ -121,6 +121,21 @@ pool.query(`
   return pool.query("DELETE FROM dahua_pending_deletions WHERE status = 'completed' OR created_at < NOW() - INTERVAL 2 DAY");
 }).catch((err) => console.warn("dahua_pending_deletions table init warning:", err.message));
 
+pool.query(`
+  CREATE TABLE IF NOT EXISTS dahua_pending_enrollments (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    person_id VARCHAR(191) NOT NULL,
+    name VARCHAR(255) NULL,
+    department VARCHAR(191) NULL,
+    registration_photo LONGTEXT NULL,
+    status VARCHAR(20) NOT NULL DEFAULT 'pending',
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE KEY uniq_pending_enrollment_person (person_id)
+  )
+`).then(() => {
+  return pool.query("DELETE FROM dahua_pending_enrollments WHERE status = 'completed' OR created_at < NOW() - INTERVAL 7 DAY");
+}).catch((err) => console.warn("dahua_pending_enrollments table init warning:", err.message));
+
 // Initialize Dahua Device Monitoring and Sync Tracking table
 pool.query(`
   CREATE TABLE IF NOT EXISTS dahua_device_status (
@@ -1378,6 +1393,42 @@ async function getDahuaUsersViaConnector(requestedUserIds = null) {
     const batch = usersData?.params?.Users || usersData?.error?.detail?.Users || [];
     users.push(...batch.filter(Boolean));
   }
+
+  // Also fetch enrolled face photos from Dahua AccessFace.list via connector
+  if (users.length > 0) {
+    const allUserIds = users.map((u) => String(u.UserID || u.id)).filter(Boolean);
+    const photoMap = {};
+    for (let i = 0; i < allUserIds.length; i += 10) {
+      const chunk = allUserIds.slice(i, i + 10);
+      try {
+        const faceRes = await requestDahuaViaConnector("POST", "/RPC2", {
+          method: "AccessFace.list",
+          params: { UserIDList: chunk },
+          id: users.length + 100 + i,
+          session: activeSession,
+        });
+        if (faceRes && faceRes.success) {
+          const parsed = JSON.parse(faceRes.body || "{}");
+          const faceList = parsed?.params?.FaceDataList || parsed?.error?.detail?.FaceDataList || [];
+          for (const item of faceList) {
+            if (item && item.UserID && Array.isArray(item.PhotoData) && item.PhotoData.length > 0) {
+              const b64 = item.PhotoData[0];
+              if (b64 && typeof b64 === "string" && b64.length > 50) {
+                photoMap[String(item.UserID)] = b64.startsWith("data:") ? b64 : `data:image/jpeg;base64,${b64}`;
+              }
+            }
+          }
+        }
+      } catch (e) {}
+    }
+    for (const u of users) {
+      const uid = String(u.UserID || u.id);
+      if (photoMap[uid]) {
+        u.registration_photo = photoMap[uid];
+      }
+    }
+  }
+
   return users;
 }
 
@@ -2123,9 +2174,225 @@ app.post(["/api/users/import", "/api/dahua/push-users"], requireAdminOrServiceTo
   }
 });
 
+async function sendDahuaRpcRequest(path, payload) {
+  if (USE_LOCAL_CONNECTOR) {
+    const res = await requestDahuaViaConnector("POST", path, payload);
+    if (!res || !res.success) {
+      throw new Error(res?.error || `Failed Dahua RPC request to ${path} via connector`);
+    }
+    return JSON.parse(res.body || "{}");
+  }
+  const res = await requestDahuaJsonWithDigest(path, "POST", payload);
+  return JSON.parse(res.body || "{}");
+}
+
+async function loginDahuaRpcSession() {
+  const firstData = await sendDahuaRpcRequest("/RPC2_Login", {
+    method: "global.login",
+    params: { userName: DAHUA_USERNAME, password: "", clientType: "Web3.0" },
+    id: 1,
+  });
+  const loginParams = firstData.params || {};
+  const passwordHash = md5(`${DAHUA_USERNAME}:${loginParams.realm}:${DAHUA_PASSWORD}`);
+  const loginPassword = passwordHash.toUpperCase();
+  const session = firstData.session || 0;
+  const secondData = await sendDahuaRpcRequest("/RPC2_Login", {
+    method: "global.login",
+    params: { userName: DAHUA_USERNAME, password: loginPassword, clientType: "Web3.0", authorityType: "Default" },
+    id: 2,
+    session,
+  });
+  return secondData.session || session;
+}
+
+async function enrollDahuaUserOnDevice(person) {
+  if (!person || !person.id) {
+    throw new Error("Person ID is required for Dahua enrollment.");
+  }
+  const userId = String(person.id).trim();
+  const userName = String(person.name || userId).trim();
+  const activeSession = await loginDahuaRpcSession();
+
+  const userRecord = {
+    UserID: userId,
+    UserName: userName,
+    UserType: 0,
+    Authority: 2,
+  };
+
+  let userEnrolled = false;
+  try {
+    const insertRes = await sendDahuaRpcRequest("/RPC2", {
+      method: "AccessUser.insertMulti",
+      params: { UserList: [userRecord] },
+      id: 10,
+      session: activeSession,
+    });
+    if (insertRes && insertRes.result) {
+      userEnrolled = true;
+    } else {
+      const updateRes = await sendDahuaRpcRequest("/RPC2", {
+        method: "AccessUser.updateMulti",
+        params: { UserList: [userRecord] },
+        id: 11,
+        session: activeSession,
+      });
+      if (updateRes && updateRes.result) {
+        userEnrolled = true;
+      }
+    }
+  } catch (rpcErr) {
+    console.warn(`[Dahua Enroll] AccessUser RPC fallback for ${userId}:`, rpcErr.message);
+  }
+
+  if (!userEnrolled) {
+    try {
+      const cgiQuery = `/cgi-bin/recordUpdater.cgi?action=insert&name=AccessUser&UserID=${encodeURIComponent(userId)}&CardName=${encodeURIComponent(userName)}&CardStatus=0&CardType=0`;
+      if (USE_LOCAL_CONNECTOR) {
+        await requestDahuaGetViaConnector(cgiQuery);
+      } else {
+        await requestDahuaWithDigest(cgiQuery);
+      }
+      userEnrolled = true;
+    } catch (cgiErr) {
+      console.warn(`[Dahua Enroll] CGI AccessUser fallback warning for ${userId}:`, cgiErr.message);
+    }
+  }
+
+  let faceEnrolled = false;
+  if (person.registration_photo && typeof person.registration_photo === "string") {
+    const rawBase64 = person.registration_photo
+      .replace(/^data:image\/[a-zA-Z0-9.+-]+;base64,/, "")
+      .trim();
+    if (rawBase64.length > 50) {
+      const faceRecord = {
+        UserID: userId,
+        PhotoData: [rawBase64],
+      };
+      try {
+        const faceInsert = await sendDahuaRpcRequest("/RPC2", {
+          method: "AccessFace.insertMulti",
+          params: { FaceList: [faceRecord] },
+          id: 12,
+          session: activeSession,
+        });
+        if (faceInsert && faceInsert.result) {
+          faceEnrolled = true;
+        } else {
+          const faceUpdate = await sendDahuaRpcRequest("/RPC2", {
+            method: "AccessFace.updateMulti",
+            params: { FaceList: [faceRecord] },
+            id: 13,
+            session: activeSession,
+          });
+          if (faceUpdate && faceUpdate.result) {
+            faceEnrolled = true;
+          }
+        }
+      } catch (faceErr) {
+        console.warn(`[Dahua Enroll] AccessFace warning for ${userId}:`, faceErr.message);
+      }
+    }
+  }
+
+  return { userEnrolled, faceEnrolled };
+}
+
+async function flushPendingDahuaEnrollments() {
+  try {
+    const [pendingRows] = await pool.query(
+      "SELECT * FROM dahua_pending_enrollments WHERE status = 'pending' ORDER BY id ASC LIMIT 50"
+    );
+    if (!Array.isArray(pendingRows) || pendingRows.length === 0) return 0;
+
+    let flushed = 0;
+    for (const row of pendingRows) {
+      try {
+        await enrollDahuaUserOnDevice({
+          id: row.person_id,
+          name: row.name,
+          department: row.department,
+          registration_photo: row.registration_photo,
+        });
+        await pool.query("DELETE FROM dahua_pending_enrollments WHERE id = ?", [row.id]);
+        flushed += 1;
+      } catch (err) {
+        console.warn(`[Dahua Enroll Queue] Could not flush pending enrollment for ${row.person_id}:`, err.message);
+        break;
+      }
+    }
+    return flushed;
+  } catch (e) {
+    return 0;
+  }
+}
+
+app.post("/api/dahua/enroll-person", requireAdmin, async (req, res) => {
+  const { id, name, department, registration_photo } = req.body || {};
+  const personId = String(id || "").trim();
+  if (!personId) {
+    return res.status(400).json({ error: "Person id is required." });
+  }
+
+  try {
+    const result = await enrollDahuaUserOnDevice({
+      id: personId,
+      name: name || personId,
+      department: department || null,
+      registration_photo: registration_photo || null,
+    });
+    await pool.query("DELETE FROM dahua_pending_enrollments WHERE person_id = ?", [personId]).catch(() => {});
+    await recordDeviceSyncStatus({ type: "person", success: true });
+    return res.json({
+      ok: true,
+      enrolled: true,
+      queued: false,
+      ...result,
+      message: "Person enrolled on Dahua biometric terminal.",
+    });
+  } catch (err) {
+    console.warn(`[Dahua Enroll] Device unreachable or failed for ${personId}, queuing enrollment:`, err.message);
+    try {
+      await pool.query(
+        `INSERT INTO dahua_pending_enrollments (person_id, name, department, registration_photo, status)
+         VALUES (?, ?, ?, ?, 'pending')
+         ON DUPLICATE KEY UPDATE
+           name = VALUES(name),
+           department = VALUES(department),
+           registration_photo = COALESCE(VALUES(registration_photo), registration_photo),
+           status = 'pending',
+           created_at = CURRENT_TIMESTAMP`,
+        [personId, name || null, department || null, registration_photo || null]
+      );
+    } catch (qErr) {
+      console.warn("Queue dahua_pending_enrollments warning:", qErr.message);
+    }
+    return res.json({
+      ok: true,
+      enrolled: false,
+      queued: true,
+      message: "Person saved and queued for Dahua terminal sync.",
+    });
+  }
+});
+
 app.post("/api/dahua/sync-users", requireAdmin, async (req, res) => {
   try {
-    const users = await getDahuaUsers();
+    // 1. Flush any queued web enrollments to the Dahua device first
+    await flushPendingDahuaEnrollments();
+
+    // 2. Build combined list of standard 1..1000 IDs plus any custom IDs (e.g. EMP001) stored in DB
+    const defaultIds = Array.from({ length: 1000 }, (_, idx) => String(idx + 1));
+    let customIds = [];
+    try {
+      const [dbPersonRows] = await pool.query("SELECT id FROM persons WHERE archived = 0 OR archived IS NULL");
+      customIds = (dbPersonRows || [])
+        .map((r) => String(r.id || "").trim())
+        .filter((id) => id && !isSystemAdminAccount({ id }) && !id.startsWith("ACC-"));
+    } catch (e) {}
+    const combinedUserIds = [...new Set([...defaultIds, ...customIds])];
+
+    const users = await getDahuaUsers(combinedUserIds);
     const payload = users.map((user) => ({
       id: firstValue(user, ["UserID", "userID", "ID", "userId"]),
       name: firstValue(user, ["UserName", "userName", "Name", "name"]),
@@ -4111,7 +4378,6 @@ app.post("/api/maintenance/optimize-tables", requireAdmin, async (req, res) => {
     return res.status(500).json({ error: err.message });
   }
 });
-
 
 // Serve Frontend with static caching to reduce unnecessary bandwidth downloads
 const staticDir = fs.existsSync(path.join(__dirname, "build"))

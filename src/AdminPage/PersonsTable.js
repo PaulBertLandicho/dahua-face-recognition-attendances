@@ -1,4 +1,5 @@
 import { useEffect, useState, useRef } from "react";
+import * as faceapi from "face-api.js";
 import { supabase } from "../mysqlClient";
 import Swal from "sweetalert2";
 import * as XLSX from "xlsx";
@@ -16,11 +17,20 @@ import {
   FiCheckCircle,
   FiPlus,
   FiMoon,
+  FiUpload,
+  FiUserPlus,
+  FiTrash2,
 } from "react-icons/fi";
 import { determineAttendanceStatus } from "./attendanceUtils";
-import { syncDahuaUsers } from "../utils/dahuaApi";
-import { buildDescriptors } from "../utils/buildFaceDescriptors";
-import { FiCpu } from "react-icons/fi";
+import { syncDahuaUsers, enrollDahuaPerson } from "../utils/dahuaApi";
+import { buildDescriptors, ensureFaceModelsLoaded } from "../utils/buildFaceDescriptors";
+import {
+  normalizeDescriptor,
+  toFloat32Array,
+  euclideanDistance,
+  averageDescriptors,
+} from "../utils/faceUtils";
+import { checkIsMobileDevice } from "../utils/deviceUtils";
 
 
 function DateTimeInput({ value, onChange, className, id, name }) {
@@ -79,7 +89,6 @@ export default function PersonsTable() {
   const [departments, setDepartments] = useState([]);
   const [deptRatesList, setDeptRatesList] = useState([]);
   const [syncingDahuaUsers, setSyncingDahuaUsers] = useState(false);
-  const [buildingDescriptors, setBuildingDescriptors] = useState(false);
   const [error, setError] = useState(null);
   const [showEditModal, setShowEditModal] = useState(false);
   const [editPerson, setEditPerson] = useState(null);
@@ -100,6 +109,48 @@ export default function PersonsTable() {
     person: null,
     hours: "0.0",
   });
+
+  // Web-only guard: only allow Add Person & Photo Upload on Desktop Web (!isMobile)
+  const [isMobile, setIsMobile] = useState(() => checkIsMobileDevice());
+  useEffect(() => {
+    const handleResize = () => setIsMobile(checkIsMobileDevice());
+    handleResize();
+    window.addEventListener("resize", handleResize);
+    window.addEventListener("orientationchange", handleResize);
+    return () => {
+      window.removeEventListener("resize", handleResize);
+      window.removeEventListener("orientationchange", handleResize);
+    };
+  }, []);
+
+  // Add Person Modal State (Desktop Web Admin Only)
+  const [showAddModal, setShowAddModal] = useState(false);
+  const [addPersonForm, setAddPersonForm] = useState({
+    id: "",
+    name: "",
+    department: "",
+    phone_number: "",
+    email: "",
+    address: "",
+    sex: "",
+    sss: "",
+    pag_ibig: "",
+    philhealth: "",
+    registration_photo: null,
+    descriptor: null,
+  });
+  const [addPhotoStatus, setAddPhotoStatus] = useState({
+    state: "idle", // "idle" | "processing" | "valid" | "no-face" | "duplicate" | "error"
+    message: "",
+    duplicatePerson: null,
+  });
+  const [editPhotoStatus, setEditPhotoStatus] = useState({
+    state: "idle",
+    message: "",
+    duplicatePerson: null,
+  });
+  const addFileInputRef = useRef(null);
+  const editFileInputRef = useRef(null);
 
   useEffect(() => {
     async function fetchPersons() {
@@ -197,7 +248,435 @@ export default function PersonsTable() {
 
   const handleEdit = (person) => {
     setEditPerson({ ...person });
+    setEditPhotoStatus({ state: "idle", message: "", duplicatePerson: null });
     setShowEditModal(true);
+  };
+
+  // Suggest next available Person ID (prefers Dahua numeric sequence if numeric IDs exist, else EMP001)
+  const getNextAvailablePersonId = () => {
+    const numericIds = (persons || [])
+      .map((p) => {
+        const str = String(p.id || "").trim();
+        return /^\d+$/.test(str) ? parseInt(str, 10) : null;
+      })
+      .filter((n) => n !== null && Number.isFinite(n));
+
+    if (numericIds.length > 0) {
+      return String(Math.max(...numericIds) + 1);
+    }
+
+    const empNums = (persons || [])
+      .map((p) => {
+        const m = /^EMP0*(\d+)$/i.exec(String(p.id || "").trim());
+        return m ? parseInt(m[1], 10) : null;
+      })
+      .filter((n) => n !== null && Number.isFinite(n));
+
+    const nextEmp = empNums.length > 0 ? Math.max(...empNums) + 1 : 1;
+    return `EMP${String(nextEmp).padStart(3, "0")}`;
+  };
+
+  // Process uploaded image: resize to compact JPEG + extract 128-d face descriptor + check duplicate face
+  const processUploadedFacePhoto = async (file, excludePersonId = null) => {
+    const rawDataUrl = await new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => {
+        if (typeof reader.result === "string") resolve(reader.result);
+        else reject(new Error("Could not read selected image file."));
+      };
+      reader.onerror = () => reject(new Error("Error reading image file."));
+      reader.readAsDataURL(file);
+    });
+
+    const imgEl = await new Promise((resolve, reject) => {
+      const img = new Image();
+      img.crossOrigin = "anonymous";
+      img.onload = () => resolve(img);
+      img.onerror = () => reject(new Error("Selected file is not a valid image."));
+      img.src = rawDataUrl;
+    });
+
+    // Resize to max 480px dimension for fast recognition & Dahua PhotoData compatibility
+    const maxDim = 480;
+    let w = imgEl.naturalWidth || imgEl.width || 480;
+    let h = imgEl.naturalHeight || imgEl.height || 480;
+    if (w > h && w > maxDim) {
+      h = Math.round((h * maxDim) / w);
+      w = maxDim;
+    } else if (h > maxDim) {
+      w = Math.round((w * maxDim) / h);
+      h = maxDim;
+    }
+    const canvas = document.createElement("canvas");
+    canvas.width = w;
+    canvas.height = h;
+    const ctx = canvas.getContext("2d");
+    ctx.drawImage(imgEl, 0, 0, w, h);
+    const compressedDataUrl = canvas.toDataURL("image/jpeg", 0.82);
+
+    await ensureFaceModelsLoaded();
+    const detectionOptions = new faceapi.TinyFaceDetectorOptions({
+      inputSize: 320,
+      scoreThreshold: 0.4,
+    });
+    const detections = await faceapi
+      .detectAllFaces(imgEl, detectionOptions)
+      .withFaceLandmarks()
+      .withFaceDescriptors();
+
+    if (!detections || detections.length === 0) {
+      return {
+        photoDataUrl: compressedDataUrl,
+        descriptor: null,
+        hasFace: false,
+        duplicatePerson: null,
+      };
+    }
+
+    const bestDetection = detections.reduce((best, curr) => {
+      const areaBest =
+        (best.detection?.box?.width || 0) * (best.detection?.box?.height || 0);
+      const areaCurr =
+        (curr.detection?.box?.width || 0) * (curr.detection?.box?.height || 0);
+      return areaCurr > areaBest ? curr : best;
+    }, detections[0]);
+
+    const normDesc = normalizeDescriptor(toFloat32Array(bestDetection.descriptor));
+    const descArray = normDesc ? Array.from(normDesc) : null;
+
+    // Check against existing persons for duplicate face (< 0.35 Euclidean distance)
+    let duplicatePerson = null;
+    if (normDesc) {
+      let bestDist = Infinity;
+      for (const p of persons) {
+        if (!p || !p.descriptor) continue;
+        if (excludePersonId && String(p.id) === String(excludePersonId)) continue;
+        try {
+          let existingRaw = p.descriptor;
+          if (typeof existingRaw === "string") {
+            existingRaw = JSON.parse(existingRaw);
+          }
+          const existingVec =
+            Array.isArray(existingRaw) && Array.isArray(existingRaw[0])
+              ? averageDescriptors(existingRaw)
+              : normalizeDescriptor(toFloat32Array(existingRaw));
+          if (!existingVec) continue;
+          const dist = euclideanDistance(normDesc, existingVec);
+          if (dist < 0.35 && dist < bestDist) {
+            bestDist = dist;
+            duplicatePerson = {
+              id: p.id,
+              name: p.name || p.id,
+              distance: Number(dist.toFixed(3)),
+            };
+          }
+        } catch (e) {}
+      }
+    }
+
+    return {
+      photoDataUrl: compressedDataUrl,
+      descriptor: descArray,
+      hasFace: Boolean(descArray && descArray.length === 128),
+      duplicatePerson,
+    };
+  };
+
+  const handleOpenAddModal = () => {
+    if (isMobile) return;
+    setAddPersonForm({
+      id: getNextAvailablePersonId(),
+      name: "",
+      department: "",
+      phone_number: "",
+      email: "",
+      address: "",
+      sex: "",
+      sss: "",
+      pag_ibig: "",
+      philhealth: "",
+      registration_photo: null,
+      descriptor: null,
+    });
+    setAddPhotoStatus({ state: "idle", message: "", duplicatePerson: null });
+    setShowAddModal(true);
+  };
+
+  const handleCloseAddModal = () => {
+    setShowAddModal(false);
+    setAddPhotoStatus({ state: "idle", message: "", duplicatePerson: null });
+  };
+
+  const handleAddPhotoUpload = async (e) => {
+    const file = e.target.files && e.target.files[0];
+    if (!file) return;
+    e.target.value = "";
+
+    setAddPhotoStatus({
+      state: "processing",
+      message: "Analyzing face & building recognition vector...",
+      duplicatePerson: null,
+    });
+
+    try {
+      const result = await processUploadedFacePhoto(file, null);
+      setAddPersonForm((prev) => ({
+        ...prev,
+        registration_photo: result.photoDataUrl,
+        descriptor: result.descriptor,
+      }));
+
+      if (!result.hasFace) {
+        setAddPhotoStatus({
+          state: "no-face",
+          message:
+            "No clear face detected in this photo. Please upload a clearer front-facing portrait for face recognition.",
+          duplicatePerson: null,
+        });
+      } else if (result.duplicatePerson) {
+        setAddPhotoStatus({
+          state: "duplicate",
+          message: `Face matches existing employee ${result.duplicatePerson.name} (ID: ${result.duplicatePerson.id}, distance: ${result.duplicatePerson.distance}).`,
+          duplicatePerson: result.duplicatePerson,
+        });
+      } else {
+        setAddPhotoStatus({
+          state: "valid",
+          message: "Face detected & 128-d recognition data ready!",
+          duplicatePerson: null,
+        });
+      }
+    } catch (err) {
+      setAddPhotoStatus({
+        state: "error",
+        message: err.message || "Could not process uploaded image.",
+        duplicatePerson: null,
+      });
+    }
+  };
+
+  const handleEditPhotoUpload = async (e) => {
+    const file = e.target.files && e.target.files[0];
+    if (!file || !editPerson || editPerson.card_no !== "WEB-UPLOAD") return;
+    e.target.value = "";
+
+    setEditPhotoStatus({
+      state: "processing",
+      message: "Analyzing face & building recognition vector...",
+      duplicatePerson: null,
+    });
+
+    try {
+      const result = await processUploadedFacePhoto(file, editPerson.id);
+      setEditPerson((prev) =>
+        prev
+          ? {
+              ...prev,
+              registration_photo: result.photoDataUrl,
+              descriptor: result.descriptor || prev.descriptor || null,
+            }
+          : prev
+      );
+
+      if (!result.hasFace) {
+        setEditPhotoStatus({
+          state: "no-face",
+          message:
+            "No clear face detected in this photo. Please upload a clearer front-facing portrait.",
+          duplicatePerson: null,
+        });
+      } else if (result.duplicatePerson) {
+        setEditPhotoStatus({
+          state: "duplicate",
+          message: `Face matches ${result.duplicatePerson.name} (ID: ${result.duplicatePerson.id}, distance: ${result.duplicatePerson.distance}).`,
+          duplicatePerson: result.duplicatePerson,
+        });
+      } else {
+        setEditPhotoStatus({
+          state: "valid",
+          message: "New face photo verified & recognition data updated!",
+          duplicatePerson: null,
+        });
+      }
+    } catch (err) {
+      setEditPhotoStatus({
+        state: "error",
+        message: err.message || "Could not process uploaded image.",
+        duplicatePerson: null,
+      });
+    }
+  };
+
+  const handleAddPersonSave = async (e) => {
+    e.preventDefault();
+    if (isMobile) return;
+
+    const cleanId = String(addPersonForm.id || "").trim() || getNextAvailablePersonId();
+    const cleanName = String(addPersonForm.name || "").trim();
+    const cleanDept = String(addPersonForm.department || "").trim();
+
+    if (!cleanName) {
+      Swal.fire({
+        icon: "warning",
+        title: "Name Required",
+        text: "Please enter the employee's full name.",
+        confirmButtonColor: "#237227",
+      });
+      return;
+    }
+
+    // Check duplicate ID
+    const dupId = persons.find(
+      (p) => String(p.id || "").trim().toLowerCase() === cleanId.toLowerCase()
+    );
+    if (dupId) {
+      Swal.fire({
+        icon: "error",
+        title: "Duplicate Person ID",
+        text: `Person ID "${cleanId}" is already assigned to ${dupId.name || cleanId}.`,
+        confirmButtonColor: "#237227",
+      });
+      return;
+    }
+
+    // Check duplicate Name
+    const dupName = persons.find(
+      (p) =>
+        p.name &&
+        String(p.name).trim().toLowerCase() === cleanName.toLowerCase()
+    );
+    if (dupName) {
+      Swal.fire({
+        icon: "error",
+        title: "Duplicate Name",
+        text: `"${cleanName}" is already registered (ID: ${dupName.id}).`,
+        confirmButtonColor: "#237227",
+      });
+      return;
+    }
+
+    if (addPhotoStatus.state === "duplicate" && addPhotoStatus.duplicatePerson) {
+      const dupRes = await Swal.fire({
+        icon: "warning",
+        title: "Duplicate Face Detected",
+        html: `This uploaded face matches <strong>${addPhotoStatus.duplicatePerson.name}</strong> (ID: ${addPhotoStatus.duplicatePerson.id}).<br/>Do you still want to register this person?`,
+        showCancelButton: true,
+        confirmButtonText: "Register Anyway",
+        cancelButtonText: "Cancel",
+        confirmButtonColor: "#237227",
+      });
+      if (!dupRes.isConfirmed) return;
+    }
+
+    if (!addPersonForm.registration_photo) {
+      const noPhotoRes = await Swal.fire({
+        icon: "question",
+        title: "Save Without Face Photo?",
+        text: "No photo was uploaded. Face recognition on mobile and Dahua terminal requires a face photo. Continue anyway?",
+        showCancelButton: true,
+        confirmButtonText: "Save Without Photo",
+        cancelButtonText: "Upload Photo First",
+        confirmButtonColor: "#237227",
+      });
+      if (!noPhotoRes.isConfirmed) return;
+    }
+
+    let dailyRate = null;
+    let latePenalty = null;
+    if (cleanDept) {
+      const matchedDept = deptRatesList.find(
+        (d) => (d.department || "").trim().toLowerCase() === cleanDept.toLowerCase()
+      );
+      if (matchedDept) {
+        dailyRate =
+          matchedDept.daily_rate !== undefined && matchedDept.daily_rate !== null
+            ? matchedDept.daily_rate
+            : null;
+        latePenalty =
+          matchedDept.late_penalty !== undefined && matchedDept.late_penalty !== null
+            ? matchedDept.late_penalty
+            : null;
+      }
+    }
+
+    const payload = {
+      id: cleanId,
+      name: cleanName,
+      department: cleanDept || null,
+      daily_rate: dailyRate,
+      late_penalty: latePenalty,
+      phone_number: addPersonForm.phone_number ? String(addPersonForm.phone_number).trim() : null,
+      email: addPersonForm.email ? String(addPersonForm.email).trim() : null,
+      address: addPersonForm.address ? String(addPersonForm.address).trim() : null,
+      sex: addPersonForm.sex || null,
+      sss: addPersonForm.sss ? String(addPersonForm.sss).trim() : null,
+      pag_ibig: addPersonForm.pag_ibig ? String(addPersonForm.pag_ibig).trim() : null,
+      philhealth: addPersonForm.philhealth ? String(addPersonForm.philhealth).trim() : null,
+      registration_photo: addPersonForm.registration_photo || null,
+      descriptor: addPersonForm.descriptor || null,
+      card_no: "WEB-UPLOAD",
+      cash_advance: 0,
+      archived: 0,
+    };
+
+    setActionLoading(true);
+    try {
+      const { error: insertErr } = await supabase.from("persons").insert([payload]);
+      if (insertErr) throw insertErr;
+
+      // Also enroll/queue on the Dahua physical device
+      let dahuaStatusNote = "";
+      try {
+        const dahuaRes = await enrollDahuaPerson({
+          id: payload.id,
+          name: payload.name,
+          department: payload.department,
+          registration_photo: payload.registration_photo,
+        });
+        if (dahuaRes?.enrolled) {
+          dahuaStatusNote = " & enrolled on Dahua terminal";
+        } else if (dahuaRes?.queued) {
+          dahuaStatusNote = " (queued for Dahua sync)";
+        }
+      } catch (dahuaErr) {
+        console.warn("[Add Person] Dahua enrollment warning:", dahuaErr);
+      }
+
+      setPersons((prev) => [
+        {
+          ...payload,
+          created_at: new Date().toISOString(),
+        },
+        ...prev,
+      ]);
+
+      handleCloseAddModal();
+
+      Swal.fire({
+        toast: true,
+        position: "top-end",
+        icon: "success",
+        title: `${cleanName} added${dahuaStatusNote}!`,
+        showConfirmButton: false,
+        timer: 3000,
+        timerProgressBar: true,
+        iconColor: "#237227",
+        customClass: {
+          popup: "!rounded-2xl !shadow-[0_12px_30px_rgba(0,0,0,0.12)] !border !border-gray-200 !px-4 !py-3 !bg-white font-sans",
+          title: "!text-sm !font-semibold !text-gray-800 !m-0 !leading-tight",
+          timerProgressBar: "!bg-[#237227]",
+        },
+      });
+    } catch (err) {
+      Swal.fire({
+        icon: "error",
+        title: "Failed to Add Person",
+        text: err.message || String(err),
+        confirmButtonColor: "#237227",
+      });
+    } finally {
+      setActionLoading(false);
+    }
   };
 
   const editPersonId = editPerson && editPerson.id ? editPerson.id : null;
@@ -1120,6 +1599,7 @@ export default function PersonsTable() {
         philhealth: philhealthVal,
         cash_advance: cash_advance !== undefined && cash_advance !== null ? cash_advance : 0,
         registration_photo: registration_photo || null,
+        ...(editPerson.descriptor ? { descriptor: editPerson.descriptor } : {}),
       })
       .eq("id", id);
     if (error) {
@@ -1141,6 +1621,14 @@ export default function PersonsTable() {
         },
       });
     } else {
+      if (registration_photo) {
+        enrollDahuaPerson({
+          id,
+          name,
+          department: cleanDept || null,
+          registration_photo,
+        }).catch(() => {});
+      }
       setPersons((prev) =>
         prev.map((p) =>
           p.id === id
@@ -1159,6 +1647,7 @@ export default function PersonsTable() {
                 philhealth: philhealthVal,
                 cash_advance,
                 registration_photo: registration_photo || null,
+                ...(editPerson.descriptor ? { descriptor: editPerson.descriptor } : {}),
               }
             : p,
         ),
@@ -1250,67 +1739,6 @@ export default function PersonsTable() {
   });
 
   const currentRecords = sortedPersons;
-
-
-  const handleRebuildFaceData = async (force = true) => {
-    if (buildingDescriptors) return;
-    setBuildingDescriptors(true);
-
-    Swal.fire({
-      title: "Building Face Recognition Data...",
-      html: `
-        <div class="flex flex-col items-center justify-center py-2 text-center font-sans">
-          <p class="text-sm text-gray-600 mb-2" id="face-build-progress">
-            Initializing face recognition models...
-          </p>
-        </div>
-      `,
-      allowOutsideClick: false,
-      allowEscapeKey: false,
-      showConfirmButton: false,
-      width: "420px",
-      didOpen: () => Swal.showLoading(),
-    });
-
-    try {
-      const summary = await buildDescriptors({
-        onProgress: ({ current, total, name }) => {
-          const el = document.getElementById("face-build-progress");
-          if (el) el.textContent = `Processing face for ${name} (${current} of ${total})...`;
-        },
-        force,
-      });
-
-      const { data: refreshedPersons } = await supabase.from("persons").select("*");
-      if (refreshedPersons) setPersons(refreshedPersons);
-
-      Swal.fire({
-        icon: "success",
-        title: "Face Data Rebuilt!",
-        html: `
-          <div class="text-sm text-gray-600 space-y-1 text-left max-w-xs mx-auto font-sans">
-            <p><strong>Processed:</strong> ${summary.built} person(s)</p>
-            ${summary.failedNoFace > 0 ? `<p class="text-amber-600"><strong>No face detected:</strong> ${summary.failedNoFace}</p>` : ""}
-            ${summary.failedMultipleFaces > 0 ? `<p class="text-amber-600"><strong>Multiple faces:</strong> ${summary.failedMultipleFaces}</p>` : ""}
-            ${summary.skippedNoPhoto > 0 ? `<p class="text-gray-500"><strong>No photo:</strong> ${summary.skippedNoPhoto}</p>` : ""}
-          </div>
-        `,
-        confirmButtonText: "OK",
-        buttonsStyling: false,
-        customClass: {
-          confirmButton: "!bg-[#237227] !text-white !font-semibold !rounded-xl !px-8 !py-2.5 !text-sm cursor-pointer",
-        },
-      });
-    } catch (err) {
-      Swal.fire({
-        icon: "error",
-        title: "Failed",
-        text: err.message || "Failed to build face descriptors",
-      });
-    } finally {
-      setBuildingDescriptors(false);
-    }
-  };
 
   // Export to Excel
   const handleSyncDahuaPersons = async () => {
@@ -1537,6 +1965,16 @@ export default function PersonsTable() {
         </div>
 
         <div className="flex gap-2.5 items-center flex-wrap">
+          {!isMobile && (
+            <button
+              type="button"
+              onClick={handleOpenAddModal}
+              className="inline-flex items-center justify-center gap-1.5 py-2 px-4 rounded-md text-sm font-semibold border-none cursor-pointer transition-colors bg-[#237227] hover:bg-[#1c5c20] text-white shadow-sm whitespace-nowrap focus:outline-none"
+            >
+              <FiUserPlus className="mr-1 text-white" />
+              Add Person
+            </button>
+          )}
           <button
             onClick={handleSyncDahuaPersons}
             disabled={syncingDahuaUsers}
@@ -1546,17 +1984,6 @@ export default function PersonsTable() {
           >
             <FiRefreshCw className={`mr-1 text-white ${syncingDahuaUsers ? "animate-spin" : ""}`} />
             {syncingDahuaUsers ? "Syncing Dahua Users..." : "Sync Dahua Users"}
-          </button>
-          <button
-            onClick={() => handleRebuildFaceData(true)}
-            disabled={buildingDescriptors}
-            title="Extract face descriptors from registration photos for mobile face verification"
-            className={`inline-flex items-center justify-center gap-1.5 py-2 px-4 rounded-md text-sm font-semibold border border-[#237227] cursor-pointer transition-colors bg-white hover:bg-emerald-50 text-[#237227] shadow-sm whitespace-nowrap focus:outline-none ${
-              buildingDescriptors ? "opacity-70 cursor-not-allowed" : ""
-            }`}
-          >
-            <FiCpu className={`mr-1 text-[#237227] ${buildingDescriptors ? "animate-spin" : ""}`} />
-            {buildingDescriptors ? "Building Face Data..." : "Rebuild Face Data"}
           </button>
           <button
             onClick={handleExportExcel}
@@ -1728,6 +2155,410 @@ export default function PersonsTable() {
         )}
       </div>
 
+      {/* Add Person Modal (Web Admin Only) */}
+      {showAddModal && !isMobile && (
+        <div className="fixed inset-0 z-[1000] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
+          <div className="bg-white text-gray-800 p-7 rounded-3xl max-w-[780px] w-full max-h-[90vh] overflow-y-auto shadow-2xl border border-gray-200 font-sans">
+            <h2 className="text-2xl font-bold mb-4 text-[#0f3d16] text-center flex items-center justify-center gap-2">
+              <FiUserPlus className="text-[#237227]" /> Add New Person
+            </h2>
+
+            <form onSubmit={handleAddPersonSave}>
+              {/* Upload Face Photo Section */}
+              <div className="mb-5 p-4 rounded-2xl bg-[#f8faf8] border border-[#e2ece3]">
+                <label className="block mb-2 text-xs font-semibold text-gray-700">
+                  Person Face Photo (For Dahua Terminal &amp; Mobile Face Recognition)
+                </label>
+                <div className="flex items-center justify-between gap-4 flex-wrap">
+                  <div className="flex items-center gap-3.5">
+                    {addPersonForm.registration_photo ? (
+                      <img
+                        src={addPersonForm.registration_photo}
+                        alt="New person preview"
+                        className="w-[88px] h-[88px] object-cover rounded-2xl border-2 border-[#237227] shadow-md cursor-pointer"
+                        onClick={() =>
+                          openPhotoModal(
+                            addPersonForm.registration_photo,
+                            addPersonForm.name || "Uploaded Photo"
+                          )
+                        }
+                        title="Click to preview full image"
+                      />
+                    ) : (
+                      <div className="w-[88px] h-[88px] rounded-2xl bg-white border-2 border-dashed border-gray-300 flex flex-col items-center justify-center text-gray-400 p-2 text-center text-xs">
+                        <FiUpload className="text-lg mb-1 text-gray-400" />
+                        <span>No Photo</span>
+                      </div>
+                    )}
+                    <div className="text-xs text-gray-600 max-w-sm">
+                      <span className="font-semibold text-gray-800 block mb-0.5">
+                        Upload Clear Front-Facing Photo (e.g. 2x2 ID or Portrait)
+                      </span>
+                      <span>
+                        Uploading an image automatically extracts the 128-d biometric face descriptor and enrolls the user on the Dahua terminal.
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-2">
+                    <input
+                      ref={addFileInputRef}
+                      id="add-person-photo-upload"
+                      type="file"
+                      accept="image/*"
+                      className="hidden"
+                      onChange={handleAddPhotoUpload}
+                    />
+                    <button
+                      type="button"
+                      onClick={() =>
+                        addFileInputRef.current && addFileInputRef.current.click()
+                      }
+                      disabled={addPhotoStatus.state === "processing"}
+                      className="inline-flex items-center gap-1.5 py-2.5 px-4 rounded-xl text-xs font-semibold border-none bg-[#237227] hover:bg-[#1c5c20] text-white cursor-pointer transition-colors shadow-sm"
+                    >
+                      <FiUpload />
+                      {addPhotoStatus.state === "processing"
+                        ? "Analyzing Face..."
+                        : addPersonForm.registration_photo
+                        ? "Replace Image"
+                        : "Upload Image"}
+                    </button>
+                    {addPersonForm.registration_photo && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setAddPersonForm((prev) => ({
+                            ...prev,
+                            registration_photo: null,
+                            descriptor: null,
+                          }));
+                          setAddPhotoStatus({
+                            state: "idle",
+                            message: "",
+                            duplicatePerson: null,
+                          });
+                        }}
+                        className="inline-flex items-center gap-1 py-2.5 px-3 rounded-xl text-xs font-semibold border border-red-200 bg-white hover:bg-red-50 text-red-600 cursor-pointer transition-colors"
+                        title="Remove photo"
+                      >
+                        <FiTrash2 />
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                {addPhotoStatus.state !== "idle" && (
+                  <div
+                    className={`mt-3 text-xs font-semibold px-3.5 py-2 rounded-xl border flex items-center gap-2 ${
+                      addPhotoStatus.state === "valid"
+                        ? "bg-emerald-50 text-emerald-800 border-emerald-200"
+                        : addPhotoStatus.state === "processing"
+                        ? "bg-blue-50 text-blue-700 border-blue-200"
+                        : "bg-amber-50 text-amber-800 border-amber-200"
+                    }`}
+                  >
+                    {addPhotoStatus.state === "valid" ? (
+                      <FiCheckCircle className="text-emerald-600 shrink-0 text-sm" />
+                    ) : (
+                      <FiAlertCircle className="text-amber-600 shrink-0 text-sm" />
+                    )}
+                    <span>{addPhotoStatus.message}</span>
+                  </div>
+                )}
+              </div>
+
+              {/* Form Fields */}
+              <div className="grid items-start grid-cols-1 gap-3.5 sm:grid-cols-2">
+                <div>
+                  <label
+                    htmlFor="add-person-id"
+                    className="block text-xs font-semibold text-gray-700 mb-1.5"
+                  >
+                    Person ID (Dahua UserID)
+                  </label>
+                  <input
+                    id="add-person-id"
+                    name="add-person-id"
+                    type="text"
+                    value={addPersonForm.id}
+                    onChange={(e) =>
+                      setAddPersonForm({ ...addPersonForm, id: e.target.value })
+                    }
+                    placeholder="e.g. 46 or EMP001"
+                    required
+                    className="w-full p-2.5 text-sm rounded-xl border border-gray-200 bg-white text-gray-900 outline-none focus:border-[#237227] focus:ring-0 transition-colors"
+                  />
+                </div>
+
+                <div>
+                  <label
+                    htmlFor="add-person-name"
+                    className="block text-xs font-semibold text-gray-700 mb-1.5"
+                  >
+                    Full Name <span className="text-red-500">*</span>
+                  </label>
+                  <input
+                    id="add-person-name"
+                    name="add-person-name"
+                    type="text"
+                    value={addPersonForm.name}
+                    onChange={(e) =>
+                      setAddPersonForm({ ...addPersonForm, name: e.target.value })
+                    }
+                    placeholder="Enter employee full name"
+                    required
+                    className="w-full p-2.5 text-sm rounded-xl border border-gray-200 bg-white text-gray-900 outline-none focus:border-[#237227] focus:ring-0 transition-colors"
+                  />
+                </div>
+
+                <div>
+                  <label
+                    htmlFor="add-person-department"
+                    className="block text-xs font-semibold text-gray-700 mb-1.5"
+                  >
+                    Department
+                  </label>
+                  <select
+                    id="add-person-department"
+                    name="add-person-department"
+                    value={addPersonForm.department}
+                    onChange={(e) =>
+                      setAddPersonForm({
+                        ...addPersonForm,
+                        department: e.target.value,
+                      })
+                    }
+                    className="w-full p-2.5 text-sm rounded-xl border border-gray-200 bg-white text-gray-900 outline-none focus:border-[#237227] focus:ring-0 transition-colors cursor-pointer"
+                  >
+                    <option value="">(Select department)</option>
+                    {departments && departments.length
+                      ? departments.map((d) => (
+                          <option key={d} value={d}>
+                            {d}
+                          </option>
+                        ))
+                      : Array.from(
+                          new Set(
+                            persons.map((p) => p.department).filter(Boolean)
+                          )
+                        ).map((d) => (
+                          <option key={d} value={d}>
+                            {d}
+                          </option>
+                        ))}
+                  </select>
+                  {(() => {
+                    const selDept = (addPersonForm.department || "").trim();
+                    if (!selDept) return null;
+                    const matched = deptRatesList.find(
+                      (d) =>
+                        (d.department || "").trim().toLowerCase() ===
+                        selDept.toLowerCase()
+                    );
+                    if (matched && matched.daily_rate) {
+                      return (
+                        <span className="block text-[11px] text-[#237227] mt-1.5 font-medium">
+                          Department Daily Rate: ₱
+                          {Number(matched.daily_rate).toFixed(2)} / day
+                        </span>
+                      );
+                    }
+                    return null;
+                  })()}
+                </div>
+
+                <div>
+                  <label
+                    htmlFor="add-person-sex"
+                    className="block text-xs font-semibold text-gray-700 mb-1.5"
+                  >
+                    Sex
+                  </label>
+                  <select
+                    id="add-person-sex"
+                    name="add-person-sex"
+                    value={addPersonForm.sex}
+                    onChange={(e) =>
+                      setAddPersonForm({ ...addPersonForm, sex: e.target.value })
+                    }
+                    className="w-full p-2.5 text-sm rounded-xl border border-gray-200 bg-white text-gray-900 outline-none focus:border-[#237227] focus:ring-0 transition-colors cursor-pointer"
+                  >
+                    <option value="">Select sex</option>
+                    <option value="Male">Male</option>
+                    <option value="Female">Female</option>
+                    <option value="Other">Other</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label
+                    htmlFor="add-person-phone"
+                    className="block text-xs font-semibold text-gray-700 mb-1.5"
+                  >
+                    Phone
+                  </label>
+                  <input
+                    id="add-person-phone"
+                    name="add-person-phone"
+                    type="text"
+                    value={addPersonForm.phone_number}
+                    onChange={(e) =>
+                      setAddPersonForm({
+                        ...addPersonForm,
+                        phone_number: e.target.value,
+                      })
+                    }
+                    placeholder="e.g. 09123456789"
+                    className="w-full p-2.5 text-sm rounded-xl border border-gray-200 bg-white text-gray-900 outline-none focus:border-[#237227] focus:ring-0 transition-colors"
+                  />
+                </div>
+
+                <div>
+                  <label
+                    htmlFor="add-person-email"
+                    className="block text-xs font-semibold text-gray-700 mb-1.5"
+                  >
+                    Email
+                  </label>
+                  <input
+                    id="add-person-email"
+                    name="add-person-email"
+                    type="email"
+                    value={addPersonForm.email}
+                    onChange={(e) =>
+                      setAddPersonForm({ ...addPersonForm, email: e.target.value })
+                    }
+                    placeholder="employee@example.com"
+                    className="w-full p-2.5 text-sm rounded-xl border border-gray-200 bg-white text-gray-900 outline-none focus:border-[#237227] focus:ring-0 transition-colors"
+                  />
+                </div>
+
+                <div className="col-span-1 sm:col-span-2">
+                  <label
+                    htmlFor="add-person-address"
+                    className="block text-xs font-semibold text-gray-700 mb-1.5"
+                  >
+                    Address
+                  </label>
+                  <input
+                    id="add-person-address"
+                    name="add-person-address"
+                    type="text"
+                    value={addPersonForm.address}
+                    onChange={(e) =>
+                      setAddPersonForm({
+                        ...addPersonForm,
+                        address: e.target.value,
+                      })
+                    }
+                    placeholder="Enter address"
+                    className="w-full p-2.5 text-sm rounded-xl border border-gray-200 bg-white text-gray-900 outline-none focus:border-[#237227] focus:ring-0 transition-colors"
+                  />
+                </div>
+
+                {/* Mandatory Contributions */}
+                <div className="col-span-1 sm:col-span-2">
+                  <label className="block mb-2 text-xs font-semibold text-gray-700">
+                    Mandatory Contributions (Optional)
+                  </label>
+                  <div className="flex flex-wrap items-center gap-3">
+                    <div className="min-w-[180px] flex-1">
+                      <label
+                        htmlFor="add-person-sss"
+                        className="block text-xs text-gray-700 mb-1.5"
+                      >
+                        SSS Number
+                      </label>
+                      <input
+                        id="add-person-sss"
+                        name="add-person-sss"
+                        type="text"
+                        placeholder="e.g. 12-3456789-0"
+                        value={addPersonForm.sss}
+                        onChange={(e) =>
+                          setAddPersonForm({
+                            ...addPersonForm,
+                            sss: e.target.value,
+                          })
+                        }
+                        className="w-full p-2.5 text-sm rounded-xl border border-gray-200 bg-white text-gray-900 outline-none focus:border-[#237227] focus:ring-0 transition-colors"
+                      />
+                    </div>
+
+                    <div className="min-w-[180px] flex-1">
+                      <label
+                        htmlFor="add-person-pag-ibig"
+                        className="block text-xs text-gray-700 mb-1.5"
+                      >
+                        Pag-IBIG Number
+                      </label>
+                      <input
+                        id="add-person-pag-ibig"
+                        name="add-person-pag-ibig"
+                        type="text"
+                        placeholder="e.g. 0000-0000-0000"
+                        value={addPersonForm.pag_ibig}
+                        onChange={(e) =>
+                          setAddPersonForm({
+                            ...addPersonForm,
+                            pag_ibig: e.target.value,
+                          })
+                        }
+                        className="w-full p-2.5 text-sm rounded-xl border border-gray-200 bg-white text-gray-900 outline-none focus:border-[#237227] focus:ring-0 transition-colors"
+                      />
+                    </div>
+
+                    <div className="min-w-[180px] flex-1">
+                      <label
+                        htmlFor="add-person-philhealth"
+                        className="block text-xs text-gray-700 mb-1.5"
+                      >
+                        PhilHealth Number
+                      </label>
+                      <input
+                        id="add-person-philhealth"
+                        name="add-person-philhealth"
+                        type="text"
+                        placeholder="e.g. 123456789012"
+                        value={addPersonForm.philhealth}
+                        onChange={(e) =>
+                          setAddPersonForm({
+                            ...addPersonForm,
+                            philhealth: e.target.value,
+                          })
+                        }
+                        className="w-full p-2.5 text-sm rounded-xl border border-gray-200 bg-white text-gray-900 outline-none focus:border-[#237227] focus:ring-0 transition-colors"
+                      />
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Modal Actions */}
+              <div className="flex gap-2.5 justify-end mt-6">
+                <button
+                  type="button"
+                  onClick={handleCloseAddModal}
+                  className="py-2.5 px-6 rounded-xl text-sm font-semibold border border-gray-300 bg-white text-gray-700 transition-colors cursor-pointer focus:outline-none"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={
+                    actionLoading || addPhotoStatus.state === "processing"
+                  }
+                  className="py-2.5 px-7 rounded-xl text-sm font-semibold border-none bg-[#237227] hover:bg-[#1c5c20] disabled:opacity-60 text-white transition-colors cursor-pointer focus:outline-none shadow-sm"
+                >
+                  {actionLoading ? "Saving..." : "Add Person"}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
       {/* Edit Modal */}
       {showEditModal && editPerson && (
         <div className="fixed inset-0 z-[1000] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
@@ -1738,7 +2569,9 @@ export default function PersonsTable() {
             <form onSubmit={handleEditModalSave}>
               <div className="mb-4">
                 <label className="block mb-2 text-xs font-semibold text-gray-700">
-                  Enrolled Dahua Face Photo
+                  {editPerson.card_no === "WEB-UPLOAD"
+                    ? "Uploaded Face Photo"
+                    : "Enrolled Dahua Face Photo"}
                 </label>
                 <div className="flex items-center gap-3.5 flex-wrap">
                   {editPerson.registration_photo ? (
@@ -1756,8 +2589,16 @@ export default function PersonsTable() {
                         title="Click to view full photo"
                       />
                       <div className="text-xs text-gray-500">
-                        <span className="font-semibold text-gray-700 block mb-0.5">Device Synchronized</span>
-                        <span>Synced directly from Dahua terminal. Click image to enlarge.</span>
+                        <span className="font-semibold text-gray-700 block mb-0.5">
+                          {editPerson.card_no === "WEB-UPLOAD"
+                            ? "Web Uploaded Photo"
+                            : "Device Synchronized"}
+                        </span>
+                        <span>
+                          {editPerson.card_no === "WEB-UPLOAD"
+                            ? "Added via Web image upload. Click image to enlarge."
+                            : "Synced directly from Dahua terminal. Click image to enlarge."}
+                        </span>
                       </div>
                     </div>
                   ) : (
@@ -1766,12 +2607,78 @@ export default function PersonsTable() {
                         No Photo
                       </div>
                       <div className="text-xs text-gray-500">
-                        <span className="font-medium text-gray-700 block mb-0.5">Not Enrolled on Device</span>
-                        <span>Enrolling a face on the Dahua terminal will automatically sync it here.</span>
+                        <span className="font-medium text-gray-700 block mb-0.5">
+                          {editPerson.card_no === "WEB-UPLOAD"
+                            ? "No Photo Uploaded"
+                            : "Not Enrolled on Device"}
+                        </span>
+                        <span>
+                          {editPerson.card_no === "WEB-UPLOAD"
+                            ? "Click Change Photo to upload a clear front-facing portrait."
+                            : "Enrolling a face on the Dahua terminal will automatically sync it here."}
+                        </span>
                       </div>
                     </div>
                   )}
+
+                  {!isMobile && (
+                    <div className="flex items-center gap-2 ml-auto">
+                      {editPerson.card_no === "WEB-UPLOAD" && (
+                        <input
+                          ref={editFileInputRef}
+                          type="file"
+                          accept="image/*"
+                          className="hidden"
+                          onChange={handleEditPhotoUpload}
+                        />
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (
+                            editPerson.card_no === "WEB-UPLOAD" &&
+                            editFileInputRef.current
+                          ) {
+                            editFileInputRef.current.click();
+                          }
+                        }}
+                        disabled={
+                          editPerson.card_no !== "WEB-UPLOAD" ||
+                          editPhotoStatus.state === "processing"
+                        }
+                        title={
+                          editPerson.card_no !== "WEB-UPLOAD"
+                            ? "Cannot change photo synced from the Dahua device"
+                            : "Upload or change photo for this web-added person"
+                        }
+                        className={`inline-flex items-center gap-1.5 py-2 px-3.5 rounded-xl text-xs font-semibold border transition-colors ${
+                          editPerson.card_no !== "WEB-UPLOAD"
+                            ? "border-gray-300 bg-gray-100 text-gray-400 cursor-not-allowed opacity-70"
+                            : "border-[#237227] bg-white hover:bg-emerald-50 text-[#237227] cursor-pointer"
+                        }`}
+                      >
+                        <FiUpload />
+                        {editPhotoStatus.state === "processing"
+                          ? "Analyzing..."
+                          : "Change Photo"}
+                      </button>
+                    </div>
+                  )}
                 </div>
+
+                {editPhotoStatus.state !== "idle" && (
+                  <div
+                    className={`mt-2.5 text-xs font-medium px-3 py-2 rounded-xl border ${
+                      editPhotoStatus.state === "valid"
+                        ? "bg-emerald-50 text-emerald-800 border-emerald-200"
+                        : editPhotoStatus.state === "processing"
+                        ? "bg-blue-50 text-blue-700 border-blue-200"
+                        : "bg-amber-50 text-amber-800 border-amber-200"
+                    }`}
+                  >
+                    {editPhotoStatus.message}
+                  </div>
+                )}
               </div>
 
               <div className="grid items-start grid-cols-1 gap-3 sm:grid-cols-2">
@@ -1789,8 +2696,13 @@ export default function PersonsTable() {
                     onChange={(e) =>
                       setEditPerson({ ...editPerson, name: e.target.value })
                     }
-                    disabled
-                    className="box-border w-full px-4 py-3 text-base text-gray-500 bg-gray-100 border border-gray-300 outline-none cursor-not-allowed rounded-2xl"                  />
+                    disabled={isMobile || editPerson.card_no !== "WEB-UPLOAD"}
+                    className={`box-border w-full p-2.5 text-sm rounded-xl border outline-none transition-colors ${
+                      isMobile || editPerson.card_no !== "WEB-UPLOAD"
+                        ? "text-gray-500 bg-gray-100 border-gray-300 cursor-not-allowed"
+                        : "border-gray-200 bg-white text-gray-900 focus:border-[#237227]"
+                    }`}
+                  />
                 </div>
                 <div>
                   <label

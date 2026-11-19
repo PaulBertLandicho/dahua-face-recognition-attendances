@@ -219,19 +219,23 @@ function App() {
             path="/admin/register-person"
             element={
               <ProtectedRoute session={session} allowedRoles={[ADMIN_ROLE]}>
-                <div className="flex min-h-screen bg-white">
-                  <AdminSidebar
-                    role={currentRole}
-                    onLogout={async () => {
-                      await supabase.auth.signOut();
-                      localStorage.removeItem("sb-session");
-                      window.location.href = "/admin";
-                    }}
-                  />
-                  <div className={`flex-1 pt-4 pb-8 px-6 lg:px-8 bg-white ${isMobile ? "ml-0" : "ml-[295px]"}`}>
-                    <PersonRegistration />
+                {isMobile ? (
+                  <Navigate to="/admin/persons" replace />
+                ) : (
+                  <div className="flex min-h-screen bg-white">
+                    <AdminSidebar
+                      role={currentRole}
+                      onLogout={async () => {
+                        await supabase.auth.signOut();
+                        localStorage.removeItem("sb-session");
+                        window.location.href = "/admin";
+                      }}
+                    />
+                    <div className={`flex-1 pt-4 pb-8 px-6 lg:px-8 bg-white ${isMobile ? "ml-0" : "ml-[295px]"}`}>
+                      <PersonRegistration />
+                    </div>
                   </div>
-                </div>
+                )}
               </ProtectedRoute>
             }
           />

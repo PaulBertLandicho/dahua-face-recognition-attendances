@@ -20,6 +20,7 @@ export default function AttendanceTable() {
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("");
   const [departmentFilter, setDepartmentFilter] = useState("");
+  const [methodFilter, setMethodFilter] = useState("");
   const sortKey = "device_time";
   const [sortOrder, setSortOrder] = useState("desc");
   const [selectedDate, setSelectedDate] = useState("");
@@ -36,7 +37,7 @@ export default function AttendanceTable() {
 
   useEffect(() => {
     setCurrentPage(1);
-  }, [search, statusFilter, departmentFilter, selectedDate, showArchived, sortOrder]);
+  }, [search, statusFilter, departmentFilter, methodFilter, selectedDate, showArchived, sortOrder]);
 
   const formatDateTime = (value) => {
     return formatAttendanceDateTime(value);
@@ -557,7 +558,7 @@ export default function AttendanceTable() {
 
   const filteredRecords = records.filter((r) => {
     if (r.archived) return false;
-    const person = persons.find((p) => p.id === r.person_id) || {};
+    const person = persons.find((p) => String(p.id) === String(r.person_id)) || {};
     const matchesSearch =
       !search ||
       (person.name &&
@@ -566,12 +567,29 @@ export default function AttendanceTable() {
     const matchesStatus = !statusFilter || getAttendanceStatus({ ...r, department: r.department || person.department }, settings) === statusFilter;
     const matchesDept =
       !departmentFilter || (person.department || "") === departmentFilter;
+    const normalizedRecordMethod = String(r.method || "")
+      .trim()
+      .toLowerCase()
+      .replace(/\s+/g, "-");
+    const matchesMethod =
+      !methodFilter || normalizedRecordMethod === methodFilter.toLowerCase();
     const recordDate = r.device_time ? attendanceDateKey(r.device_time) : null;
     const matchesDate = !selectedDate || recordDate === selectedDate;
-    return matchesSearch && matchesStatus && matchesDept && matchesDate;
+    return matchesSearch && matchesStatus && matchesDept && matchesMethod && matchesDate;
   });
 
+  const methodPriority = (m) => {
+    const norm = String(m || "").trim().toLowerCase().replace(/\s+/g, "-");
+    if (norm === "face") return 1;
+    if (norm === "field-site") return 2;
+    if (norm === "admin-entry") return 3;
+    return 4;
+  };
+
   const sortedRecords = [...filteredRecords].sort((a, b) => {
+    const methodDiff = methodPriority(a.method) - methodPriority(b.method);
+    if (methodDiff !== 0) return methodDiff;
+
     let aVal, bVal;
     if (sortKey === "device_time") {
       aVal = attendanceTimestamp(a.device_time);
@@ -598,11 +616,19 @@ export default function AttendanceTable() {
   const archivedRecords = [...records]
     .filter((r) => r.archived)
     .filter((r) => {
+      const normMethod = String(r.method || "").trim().toLowerCase().replace(/\s+/g, "-");
+      if (methodFilter && normMethod !== methodFilter.toLowerCase()) {
+        return false;
+      }
       if (!selectedDate) return true;
       const rd = r.device_time ? attendanceDateKey(r.device_time) : null;
       return rd === selectedDate;
     })
-    .sort((a, b) => new Date(b.device_time) - new Date(a.device_time));
+    .sort((a, b) => {
+      const methodDiff = methodPriority(a.method) - methodPriority(b.method);
+      if (methodDiff !== 0) return methodDiff;
+      return new Date(b.device_time) - new Date(a.device_time);
+    });
 
   const activeRecords = showArchived ? archivedRecords : sortedRecords;
   const totalRecords = activeRecords.length;
@@ -801,6 +827,16 @@ export default function AttendanceTable() {
                 {dept}
               </option>
             ))}
+          </select>
+          <select
+            value={methodFilter}
+            onChange={(e) => setMethodFilter(e.target.value)}
+            className="py-2 px-3 text-[0.85rem] rounded-md border border-[#dce3dd] bg-white text-[#2c382d] cursor-pointer min-w-[130px] outline-none focus:border-[#237227] focus:ring-0 transition-colors"
+          >
+            <option value="">All Methods</option>
+            <option value="face">face</option>
+            <option value="field-site">field-site</option>
+            <option value="admin-entry">admin-entry</option>
           </select>
           <input
             type="date"

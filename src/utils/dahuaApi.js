@@ -151,6 +151,13 @@ export async function deleteDahuaPerson(personId, hardDelete = false) {
   });
 }
 
+export async function enrollDahuaPerson(personData) {
+  return fetchDahuaApi("/api/dahua/enroll-person", {
+    method: "POST",
+    body: JSON.stringify(personData || {}),
+  });
+}
+
 export async function getDeviceStatus() {
   return fetchDahuaApi("/api/device/status", {
     method: "GET",
